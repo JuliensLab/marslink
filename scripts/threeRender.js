@@ -3,9 +3,9 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
-import { helioCoords, auTo3D } from "./orbitals.js";
+import { helioCoords, auTo3D, distance3D } from "./orbitals.js";
 
-import { updateInfoArea } from "./main.js";
+import { updateInfo } from "./main.js";
 
 export class SolarSystemScene {
   constructor(solarSystemData) {
@@ -19,18 +19,17 @@ export class SolarSystemScene {
     this.sun = null;
     this.planets = [];
     this.satellites = [];
-    this.satelliteLineLoop = null;
     this.linesToEarth = [];
     this.linesToMars = [];
     this.composer = null;
     this.bloomPass = null;
-    this.lastUpdateTime = performance.now(); // Initialize last update time
-    this.simTime = performance.now(); // Initialize program start time
+    this.lastUpdateTime = Date.now(); // Initialize last update time
+    this.simTime = Date.now(); // Initialize program start time
     this.timeAccelerationFactor = 0; // Acceleration factor x100
     this.maxLinkDistance3D = 1;
     // Initialize the connections data structure
     this.connections = {};
-    this.alpha = { connected: 0.15, active: 0.98 };
+    this.styles = { links: { connected: { opacity: 0.2, color: 0xffbbbb }, active: { opacity: 1.0, color: 0xff0000 } } };
 
     // Initialize the scene
     this.loadScene();
@@ -47,8 +46,20 @@ export class SolarSystemScene {
     this.scene = new THREE.Scene();
 
     // Camera setup
+    // Create a perspective camera
     this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-    this.camera.position.z = 50;
+
+    // Set the camera position to 45 degrees from the top
+    const distance = 140; // Adjust this distance as needed
+    const angle = Math.PI / 4; // 45 degrees in radians
+
+    // Calculate x, y, z based on the angle
+    this.camera.position.x = distance * Math.cos(angle);
+    this.camera.position.y = distance * Math.sin(angle);
+    this.camera.position.z = distance * Math.sin(angle);
+
+    // Point the camera towards the origin (0, 0, 0)
+    this.camera.lookAt(0, 0, 0);
 
     // Renderer setup
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -90,8 +101,8 @@ export class SolarSystemScene {
     this.sun.castShadow = false; // Sun does not need to cast shadows
     this.scene.add(this.sun);
 
-    // Point Light at Sun's Position
-    const sunlight = new THREE.PointLight(0xffffff, 20000, 1000);
+    // Sun As Light Source
+    const sunlight = new THREE.PointLight(0xffffff, 20000, 20000); // color, strength, distance
     sunlight.position.set(0, 0, 0);
     sunlight.castShadow = true; // Enable shadow casting from the light
     sunlight.shadow.mapSize.width = 1024; // Shadow map resolution
@@ -100,7 +111,7 @@ export class SolarSystemScene {
     sunlight.shadow.camera.far = 1500;
     this.scene.add(sunlight);
 
-    // Ambient Light (Optional)
+    // Ambient Light (to see planets dark sides too)
     const ambientLight = new THREE.AmbientLight(0x888888); // Dim ambient light
     this.scene.add(ambientLight);
 
@@ -116,7 +127,7 @@ export class SolarSystemScene {
     );
     this.composer.addPass(this.bloomPass);
 
-    // Planet function to create planets easily
+    // Planet function to create planets
     const createPlanet = (planetParams, convertRadius) => {
       const geometry = new THREE.SphereGeometry(convertRadius(planetParams.diameterKm / 2), 32, 32);
       const texture = this.textureLoader.load(planetParams.texturePath);
@@ -192,32 +203,6 @@ export class SolarSystemScene {
       this.satellites.push(satellite);
       this.scene.add(satellite);
     }
-
-    // Remove existing LineLoop if it exists
-    if (this.satelliteLineLoop) {
-      this.scene.remove(this.satelliteLineLoop);
-      if (this.satelliteLineLoop.geometry) this.satelliteLineLoop.geometry.dispose();
-      if (this.satelliteLineLoop.material) this.satelliteLineLoop.material.dispose();
-      this.satelliteLineLoop = null;
-    }
-
-    // Create a new geometry for the LineLoop
-    const positions = new Float32Array(this.satellites.length * 3);
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-
-    // Create a LineLoop material
-    const material = new THREE.LineBasicMaterial({
-      color: 0xff0000,
-      transparent: true, // Enable transparency
-      opacity: this.alpha.connected,
-    }); // Red color
-
-    // Create the LineLoop
-    this.satelliteLineLoop = new THREE.LineLoop(geometry, material);
-
-    // Add the LineLoop to the scene
-    this.scene.add(this.satelliteLineLoop);
   }
 
   onWindowResize() {
@@ -230,33 +215,35 @@ export class SolarSystemScene {
     requestAnimationFrame(this.animate.bind(this));
 
     // Calculate elapsed time since last frame
-    const currentTime = performance.now(); // Time in milliseconds
-    const elapsedMilliseconds = currentTime - this.lastUpdateTime;
+    const currentTime = Date.now(); // Current Unix time in milliseconds
+    const elapsedMilliseconds = (currentTime - this.lastUpdateTime) * this.timeAccelerationFactor;
     const elapsedSecondsSinceLastUpdate = elapsedMilliseconds / 1000;
     this.lastUpdateTime = currentTime;
 
-    // Calculate total elapsed time since program started
-    this.simTime += elapsedMilliseconds * this.timeAccelerationFactor;
+    // Update total elapsed simulation time
+    this.simTime += elapsedMilliseconds;
     const totalElapsedDays = this.simTime / (1000 * 60 * 60 * 24);
 
     const dOfs = totalElapsedDays; // Days offset since program start
 
     // Rotate the sun
-    this.sun.rotation.y += (this.solarSystemData.sun.rotationHours / 60 / 60) * elapsedSecondsSinceLastUpdate;
+    this.sun.rotation.y += (elapsedSecondsSinceLastUpdate / (this.solarSystemData.sun.rotationHours * 60 * 60)) * 2 * Math.PI;
 
-    // Rotate planets around the sun and on their axes
+    // Rotate planets and satellites
     this.planets.forEach((planet) => this.updateObjectPosition(planet, dOfs, elapsedSecondsSinceLastUpdate));
     this.satellites.forEach((satellite) => this.updateObjectPosition(satellite, dOfs, elapsedSecondsSinceLastUpdate));
 
-    // Update connections based on current positions
+    // Update connections and draw them
     this.updateConnections();
-    this.updateSatelliteConnections();
-    this.calculateShortestPath(); // Add this line to calculate the shortest path
+    this.drawConnections();
+    const shortestPath = this.calculateShortestPath();
+    this.drawShortestPath(shortestPath);
+    this.directPathDistance3D = distance3D(this.earth.position, this.mars.position);
 
     this.controls.update();
     this.composer.render();
     this.renderer.render(this.scene, this.camera);
-    updateInfoArea();
+    updateInfo();
   }
 
   updateObjectPosition(object, dOfs, elapsedSecondsSinceLastUpdate) {
@@ -266,7 +253,7 @@ export class SolarSystemScene {
     object.position.z = -auTo3D(xyz.y);
 
     // object rotation
-    object.rotation.y += ((object.params.rotationHours / 60 / 60) * elapsedSecondsSinceLastUpdate) / 100;
+    object.rotation.y += (elapsedSecondsSinceLastUpdate / (object.params.rotationHours * 60 * 60)) * 2 * Math.PI;
   }
 
   updateConnections() {
@@ -318,7 +305,7 @@ export class SolarSystemScene {
     this.connections = connections;
   }
 
-  updateSatelliteConnections() {
+  drawConnections() {
     // Remove old lines
     if (this.allLines) {
       this.allLines.forEach((line) => {
@@ -364,9 +351,9 @@ export class SolarSystemScene {
           positions[5] = posB.z;
           geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
           const material = new THREE.LineBasicMaterial({
-            color: 0xff0000,
+            color: this.styles.links.connected.color,
             transparent: true,
-            opacity: this.alpha.connected,
+            opacity: this.styles.links.connected.opacity,
           });
           const line = new THREE.Line(geometry, material);
           this.scene.add(line);
@@ -435,11 +422,9 @@ export class SolarSystemScene {
     // Calculate the total distance
     const totalDistance = shortestDistances["Mars"];
 
-    // Optionally, you can draw the shortest path
-    this.drawShortestPath(path);
-
     // Store the total distance
-    this.shortestPathDistance = totalDistance;
+    this.shortestPathDistance3D = totalDistance;
+    return path;
   }
 
   drawShortestPath(path, edges) {
@@ -488,9 +473,9 @@ export class SolarSystemScene {
       positions[5] = posB.z;
       geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
       const material = new THREE.LineBasicMaterial({
-        color: 0xff0000, // Green color for shortest path
+        color: this.styles.links.active.color,
         transparent: true,
-        opacity: this.alpha.active,
+        opacity: this.styles.links.active.opacity,
       });
       const line = new THREE.Line(geometry, material);
       this.scene.add(line);
@@ -507,7 +492,16 @@ export class SolarSystemScene {
   }
 
   // Add a method to get the shortest path distance
-  getShortestPathDistance() {
-    return this.shortestPathDistance;
+  getShortestPathDistance3D() {
+    return this.shortestPathDistance3D;
+  }
+
+  // Add a method to get the shortest path distance
+  getDirectPathDistance3D() {
+    return this.directPathDistance3D;
+  }
+
+  getSimTime() {
+    return this.simTime;
   }
 }

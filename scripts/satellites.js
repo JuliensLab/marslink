@@ -1,25 +1,31 @@
-export function generateSatellites(satCount, satDistanceSun) {
+export function generateSatellites(satCount, satDistanceSun, ringName, failedSatellitesPct) {
+  if (satCount == 0) return [];
   const satellites = [];
   const a = satDistanceSun;
   const n = meanMotion(a);
   const orbitdays = 360 / n;
+  let long = 0;
   const longIncrement = 360 / satCount;
-  for (let long = 0; long < 360; long += longIncrement) {
-    satellites.push({
-      name: long,
-      i: 0,
-      o: 0,
-      p: 0,
-      a: a,
-      n: n,
-      e: 0,
-      l: long,
-      diameterKm: 50,
-      orbitdays: orbitdays,
-      rotationHours: 0,
-      Dele: 2450680.5,
-      color: [255, 255, 255],
-    });
+  for (let i = 0; i < satCount; i++) {
+    let rand = (Math.random() + Math.random() + Math.random()) / 3;
+    if (rand >= failedSatellitesPct / 100)
+      satellites.push({
+        name: `${ringName}-${long}`,
+        i: 0,
+        o: 0,
+        p: 0,
+        a: a,
+        n: n,
+        e: 0,
+        l: long,
+        diameterKm: 50,
+        orbitdays: orbitdays,
+        rotationHours: 0,
+        Dele: 2450680.5,
+        color: [255, 255, 255],
+      });
+
+    long += longIncrement;
   }
   return satellites;
 }
