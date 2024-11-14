@@ -1,10 +1,10 @@
 // Solar System Simulator Configuration - Slider Organization by Sections
 // This file contains code to create sliders for the solar system simulator and organizes the sliders into five sections: 'sim', 'costs', 'capability', 'ring 1', and 'ring 2'.
 
-import { solarSystemData } from "./solarSystem.js";
-import { SolarSystemScene } from "./threeRender.js";
-import { generateSatellites } from "./satellites.js";
-import { _3DToAu, auToKm } from "./orbitals.js";
+import { solarSystemData } from "./solarSystem.js?v=2";
+import { SolarSystemScene } from "./threeRender.js?v=2";
+import { generateSatellites } from "./satellites.js?v=2";
+import { _3DToAu, auToKm } from "./orbitals.js?v=2";
 
 let solarSystemScene;
 
