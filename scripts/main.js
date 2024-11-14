@@ -1,10 +1,10 @@
 // Solar System Simulator Configuration - Slider Organization by Sections
 // This file contains code to create sliders for the solar system simulator and organizes the sliders into five sections: 'sim', 'costs', 'capability', 'ring 1', and 'ring 2'.
 
-import { solarSystemData } from "./solarSystem.js?v=2";
-import { SolarSystemScene } from "./threeRender.js?v=2";
-import { generateSatellites } from "./satellites.js?v=2";
-import { _3DToAu, auToKm } from "./orbitals.js?v=2";
+import { solarSystemData } from "./solarSystem.js";
+import { SolarSystemScene } from "./threeRender.js";
+import { generateSatellites } from "./satellites.js";
+import { _3DToAu, auToKm } from "./orbitals.js";
 
 let solarSystemScene;
 
@@ -106,6 +106,26 @@ const slidersData = {
       label: "Satellites",
       min: 0,
       max: 50,
+      value: 0,
+      step: 1,
+      unit: "",
+      scale: "linear",
+    },
+  },
+  L1: {
+    "L1-sats-earth-count-slider": {
+      label: "Earth",
+      min: 0,
+      max: 20,
+      value: 0,
+      step: 1,
+      unit: "",
+      scale: "linear",
+    },
+    "L1-sats-mars-count-slider": {
+      label: "Mars",
+      min: 0,
+      max: 20,
       value: 0,
       step: 1,
       unit: "",
@@ -242,6 +262,15 @@ function updateValues(sliderId, value) {
         case "satellite-ring-2-distance-sun-slider":
         case "failed-satellites-slider":
           solarSystemScene.updateSatellites(generateRings(slidersData.sim["failed-satellites-slider"].value));
+          break;
+
+        case "L1-sats-earth-count-slider":
+        case "L1-sats-mars-count-slider":
+          solarSystemScene.setL1SatsCount({
+            Earth: slidersData.L1["L1-sats-earth-count-slider"].value,
+            Mars: slidersData.L1["L1-sats-mars-count-slider"].value,
+          });
+
           break;
 
         case "max-link-distance-slider":
