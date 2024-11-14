@@ -3,7 +3,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
-import { helioCoords, auTo3D, distance3D } from "./orbitals.js";
+import { helioCoords, auTo3D, distance3D, _3DToAu, auToKm } from "./orbitals.js";
 
 import { updateInfo } from "./main.js";
 
@@ -19,7 +19,6 @@ export class SolarSystemScene {
     this.sun = null;
     this.planets = [];
     this.satellites = [];
-    this.l1Satellites = [];
     this.linesToEarth = [];
     this.linesToMars = [];
     this.composer = null;
@@ -231,17 +230,15 @@ export class SolarSystemScene {
     this.sun.rotation.y += (elapsedSecondsSinceLastUpdate / (this.solarSystemData.sun.rotationHours * 60 * 60)) * 2 * Math.PI;
 
     // Rotate planets and satellites
-    this.planets.forEach((planet) => this.updateObjectPosition(planet, dOfs, elapsedSecondsSinceLastUpdate));
-    this.satellites.forEach((satellite) => this.updateObjectPosition(satellite, dOfs, elapsedSecondsSinceLastUpdate));
-
-    // Update L1 satellites
-    this.l1Satellites.forEach((satellite) => this.updateL1SatellitePosition(satellite, dOfs));
+    this.planets.forEach((planet) => this.updateObjectPosition(planet, dOfs, elapsedSecondsSinceLastUpdate, true));
+    this.satellites.forEach((satellite) => this.updateObjectPosition(satellite, dOfs, elapsedSecondsSinceLastUpdate, true));
 
     // Update connections and draw them
     this.updateConnections();
     this.drawConnections();
     const shortestPath = this.calculateShortestPath();
-    this.drawShortestPath(shortestPath);
+    this.drawShortestPath(shortestPath.path);
+    this.shortestPathDistance3D = shortestPath.shortestDistance3D;
     this.directPathDistance3D = distance3D(this.earth.position, this.mars.position);
 
     this.controls.update();
@@ -250,14 +247,106 @@ export class SolarSystemScene {
     updateInfo();
   }
 
-  updateObjectPosition(object, dOfs, elapsedSecondsSinceLastUpdate) {
+  calculateLongtermScore() {
+    const years = 10;
+    const daysPerYear = 365;
+    let totalDays = years * daysPerYear;
+
+    const scores = [];
+
+    // Reset simulation time
+    let simTime = 0;
+
+    for (let day = 1; day <= totalDays; day++) {
+      // Simulate one day in milliseconds
+      const millisecondsPerDay = 24 * 60 * 60 * 1000;
+      const elapsedSeconds = millisecondsPerDay / 1000;
+
+      // Update simulation time
+      simTime += millisecondsPerDay;
+
+      // Calculate total elapsed days
+      const totalElapsedDays = simTime / (1000 * 60 * 60 * 24);
+
+      // Update positions of planets and satellites
+      this.planets.forEach((planet) => this.updateObjectPosition(planet, totalElapsedDays, elapsedSeconds));
+      this.satellites.forEach((satellite) => this.updateObjectPosition(satellite, totalElapsedDays, elapsedSeconds));
+
+      // Update network connections
+      this.updateConnections();
+
+      // Calculate shortest path
+      const shortestPathDistance3D = this.calculateShortestPath().shortestDistance3D;
+
+      // Calculate direct path distance between Earth and Mars
+      const directPathDistance3D = distance3D(this.earth.position, this.mars.position);
+
+      // Collect scores
+      scores.push({
+        day,
+        shortestPathDistance3D,
+        directPathDistance3D,
+      });
+    }
+
+    // Initialize accumulators
+    let totalMarslinkLatencySec = 0; // Total latency in seconds for connected days
+    let totalDirectLatencySec = 0; // Total latency in seconds for connected days
+    let connectedDays = 0; // Number of days with a valid connection
+    let disconnectedDays = 0; // Number of days without a connection
+
+    // Iterate through each day's score
+    for (let score of scores) {
+      if (score.shortestPathDistance3D === Infinity) {
+        // Day is disconnected
+        disconnectedDays += 1;
+      } else if (disconnectedDays == 0) {
+        // Day is connected; calculate latency
+
+        // Convert 3D distance to Astronomical Units (AU)
+        const marslinkDistanceAu = _3DToAu(score.shortestPathDistance3D);
+        const directDistanceAu = _3DToAu(score.directPathDistance3D);
+
+        // Convert AU to kilometers (km)
+        const marslinkDistanceKm = auToKm(marslinkDistanceAu);
+        const directDistanceKm = auToKm(directDistanceAu);
+
+        // Calculate one-way latency in seconds
+        const marslinkLatencySec = marslinkDistanceKm / 300000; // Speed of light ~300,000 km/s
+        const directLatencySec = directDistanceKm / 300000; // Speed of light ~300,000 km/s
+
+        // Accumulate the total latency and increment connected days
+        totalMarslinkLatencySec += marslinkLatencySec;
+        totalDirectLatencySec += directLatencySec;
+        connectedDays += 1;
+      }
+    }
+
+    // Total number of days in the simulation
+    totalDays = scores.length;
+
+    // Calculate average latency (only for connected days)
+    let averageMarslinkLatencySeconds = connectedDays > 0 ? totalMarslinkLatencySec / connectedDays : 0;
+    let averageDirectLatencySeconds = connectedDays > 0 ? totalDirectLatencySec / connectedDays : 0;
+
+    // Calculate disconnected time percentage
+    let disconnectedTimePercent = (disconnectedDays / totalDays) * 100;
+
+    // Round the results for better readability (optional)
+    averageMarslinkLatencySeconds = Math.round(averageMarslinkLatencySeconds * 100) / 100; // Rounded to 2 decimal places
+    averageDirectLatencySeconds = Math.round(averageDirectLatencySeconds * 100) / 100; // Rounded to 2 decimal places
+    disconnectedTimePercent = Math.round(disconnectedTimePercent * 100) / 100; // Rounded to 2 decimal places
+    return { averageMarslinkLatencySeconds, averageDirectLatencySeconds, disconnectedTimePercent };
+  }
+
+  updateObjectPosition(object, dOfs, elapsedSecondsSinceLastUpdate, rotate) {
     const xyz = helioCoords(object.params, dOfs);
     object.position.x = auTo3D(xyz.x);
     object.position.y = auTo3D(xyz.z);
     object.position.z = -auTo3D(xyz.y);
 
     // object rotation
-    object.rotation.y += (elapsedSecondsSinceLastUpdate / (object.params.rotationHours * 60 * 60)) * 2 * Math.PI;
+    if (rotate) object.rotation.y += (elapsedSecondsSinceLastUpdate / (object.params.rotationHours * 60 * 60)) * 2 * Math.PI;
   }
 
   updateConnections() {
@@ -278,12 +367,6 @@ export class SolarSystemScene {
     // Add satellites
     this.satellites.forEach((satellite, index) => {
       satellite.nodeName = `Satellite${index}`;
-      nodes.push(satellite.nodeName);
-      positions[satellite.nodeName] = satellite.position.clone();
-    });
-
-    // Add L1 satellites
-    this.l1Satellites.forEach((satellite) => {
       nodes.push(satellite.nodeName);
       positions[satellite.nodeName] = satellite.position.clone();
     });
@@ -337,12 +420,8 @@ export class SolarSystemScene {
             posA = this.earth.position;
           } else if (nodeA === "Mars") {
             posA = this.mars.position;
-          } else if (nodeA.startsWith("L1")) {
-            console.log(nodeA, this.l1Satellites);
-            let satA = this.l1Satellites.find((sat) => sat.nodeName === nodeA);
-            posA = satA.position;
           } else {
-            let satA = this.satellites.find((sat) => sat.nodeName === nodeA);
+            const satA = this.satellites.find((sat) => sat.nodeName === nodeA);
             posA = satA.position;
           }
 
@@ -350,12 +429,8 @@ export class SolarSystemScene {
             posB = this.earth.position;
           } else if (nodeB === "Mars") {
             posB = this.mars.position;
-          } else if (nodeB.startsWith("L1")) {
-            console.log(nodeB, this.l1Satellites);
-            let satB = this.l1Satellites.find((sat) => sat.nodeName === nodeB);
-            posB = satB.position;
           } else {
-            let satB = this.satellites.find((sat) => sat.nodeName === nodeB);
+            const satB = this.satellites.find((sat) => sat.nodeName === nodeB);
             posB = satB.position;
           }
 
@@ -440,9 +515,7 @@ export class SolarSystemScene {
     // Calculate the total distance
     const totalDistance = shortestDistances["Mars"];
 
-    // Store the total distance
-    this.shortestPathDistance3D = totalDistance;
-    return path;
+    return { path, shortestDistance3D: totalDistance };
   }
 
   drawShortestPath(path, edges) {
@@ -499,172 +572,6 @@ export class SolarSystemScene {
       this.scene.add(line);
       this.shortestPathLines.push(line);
     }
-  }
-
-  getNodePosition(nodeName) {
-    if (nodeName === "Earth") {
-      return this.earth.position;
-    } else if (nodeName === "Mars") {
-      return this.mars.position;
-    } else {
-      const sat = this.satellites.find((sat) => sat.nodeName === nodeName);
-      if (sat) {
-        return sat.position;
-      } else {
-        const l1Sat = this.l1Satellites.find((sat) => sat.nodeName === nodeName);
-        if (l1Sat) {
-          return l1Sat.position;
-        }
-      }
-    }
-    return null;
-  }
-
-  setL1SatsCount(countByPlanet) {
-    this.countByPlanet = countByPlanet;
-    this.setL1Sats();
-  }
-
-  setL1Sats() {
-    // Remove existing L1 satellites from the scene
-    if (this.l1Satellites && this.l1Satellites.length > 0) {
-      for (let satellite of this.l1Satellites) {
-        // Remove the satellite from the scene
-        this.scene.remove(satellite);
-
-        // Dispose of the satellite's geometry and material to free up memory
-        if (satellite.geometry) satellite.geometry.dispose();
-        if (satellite.material) {
-          // If the material has a map (texture), dispose of it as well
-          if (satellite.material.map) satellite.material.map.dispose();
-          satellite.material.dispose();
-        }
-      }
-      // Clear the l1Satellites array
-      this.l1Satellites.length = 0;
-    } else {
-      // Initialize the l1Satellites array if it doesn't exist
-      this.l1Satellites = [];
-    }
-
-    // For each planet in countByPlanet
-    for (let planetName in this.countByPlanet) {
-      const count = this.countByPlanet[planetName];
-      const planet = this.getPlanet(planetName);
-      if (!planet) {
-        console.warn(`Planet ${planetName} not found.`);
-        continue;
-      }
-
-      // Ensure planet position is up to date
-      const dOfs = this.simTime / (1000 * 60 * 60 * 24); // totalElapsedDays
-      this.updateObjectPosition(planet, dOfs, 0);
-
-      // Get planet position
-      const planetPos = planet.position.clone();
-
-      // Vector from planet to sun (which is at (0,0,0))
-      const sunPos = new THREE.Vector3(0, 0, 0);
-      const planetToSun = sunPos.clone().sub(planetPos);
-
-      // Normalize the vector
-      const unitVector = planetToSun.clone().normalize();
-
-      // Distance from planet to L1 point
-      const dAU = 0.01; // Approximate distance from planet to L1 point
-      const d3D = auTo3D(dAU);
-
-      // L1 position
-      const l1Pos = planetPos.clone().add(unitVector.clone().multiplyScalar(d3D));
-
-      // For count satellites, distribute them around the L1 point
-      for (let i = 0; i < count; i++) {
-        // Calculate offset if count > 1
-        let offset = new THREE.Vector3(0, 0, 0);
-        if (count > 1) {
-          const angle = (i / count) * 2 * Math.PI;
-          const radius = auTo3D(0.001); // small radius around L1 point
-          // Create a perpendicular vector
-          const axis = new THREE.Vector3(0, 1, 0); // arbitrary axis
-          if (axis.dot(unitVector) > 0.99) {
-            // If unitVector is parallel to axis, choose another axis
-            axis.set(1, 0, 0);
-          }
-          const perpVector = unitVector.clone().cross(axis).normalize();
-          offset = perpVector.clone().applyAxisAngle(unitVector, angle).multiplyScalar(radius);
-        }
-
-        // Create satellite at satellitePos
-        const satelliteParams = {
-          diameterKm: 100,
-          color: [255, 255, 0], // yellow
-          name: `L1_${planetName}_Satellite${i}`,
-          rotationHours: 24, // arbitrary rotation period
-        };
-        const satellitePos = l1Pos.clone().add(offset);
-        const satellite = this.createSatelliteAtPosition(satellitePos, satelliteParams);
-        satellite.offset = offset;
-        satellite.associatedPlanet = planet;
-        satellite.nodeName = satelliteParams.name;
-        satellite.params = satelliteParams;
-        this.l1Satellites.push(satellite);
-        this.scene.add(satellite);
-      }
-    }
-  }
-
-  updateL1SatellitePosition(satellite, dOfs) {
-    const planet = satellite.associatedPlanet;
-    // Ensure planet position is up to date
-    this.updateObjectPosition(planet, dOfs, 0);
-    // Get planet position
-    const planetPos = planet.position.clone();
-    // Vector from planet to sun
-    const sunPos = new THREE.Vector3(0, 0, 0);
-    const planetToSun = sunPos.clone().sub(planetPos);
-    const unitVector = planetToSun.clone().normalize();
-    // Distance from planet to L1 point
-    const dAU = 0.01;
-    const d3D = auTo3D(dAU);
-    // L1 position
-    const l1Pos = planetPos.clone().add(unitVector.clone().multiplyScalar(d3D));
-
-    // Apply the offset if any
-    let satellitePos = l1Pos.clone();
-    if (satellite.offset) {
-      satellitePos.add(satellite.offset);
-    }
-    satellite.position.copy(satellitePos);
-
-    // Rotate satellite if needed
-    const elapsedSecondsSinceLastUpdate = (this.lastUpdateTime - this.simTime) / 1000;
-    satellite.rotation.y += (elapsedSecondsSinceLastUpdate / (satellite.params.rotationHours * 60 * 60)) * 2 * Math.PI;
-  }
-
-  createSatelliteAtPosition(position, satelliteParams) {
-    const radius = this.solarSystemData.convertRadius(satelliteParams.diameterKm / 2);
-    const geometry = new THREE.CylinderGeometry(radius, radius, radius * 3, 6);
-
-    // Convert the RGB color array to a THREE.Color object
-    const colorArray = satelliteParams.color; // [R, G, B] values between 0 and 255
-    const color = new THREE.Color(colorArray[0] / 255, colorArray[1] / 255, colorArray[2] / 255);
-
-    const material = new THREE.MeshPhongMaterial({
-      color: color,
-      shininess: 10,
-      specular: new THREE.Color(0x333333),
-    });
-
-    const satellite = new THREE.Mesh(geometry, material);
-    satellite.position.copy(position);
-    satellite.params = satelliteParams;
-    satellite.castShadow = false;
-    satellite.receiveShadow = true;
-    return satellite;
-  }
-
-  getPlanet(planetName) {
-    return this.planets.find((planet) => planet.params.name === planetName);
   }
 
   setTimeAccelerationFactor(factor) {

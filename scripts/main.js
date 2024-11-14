@@ -112,26 +112,6 @@ const slidersData = {
       scale: "linear",
     },
   },
-  L1: {
-    "L1-sats-earth-count-slider": {
-      label: "Earth",
-      min: 0,
-      max: 20,
-      value: 0,
-      step: 1,
-      unit: "",
-      scale: "linear",
-    },
-    "L1-sats-mars-count-slider": {
-      label: "Mars",
-      min: 0,
-      max: 20,
-      value: 0,
-      step: 1,
-      unit: "",
-      scale: "linear",
-    },
-  },
 };
 
 // Function to map internal slider value to user-facing value for pow2 scale
@@ -262,19 +242,12 @@ function updateValues(sliderId, value) {
         case "satellite-ring-2-distance-sun-slider":
         case "failed-satellites-slider":
           solarSystemScene.updateSatellites(generateRings(slidersData.sim["failed-satellites-slider"].value));
-          break;
-
-        case "L1-sats-earth-count-slider":
-        case "L1-sats-mars-count-slider":
-          solarSystemScene.setL1SatsCount({
-            Earth: slidersData.L1["L1-sats-earth-count-slider"].value,
-            Mars: slidersData.L1["L1-sats-mars-count-slider"].value,
-          });
-
+          resetTimerLongtermScore();
           break;
 
         case "max-link-distance-slider":
           solarSystemScene.setMaxLinkDistance(newValue);
+          resetTimerLongtermScore();
           break;
 
         case "satellite-cost-slider":
@@ -311,6 +284,21 @@ solarSystemScene = new SolarSystemScene(solarSystemData);
 solarSystemScene.updateSatellites(generateRings(slidersData.sim["failed-satellites-slider"].value));
 solarSystemScene.setMaxLinkDistance(mapSliderValueToUserFacing(slidersData.capability["max-link-distance-slider"]));
 solarSystemScene.setTimeAccelerationFactor(mapSliderValueToUserFacing(slidersData.sim["time-acceleration-slider"]));
+let longtermScore = solarSystemScene.calculateLongtermScore();
+
+let longtermScoreTimerId;
+const LONGTERM_SCORE_INTERVAL_MS = 800;
+function resetTimerLongtermScore() {
+  longtermScore = null;
+  if (longtermScoreTimerId) {
+    clearTimeout(longtermScoreTimerId);
+  }
+  longtermScoreTimerId = setTimeout(timerLongtermScoreElapsed, LONGTERM_SCORE_INTERVAL_MS);
+}
+
+function timerLongtermScoreElapsed() {
+  longtermScore = solarSystemScene.calculateLongtermScore();
+}
 
 export function updateInfo() {
   if (solarSystemScene) {
@@ -328,19 +316,37 @@ export function updateInfo() {
     let costRing2 =
       slidersData.ring2["satellite-ring-2-count-slider"].value * slidersData.costs["satellite-cost-slider"].value +
       launchCountRing2 * slidersData.costs["launch-cost-slider"].value;
+    let totalCost = costRing1 + costRing2;
     const marslinkLatencySeconds = auToKm(_3DToAu(solarSystemScene.getShortestPathDistance3D())) / 300000;
     const directLatencySeconds = auToKm(_3DToAu(solarSystemScene.getDirectPathDistance3D())) / 300000;
     const pctLonger = (marslinkLatencySeconds / directLatencySeconds - 1) * 100;
     let html = "";
-    if (marslinkLatencySeconds !== Infinity) html += `Earth-Mars latency `;
+    if (marslinkLatencySeconds !== Infinity) html += `Marslink latency `;
     html += `${convertSecToText(marslinkLatencySeconds)}`;
     if (marslinkLatencySeconds !== Infinity) html += ` (+${pctLonger.toFixed(0)}%)`;
     html += "<br>";
     html += `${launchCountRing1 + launchCountRing2} launch${
       launchCountRing1 + launchCountRing2 > 1 ? "es" : ""
     } (${launchCountRing1} + ${launchCountRing2})`;
+
     html += "<br>";
-    html += `Total cost $${formatMillions(costRing1 + costRing2)}`;
+    html += `Total cost $${formatMillions(totalCost)}`;
+    if (longtermScore) {
+      html += "<br>";
+      html += "<br>";
+      html += `<b>10-year analysis</b>`;
+      html += "<br>";
+      if (longtermScore.disconnectedTimePercent > 0) html += `Disconnected ${longtermScore.disconnectedTimePercent.toFixed(2)}% of time`;
+      else {
+        const pctLonger = (longtermScore.averageMarslinkLatencySeconds / longtermScore.averageDirectLatencySeconds - 1) * 100;
+
+        html += `Average latency ${convertSecToText(longtermScore.averageMarslinkLatencySeconds)} (+${pctLonger.toFixed(0)}%)`;
+        html += "<br>";
+        html += `Score ${((totalCost * longtermScore.averageMarslinkLatencySeconds) / 1000).toFixed(1)} k$.second`;
+        html += "<br>";
+        html += `(lower is better)`;
+      }
+    }
     document.getElementById("info-area").innerHTML = html;
   }
 }

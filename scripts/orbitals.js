@@ -64,52 +64,6 @@ export function helioCoords(ele, dayOfs) {
   return { x: X, y: Y, z: Z };
 }
 
-function calculateL1Position(planet, sun) {
-  let perf = performance.now();
-  const G = 6.6743e-11; // Gravitational constant in m^3 kg^-1 s^-2
-  const massSun = sun.MassKg; // Mass of the Sun in kg
-  const massPlanet = planet.params.mass; // Mass of the planet in kg
-
-  // Get the positions of the Sun and planet
-  const sunCoords = sun.position;
-  const planetCoords = planet.position;
-
-  // Calculate the distance between the Sun and the planet
-  const dx = planetCoords.x - sunCoords.x;
-  const dy = planetCoords.y - sunCoords.y;
-  const dz = planetCoords.z - sunCoords.z;
-  const r = Math.sqrt(dx * dx + dy * dy + dz * dz);
-
-  // Calculate the L1 point using an iterative numerical method
-  let L1Distance = r; // Initial guess for L1 distance from the planet
-  const epsilon = 1e-6; // Convergence threshold
-  let diff;
-
-  do {
-    const forceSun = (G * massSun) / Math.pow(r - L1Distance, 2);
-    const forcePlanet = (G * massPlanet) / Math.pow(L1Distance, 2);
-    const totalForce = forceSun - forcePlanet;
-
-    // Update the L1 distance based on the balance of forces
-    diff = totalForce * (L1Distance / (forceSun + forcePlanet));
-    L1Distance += diff;
-  } while (Math.abs(diff) > epsilon);
-
-  // Calculate the coordinates of L1 point relative to the Sun
-  const L1Ratio = L1Distance / r;
-  const L1Coords = {
-    x: sunCoords.x + dx * L1Ratio,
-    y: sunCoords.y + dy * L1Ratio,
-    z: sunCoords.z + dz * L1Ratio,
-  };
-
-  let perf2 = performance.now();
-
-  console.log(perf2 - perf);
-
-  return L1Coords;
-}
-
 function insideSunArea(PlanetA, PlanetB) {
   var ClosestDistanceToSunKm =
     (Math.abs(PlanetB.x * PlanetA.y - PlanetB.y * PlanetA.x) /
