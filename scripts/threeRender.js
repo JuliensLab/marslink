@@ -4,6 +4,7 @@ import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
 import { helioCoords, auTo3D, distance3D, _3DToAu, auToKm } from "./orbitals.js";
+import { calculateDatarate } from "./linkBudget.js";
 
 import { updateInfo } from "./main.js";
 
@@ -386,10 +387,18 @@ export class SolarSystemScene {
         const dx = posA.x - posB.x;
         const dy = posA.y - posB.y;
         const dz = posA.z - posB.z;
-        const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
-        if (distance <= this.maxLinkDistance3D) {
-          connections[nodeA][nodeB] = distance;
-          connections[nodeB][nodeA] = distance; // undirected
+        const distance3D = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        const distanceAu = _3DToAu(distance3D);
+        const distanceKm = auToKm(distanceAu);
+        const nominalRateTbps = 100000;
+        const nominalRateMbps = nominalRateTbps * 1000 * 1000;
+        const nominalDistanceKm = 1000;
+        const rateMbps = calculateDatarate(nominalRateMbps, nominalDistanceKm, distanceKm);
+        const minimumRateMbps = 4;
+        // if (distance3D <= this.maxLinkDistance3D) {
+        if (rateMbps >= this.minimumRateMbps) {
+          connections[nodeA][nodeB] = distance3D;
+          connections[nodeB][nodeA] = distance3D; // undirected
         }
       }
     }
@@ -582,6 +591,9 @@ export class SolarSystemScene {
     this.maxLinkDistance3D = auTo3D(maxLinkDistanceAu);
   }
 
+  setMinimumRateMbps(minimumRateMbps) {
+    this.minimumRateMbps = minimumRateMbps;
+  }
   // Add a method to get the shortest path distance
   getShortestPathDistance3D() {
     return this.shortestPathDistance3D;
