@@ -1,4 +1,12 @@
-export function generateSatellites(satCount, satDistanceSun, ringName, ringType, marsSideExtensionDeg, failedSatellitesPct) {
+export function generateSatellites(
+  satCount,
+  satDistanceSun,
+  ringName,
+  ringType,
+  marsSideExtensionDeg,
+  laserPortsPerSatellite,
+  failedSatellitesPct
+) {
   if (satCount == 0) return [];
   const satellites = [];
   if (ringType == "Circular") {
@@ -8,7 +16,7 @@ export function generateSatellites(satCount, satDistanceSun, ringName, ringType,
     const longIncrement = 360 / satCount;
     for (let i = 0; i < satCount; i++)
       if (Math.random() >= failedSatellitesPct / 100)
-        satellites.push(generateSatellite(ringName, ringType, a, n, i * longIncrement, orbitdays));
+        satellites.push(generateSatellite(ringName, ringType, a, n, i * longIncrement, orbitdays, laserPortsPerSatellite));
   } else {
     let a;
     let n;
@@ -24,20 +32,21 @@ export function generateSatellites(satCount, satDistanceSun, ringName, ringType,
     const longIncrement = marsSideExtensionDeg / satCountOneSide;
     for (let i = 0; i < satCountOneSide; i++) {
       if (Math.random() >= failedSatellitesPct / 100) {
-        satellites.push(generateSatellite(ringName, ringType, a, n, (i + 1) * longIncrement, orbitdays));
+        satellites.push(generateSatellite(ringName, ringType, a, n, (i + 1) * longIncrement, orbitdays, laserPortsPerSatellite));
         if (!(marsSideExtensionDeg == 180 && i == satCountOneSide - 1))
-          satellites.push(generateSatellite(ringName, ringType, a, n, -(i + 1) * longIncrement, orbitdays));
+          satellites.push(generateSatellite(ringName, ringType, a, n, -(i + 1) * longIncrement, orbitdays, laserPortsPerSatellite));
       }
     }
   }
   return satellites;
 }
 
-function generateSatellite(ringName, ringType, a, n, long, orbitdays) {
+function generateSatellite(ringName, ringType, a, n, long, orbitdays, laserPortsPerSatellite) {
   const elements = getOrbitaElements(ringType, a, n, long);
   const satelliteData = {
     name: `${ringName}-${long}`,
     ...elements,
+    laserPortsPerSatellite,
     diameterKm: 10000,
     orbitdays: orbitdays,
     rotationHours: 0,

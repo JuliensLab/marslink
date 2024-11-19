@@ -45,7 +45,7 @@ const slidersData = {
     },
     "launch-cost-slider": {
       label: "Starship Launch",
-      description: "Cost to launch one starship",
+      description: "Cost to launch one Starship",
       min: 1,
       max: 60,
       value: 20,
@@ -65,6 +65,16 @@ const slidersData = {
       unit: "",
       scale: "linear",
       updateLongTermScore: false,
+    },
+    "laser-ports-per-satellite": {
+      label: "Laser Ports per Satellite",
+      min: 2,
+      max: 20,
+      value: 3,
+      step: 1,
+      unit: " ports",
+      scale: "linear",
+      updateLongTermScore: true,
     },
     "minimum-rate-mbps-slider": {
       label: "Minimum Rate",
@@ -225,10 +235,10 @@ function mapSliderValueToUserFacing(slider, sliderValue = slider.value) {
   }
 }
 
-// Function to create sliders dynamically with proper min, max, and scale handling
 function createSliders() {
   const slidersContainer = document.getElementById("sliders-container");
 
+  // Iterate through each section in slidersData
   for (const section in slidersData) {
     if (section === "rings") {
       // Iterate through each ring
@@ -238,6 +248,11 @@ function createSliders() {
         ringHeader.className = "slider-section-header";
         ringHeader.textContent = ring.label;
         slidersContainer.appendChild(ringHeader);
+
+        // Create a div to contain sliders for this ring
+        const ringContent = document.createElement("div");
+        ringContent.className = "slider-section-content";
+        slidersContainer.appendChild(ringContent);
 
         for (const sliderId in ring.sliders) {
           const slider = ring.sliders[sliderId];
@@ -296,8 +311,8 @@ function createSliders() {
           sliderContainer.appendChild(input);
           sliderContainer.appendChild(valueSpan);
 
-          // Append the container to the sliders container
-          slidersContainer.appendChild(sliderContainer);
+          // Append the container to the ring content div
+          ringContent.appendChild(sliderContainer);
 
           // Event listener for slider input changes (live updates)
           input.addEventListener("input", () => {
@@ -313,10 +328,6 @@ function createSliders() {
               // Recalculate longtermScore and update info
               longtermScore = null;
               updateInfo();
-              // setTimeout(function () {
-              //   longtermScore = solarSystemScene.calculateLongtermScore();
-              //   updateInfo();
-              // }, 50);
             });
 
           // Load value from local storage if available
@@ -330,12 +341,18 @@ function createSliders() {
         }
       });
     } else {
-      // Handle other sections (sim, costs, capability) as before
+      // Handle other sections (sim, costs, capability)
+
       // Create a header for each section
       const sectionHeader = document.createElement("h3");
       sectionHeader.className = "slider-section-header";
       sectionHeader.textContent = section.charAt(0).toUpperCase() + section.slice(1);
       slidersContainer.appendChild(sectionHeader);
+
+      // Create a div to contain sliders for this section
+      const sectionContent = document.createElement("div");
+      sectionContent.className = "slider-section-content";
+      slidersContainer.appendChild(sectionContent);
 
       for (const sliderId in slidersData[section]) {
         const slider = slidersData[section][sliderId];
@@ -393,8 +410,8 @@ function createSliders() {
         sliderContainer.appendChild(input);
         sliderContainer.appendChild(valueSpan);
 
-        // Append the container to the sliders container
-        slidersContainer.appendChild(sliderContainer);
+        // Append the container to the section content div
+        sectionContent.appendChild(sliderContainer);
 
         // Event listener for slider input changes (live updates)
         input.addEventListener("input", () => {
@@ -410,10 +427,6 @@ function createSliders() {
             // Recalculate longtermScore and update info
             longtermScore = null;
             updateInfo();
-            // setTimeout(function () {
-            //   longtermScore = solarSystemScene.calculateLongtermScore();
-            //   updateInfo();
-            // }, 50);
           });
 
         // Load value from local storage if available
@@ -427,6 +440,26 @@ function createSliders() {
       }
     }
   }
+
+  // Add event listeners to toggle sections
+  const headers = document.querySelectorAll(".slider-section-header");
+  headers.forEach((header) => {
+    header.addEventListener("click", () => {
+      const content = header.nextElementSibling;
+
+      // If the clicked section is already active, simply toggle it
+      if (content.classList.contains("active")) {
+        content.classList.remove("active");
+      } else {
+        // Close all other sections
+        document.querySelectorAll(".slider-section-content.active").forEach((activeContent) => {
+          activeContent.classList.remove("active");
+        });
+        // Open the clicked section
+        content.classList.add("active");
+      }
+    });
+  });
 }
 
 // Update values based on the slider id, considering non-linear scales
@@ -471,6 +504,7 @@ function updateValues(sliderId, value) {
           solarSystemScene.setTimeAccelerationFactor(newValue);
           break;
 
+        case "laser-ports-per-satellite":
         case "failed-satellites-slider":
           solarSystemScene.updateSatellites(generateRings(newValue));
           break;
@@ -507,6 +541,7 @@ function generateRings(failedSatellitesPct) {
       ring.id,
       ring.id == "ringMars" ? "Mars" : ring.id == "ringEarth" ? "Earth" : "Circular",
       ring.sliders["side-extension-degrees-slider"] ? ring.sliders["side-extension-degrees-slider"].value : null,
+      slidersData.capability["laser-ports-per-satellite"].value,
       failedSatellitesPct
     )
   );
@@ -514,7 +549,7 @@ function generateRings(failedSatellitesPct) {
 }
 
 createSliders();
-solarSystemScene = new SolarSystemScene(solarSystemData, sumMaxSatellites(slidersData));
+solarSystemScene = new SolarSystemScene(solarSystemData);
 solarSystemScene.updateSatellites(generateRings(slidersData.sim["failed-satellites-slider"].value));
 // solarSystemScene.setMaxLinkDistance(mapSliderValueToUserFacing(slidersData.capability["max-link-distance-slider"]));
 solarSystemScene.setMinimumRateMbps(mapSliderValueToUserFacing(slidersData.capability["minimum-rate-mbps-slider"]));
@@ -600,28 +635,4 @@ function formatSimTimeToUTC(simTime) {
   const formattedDate = simDate.toISOString().replace("T", " ").slice(0, 19) + " UTC";
 
   return formattedDate;
-}
-
-function sumMaxSatellites(slidersData) {
-  // Check if slidersData and slidersData.rings exist and is an array
-  if (!slidersData || !Array.isArray(slidersData.rings)) {
-    console.warn("Invalid slidersData structure.");
-    return 0;
-  }
-
-  // Use reduce to accumulate the max values
-  const totalMax = slidersData.rings.reduce((accumulator, ring) => {
-    // Access the satellite-count-slider
-    const satelliteSlider = ring.sliders["satellite-count-slider"];
-
-    // Check if the satelliteSlider exists and has a numeric max value
-    if (satelliteSlider && typeof satelliteSlider.max === "number") {
-      return accumulator + satelliteSlider.max;
-    } else {
-      console.warn(`Missing or invalid 'satellite-count-slider' in ring: ${ring.id}`);
-      return accumulator;
-    }
-  }, 0); // Initialize accumulator to 0
-
-  return totalMax;
 }

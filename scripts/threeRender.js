@@ -172,6 +172,7 @@ export class SolarSystemScene {
 
     const connectionMaterial = new THREE.LineBasicMaterial({
       color: this.styles.links.connected.color,
+      vertexColors: true, // Enable vertex colors
       transparent: true,
       opacity: this.styles.links.connected.opacity,
     });
@@ -445,8 +446,9 @@ export class SolarSystemScene {
         const minimumRateMbps = this.minimumRateMbps;
 
         if (rateMbps >= minimumRateMbps) {
-          connections[nodeA][nodeB] = distance3D;
-          connections[nodeB][nodeA] = distance3D; // undirected
+          // Store both distance and rateMbps
+          connections[nodeA][nodeB] = { distance3D, rateMbps };
+          connections[nodeB][nodeA] = { distance3D, rateMbps }; // undirected
         }
       }
     }
@@ -454,16 +456,32 @@ export class SolarSystemScene {
     // Store connections
     this.connections = connections;
   }
-
   drawConnections() {
+    // Helper function to interpolate color based on rateMbps
+    const getColorFromRate = (rateMbps) => {
+      const minRate = 0;
+      const maxRate = 200;
+      const clampedRate = Math.max(minRate, Math.min(maxRate, rateMbps));
+      const t = (clampedRate - minRate) / (maxRate - minRate); // 0 to 1
+
+      // Interpolate
+      const minColor = new THREE.Color(0x6666ff);
+      const maxColor = new THREE.Color(0xff6666);
+      const interpolatedColor = minColor.clone().lerp(maxColor, t);
+      return interpolatedColor;
+    };
+
     const positions = [];
+    const colors = [];
 
     for (let nodeA in this.connections) {
       for (let nodeB in this.connections[nodeA]) {
         // To avoid duplicate lines, ensure nodeA < nodeB
         if (nodeA < nodeB) {
           let posA, posB;
+          let rateMbps;
 
+          // Retrieve positionA
           if (nodeA === "Earth") {
             posA = this.earth.position;
           } else if (nodeA === "Mars") {
@@ -476,6 +494,7 @@ export class SolarSystemScene {
             posA = new THREE.Vector3().setFromMatrixPosition(matrixA);
           }
 
+          // Retrieve positionB
           if (nodeB === "Earth") {
             posB = this.earth.position;
           } else if (nodeB === "Mars") {
@@ -488,29 +507,70 @@ export class SolarSystemScene {
             posB = new THREE.Vector3().setFromMatrixPosition(matrixB);
           }
 
-          if (posA && posB) {
+          // Get rateMbps
+          if (this.connections[nodeA][nodeB]) {
+            rateMbps = this.connections[nodeA][nodeB].rateMbps;
+          } else {
+            rateMbps = 0; // Default if not found
+          }
+
+          // Calculate color based on rateMbps
+          const color = getColorFromRate(rateMbps);
+
+          // Validate positions and color
+          if (posA && posB && !isNaN(posA.x) && !isNaN(posA.y) && !isNaN(posA.z) && !isNaN(color.r) && !isNaN(color.g) && !isNaN(color.b)) {
+            // Add positions
             positions.push(posA.x, posA.y, posA.z);
             positions.push(posB.x, posB.y, posB.z);
+
+            // Add colors for both vertices
+            colors.push(color.r, color.g, color.b);
+            colors.push(color.r, color.g, color.b);
           }
         }
       }
     }
 
-    // Update the BufferGeometry
-    const positionAttribute = this.connectionLines.geometry.attributes.position;
+    const geometry = this.connectionLines.geometry;
 
-    if (positions.length !== positionAttribute.count * 3) {
-      // If the number of vertices has changed, set a new buffer
-      this.connectionLines.geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+    // Calculate the required number of vertices
+    const requiredCount = positions.length / 3;
+    const existingCount = geometry.attributes.position ? geometry.attributes.position.count : 0;
+
+    if (requiredCount !== existingCount) {
+      // Create a new BufferGeometry with updated positions and colors
+      const newGeometry = new THREE.BufferGeometry();
+      newGeometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+      newGeometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+
+      // Dispose of the old geometry to free up memory
+      geometry.dispose();
+
+      // Assign the new geometry to the connectionLines
+      this.connectionLines.geometry = newGeometry;
     } else {
-      // Otherwise, update the existing buffer
-      positionAttribute.array = new Float32Array(positions);
-      positionAttribute.needsUpdate = true;
+      // Update the existing BufferGeometry using typed arrays
+      if (geometry.attributes.position) {
+        geometry.attributes.position.array = new Float32Array(positions);
+        geometry.attributes.position.needsUpdate = true;
+      }
+
+      if (geometry.attributes.color) {
+        geometry.attributes.color.array = new Float32Array(colors);
+        geometry.attributes.color.needsUpdate = true;
+      } else {
+        // If color attribute doesn't exist, create it
+        geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+      }
     }
 
-    // Optionally, adjust the opacity or other material properties if needed
+    // Ensure the material uses vertex colors
+    this.connectionLines.material.vertexColors = true;
+    this.connectionLines.material.needsUpdate = true;
+
+    // Optionally, adjust other material properties if needed
     this.connectionLines.material.opacity = this.styles.links.connected.opacity;
-    this.connectionLines.material.color.setHex(this.styles.links.connected.color);
+    this.connectionLines.material.color.setHex(0xffffff); // Base color won't affect vertex colors
   }
 
   calculateShortestPath() {

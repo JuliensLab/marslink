@@ -23,7 +23,8 @@ canvas {
 #overlay-top-left {
   top: 10px;
   left: 10px;
-  max-width: 280px;
+  min-width: 250px;
+  max-width: 300px;
 }
 
 #overlay-top-right {
@@ -140,4 +141,43 @@ input[type="range"]::-moz-range-track {
   background: #444;
   height: 6px;
   border-radius: 3px;
+}
+
+/* Styles for collapsible headers */
+.slider-section-header {
+  cursor: pointer;
+  padding: 10px;
+  background-color: rgba(255, 255, 255, 0.1);
+  border-radius: 5px;
+  margin-top: 10px;
+  transition: background-color 0.3s ease;
+}
+
+.slider-section-header:hover {
+  background-color: rgba(255, 255, 255, 0.2);
+}
+
+/* Styles for collapsible content */
+.slider-section-content {
+  display: none; /* Hidden by default */
+  margin-top: 5px;
+  padding-left: 10px;
+  border-left: 2px solid #444;
+}
+
+/* Active class to show the content */
+.slider-section-content.active {
+  display: block;
+}
+
+.slider-section-content {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.3s ease, padding 0.3s ease;
+}
+
+.slider-section-content.active {
+  display: block;
+  max-height: 1000px; /* A high enough value to accommodate content */
+  padding: 10px 0;
 }
