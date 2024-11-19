@@ -514,7 +514,7 @@ function generateRings(failedSatellitesPct) {
 }
 
 createSliders();
-solarSystemScene = new SolarSystemScene(solarSystemData);
+solarSystemScene = new SolarSystemScene(solarSystemData, sumMaxSatellites(slidersData));
 solarSystemScene.updateSatellites(generateRings(slidersData.sim["failed-satellites-slider"].value));
 // solarSystemScene.setMaxLinkDistance(mapSliderValueToUserFacing(slidersData.capability["max-link-distance-slider"]));
 solarSystemScene.setMinimumRateMbps(mapSliderValueToUserFacing(slidersData.capability["minimum-rate-mbps-slider"]));
@@ -600,4 +600,28 @@ function formatSimTimeToUTC(simTime) {
   const formattedDate = simDate.toISOString().replace("T", " ").slice(0, 19) + " UTC";
 
   return formattedDate;
+}
+
+function sumMaxSatellites(slidersData) {
+  // Check if slidersData and slidersData.rings exist and is an array
+  if (!slidersData || !Array.isArray(slidersData.rings)) {
+    console.warn("Invalid slidersData structure.");
+    return 0;
+  }
+
+  // Use reduce to accumulate the max values
+  const totalMax = slidersData.rings.reduce((accumulator, ring) => {
+    // Access the satellite-count-slider
+    const satelliteSlider = ring.sliders["satellite-count-slider"];
+
+    // Check if the satelliteSlider exists and has a numeric max value
+    if (satelliteSlider && typeof satelliteSlider.max === "number") {
+      return accumulator + satelliteSlider.max;
+    } else {
+      console.warn(`Missing or invalid 'satellite-count-slider' in ring: ${ring.id}`);
+      return accumulator;
+    }
+  }, 0); // Initialize accumulator to 0
+
+  return totalMax;
 }

@@ -1,3 +1,5 @@
+// threeRender.js
+
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
@@ -19,14 +21,14 @@ export class SolarSystemScene {
     this.textureLoader = null;
     this.sun = null;
     this.planets = [];
-    this.satellites = [];
     this.composer = null;
     this.bloomPass = null;
     this.lastUpdateTime = Date.now(); // Initialize last update time
     this.simTime = Date.now(); // Initialize program start time
-    this.timeAccelerationFactor = 0; // Acceleration factor x100
+    this.timeAccelerationFactor = 1; // Acceleration factor x1 (adjust as needed)
     this.maxLinkDistance3D = 1;
     this.minimumRateMbps = 4; // Initialize minimumRateMbps
+    this.satellitesData = [];
 
     // Initialize the connections data structure
     this.connections = {};
@@ -88,7 +90,7 @@ export class SolarSystemScene {
     // Starry Background
     const starTexture = this.textureLoader.load(this.solarSystemData.background.texturePath);
     const starsGeometry = new THREE.SphereGeometry(
-      500, //this.solarSystemData.convertRadius(this.solarSystemData.background.diameterKm / 2),
+      500, // Adjust as needed
       64,
       64
     );
@@ -182,65 +184,143 @@ export class SolarSystemScene {
     shortestPathGeometry.setAttribute("position", new THREE.Float32BufferAttribute([], 3));
 
     const shortestPathMaterial = new THREE.LineBasicMaterial({
-      // color: this.styles.links.active.color,
       transparent: true,
-      // opacity: this.styles.links.active.opacity,
     });
 
     this.shortestPathLines = new THREE.LineSegments(shortestPathGeometry, shortestPathMaterial);
     this.scene.add(this.shortestPathLines);
+
+    // **Satellite Instancing Setup**
+    this.setupSatellitesInstancing();
   }
 
+  setupSatellitesInstancing() {
+    // This method is now effectively handled by the updateSatellites method
+    // You can leave this method empty or remove it if not needed
+  }
+
+  /**
+   * Adds a new satellite to the scene.
+   * @param {Object} satData - Satellite parameters.
+   */
+  addSatellite(satData) {
+    // This method is no longer needed since satellites are managed via InstancedMesh reinitialization
+  }
+
+  /**
+   * Removes a satellite from the scene.
+   * @param {number} index - The instance index of the satellite to remove.
+   */
+  removeSatellite(index) {
+    // This method is no longer needed since satellites are managed via InstancedMesh reinitialization
+  }
+
+  /**
+   * Updates the satellites by recreating the InstancedMesh with the new satellite count.
+   * @param {Array} satellitesData - Array of satellite parameter objects.
+   */
   updateSatellites(satellitesData) {
-    // Planet function to create planets easily
-    const createSatellite = (satelliteParams, convertRadius) => {
-      const radius = convertRadius(satelliteParams.diameterKm / 2);
-      const geometry = new THREE.CylinderGeometry(radius, radius, radius * 3, 6);
+    // Dispose of the previous InstancedMesh if it exists
+    if (this.satellitesInstancedMesh) {
+      this.scene.remove(this.satellitesInstancedMesh);
+      this.satellitesInstancedMesh.geometry.dispose();
+      this.satellitesInstancedMesh.material.dispose();
+      this.satellitesInstancedMesh = null;
+    }
 
-      // Convert the RGB color array to a THREE.Color object
-      const colorArray = satelliteParams.color; // [R, G, B] values between 0 and 255
-      const color = new THREE.Color(colorArray[0] / 255, colorArray[1] / 255, colorArray[2] / 255);
+    // Create a new InstancedMesh with the updated satellite count
+    const newSatelliteCount = satellitesData.length;
 
-      const material = new THREE.MeshPhongMaterial({
-        color: color, // Set the color of the material
-        shininess: 10, // Adjust shininess for specular highlights
-        specular: new THREE.Color(0x333333),
-      });
+    // Define geometry and material for satellites
+    const satelliteGeometry = new THREE.CylinderGeometry(
+      this.solarSystemData.convertRadius(500), // Example radius; adjust as needed
+      this.solarSystemData.convertRadius(500),
+      this.solarSystemData.convertRadius(1500), // Height; adjust as needed
+      6
+    );
 
-      const satellite = new THREE.Mesh(geometry, material);
-      satellite.params = satelliteParams;
-      satellite.castShadow = false; // Planet casts shadows
-      satellite.receiveShadow = true; // Planet receives shadows
-      return satellite;
-    };
+    // Material with support for per-instance colors
+    const satelliteMaterial = new THREE.MeshPhongMaterial({
+      color: 0xffffff,
+      shininess: 10,
+      specular: new THREE.Color(0x333333),
+      transparent: false, // Set to true if using transparency
+      opacity: 1.0, // Base opacity
+    });
 
-    // Check if the satellites array exists and has satellites
-    if (this.satellites && this.satellites.length > 0) {
-      for (let satellite of this.satellites) {
-        // Remove the satellite from the scene
-        this.scene.remove(satellite);
+    // Create the new InstancedMesh
+    this.satellitesInstancedMesh = new THREE.InstancedMesh(satelliteGeometry, satelliteMaterial, newSatelliteCount);
+    this.satellitesInstancedMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage); // Optimizes for frequent updates
+    this.satellitesInstancedMesh.castShadow = false; // As per original code
+    this.satellitesInstancedMesh.receiveShadow = true;
+    this.scene.add(this.satellitesInstancedMesh);
 
-        // Dispose of the satellite's geometry and material to free up memory
-        if (satellite.geometry) satellite.geometry.dispose();
-        if (satellite.material) {
-          // If the material has a map (texture), dispose of it as well
-          if (satellite.material.map) satellite.material.map.dispose();
-          satellite.material.dispose();
-        }
+    // Initialize satellite data array
+    this.satellitesData = satellitesData;
+
+    // Update the instance matrices and colors
+    const dummy = new THREE.Object3D();
+
+    for (let i = 0; i < newSatelliteCount; i++) {
+      const satData = satellitesData[i];
+
+      // Calculate position based on simulation time
+      const xyz = helioCoords(satData, this.simTime / (1000 * 60 * 60 * 24)); // Convert simTime to days
+      dummy.position.set(auTo3D(xyz.x), auTo3D(xyz.z), -auTo3D(xyz.y));
+
+      // Set rotation if applicable
+      if (satData.rotationHours) {
+        dummy.rotation.y = 0; // Initial rotation
       }
-      // Clear the satellites array
-      this.satellites.length = 0;
-    } else {
-      // Initialize the satellites array if it doesn't exist
-      this.satellites = [];
+
+      // Update the instance matrix
+      dummy.updateMatrix();
+      this.satellitesInstancedMesh.setMatrixAt(i, dummy.matrix);
+
+      // Set the instance color
+      this.satellitesInstancedMesh.setColorAt(i, new THREE.Color(satData.color[0] / 255, satData.color[1] / 255, satData.color[2] / 255));
     }
 
-    for (let satData of satellitesData) {
-      const satellite = createSatellite(satData, this.solarSystemData.convertRadius);
-      satellite.nodeName = `Satellite${this.satellites.length}`; // Assign a unique name
-      this.satellites.push(satellite);
-      this.scene.add(satellite);
+    // Flag the InstancedMesh for updates
+    this.satellitesInstancedMesh.instanceMatrix.needsUpdate = true;
+    if (this.satellitesInstancedMesh.instanceColor) {
+      this.satellitesInstancedMesh.instanceColor.needsUpdate = true;
     }
+
+    // Optionally, update connections if necessary
+    this.updateConnections();
+  }
+
+  /**
+   * Updates the transformation matrices of active satellites.
+   * @param {number} totalElapsedDays - Total simulation time in days.
+   * @param {number} elapsedSecondsSinceLastUpdate - Elapsed seconds since last update.
+   */
+  updateSatellitesInstanceMatrices(totalElapsedDays, elapsedSecondsSinceLastUpdate) {
+    if (!this.satellitesInstancedMesh) return;
+
+    const dummy = new THREE.Object3D();
+
+    for (let i = 0; i < this.satellitesData.length; i++) {
+      const satData = this.satellitesData[i];
+      if (!satData) continue; // Skip if satellite data is null
+
+      // Update position based on simulation time
+      const xyz = helioCoords(satData, totalElapsedDays);
+      dummy.position.set(auTo3D(xyz.x), auTo3D(xyz.z), -auTo3D(xyz.y));
+
+      // Update rotation
+      if (satData.rotationHours) {
+        dummy.rotation.y += (elapsedSecondsSinceLastUpdate / (satData.rotationHours * 60 * 60)) * 2 * Math.PI;
+      }
+
+      // Update the instance matrix
+      dummy.updateMatrix();
+      this.satellitesInstancedMesh.setMatrixAt(i, dummy.matrix);
+    }
+
+    // Flag the InstancedMesh for updates
+    this.satellitesInstancedMesh.instanceMatrix.needsUpdate = true;
   }
 
   onWindowResize() {
@@ -268,11 +348,15 @@ export class SolarSystemScene {
     const dOfs = totalElapsedDays; // Days offset since program start
 
     // Rotate the sun
-    this.sun.rotation.y += (elapsedSecondsSinceLastUpdate / (this.solarSystemData.sun.rotationHours * 60 * 60)) * 2 * Math.PI;
+    if (this.solarSystemData.sun.rotationHours) {
+      this.sun.rotation.y += (elapsedSecondsSinceLastUpdate / (this.solarSystemData.sun.rotationHours * 60 * 60)) * 2 * Math.PI;
+    }
 
-    // Rotate planets and satellites
+    // Rotate planets
     this.planets.forEach((planet) => this.updateObjectPosition(planet, dOfs, elapsedSecondsSinceLastUpdate, true));
-    this.satellites.forEach((satellite) => this.updateObjectPosition(satellite, dOfs, elapsedSecondsSinceLastUpdate, true));
+
+    // Update satellites' instance matrices
+    this.updateSatellitesInstanceMatrices(totalElapsedDays, elapsedSecondsSinceLastUpdate);
 
     // Update connections and draw them
     this.updateConnections();
@@ -290,105 +374,20 @@ export class SolarSystemScene {
     updateInfo();
   }
 
-  calculateLongtermScore() {
-    const years = 10;
-    const daysPerYear = 365;
-    let totalDays = years * daysPerYear;
-
-    const scores = [];
-
-    // Reset simulation time
-    let simTime = 0;
-
-    for (let day = 1; day <= totalDays; day++) {
-      // Simulate one day in milliseconds
-      const millisecondsPerDay = 24 * 60 * 60 * 1000;
-      const elapsedSeconds = millisecondsPerDay / 1000;
-
-      // Update simulation time
-      simTime += millisecondsPerDay;
-
-      // Calculate total elapsed days
-      const totalElapsedDays = simTime / (1000 * 60 * 60 * 24);
-
-      // Update positions of planets and satellites
-      this.planets.forEach((planet) => this.updateObjectPosition(planet, totalElapsedDays, elapsedSeconds));
-      this.satellites.forEach((satellite) => this.updateObjectPosition(satellite, totalElapsedDays, elapsedSeconds));
-
-      // Update network connections
-      this.updateConnections();
-
-      // Calculate shortest path
-      const shortestPathDistance3D = this.calculateShortestPath().shortestPath.distance3D;
-
-      // Calculate direct path distance between Earth and Mars
-      const directPathDistance3D = distance3D(this.earth.position, this.mars.position);
-
-      // Collect scores
-      scores.push({
-        day,
-        shortestPathDistance3D,
-        directPathDistance3D,
-      });
-    }
-
-    // Initialize accumulators
-    let totalMarslinkLatencySec = 0; // Total latency in seconds for connected days
-    let totalDirectLatencySec = 0; // Total latency in seconds for connected days
-    let connectedDays = 0; // Number of days with a valid connection
-    let disconnectedDays = 0; // Number of days without a connection
-
-    // Iterate through each day's score
-    for (let score of scores) {
-      if (score.shortestPathDistance3D === Infinity) {
-        // Day is disconnected
-        disconnectedDays += 1;
-      } else if (disconnectedDays == 0) {
-        // Day is connected; calculate latency
-
-        // Convert 3D distance to Astronomical Units (AU)
-        const marslinkDistanceAu = _3DToAu(score.shortestPathDistance3D);
-        const directDistanceAu = _3DToAu(score.directPathDistance3D);
-
-        // Convert AU to kilometers (km)
-        const marslinkDistanceKm = auToKm(marslinkDistanceAu);
-        const directDistanceKm = auToKm(directDistanceAu);
-
-        // Calculate one-way latency in seconds
-        const marslinkLatencySec = marslinkDistanceKm / 300000; // Speed of light ~300,000 km/s
-        const directLatencySec = directDistanceKm / 300000; // Speed of light ~300,000 km/s
-
-        // Accumulate the total latency and increment connected days
-        totalMarslinkLatencySec += marslinkLatencySec;
-        totalDirectLatencySec += directLatencySec;
-        connectedDays += 1;
-      }
-    }
-
-    // Total number of days in the simulation
-    totalDays = scores.length;
-
-    // Calculate average latency (only for connected days)
-    let averageMarslinkLatencySeconds = connectedDays > 0 ? totalMarslinkLatencySec / connectedDays : 0;
-    let averageDirectLatencySeconds = connectedDays > 0 ? totalDirectLatencySec / connectedDays : 0;
-
-    // Calculate disconnected time percentage
-    let disconnectedTimePercent = (disconnectedDays / totalDays) * 100;
-
-    // Round the results for better readability (optional)
-    averageMarslinkLatencySeconds = Math.round(averageMarslinkLatencySeconds * 100) / 100; // Rounded to 2 decimal places
-    averageDirectLatencySeconds = Math.round(averageDirectLatencySeconds * 100) / 100; // Rounded to 2 decimal places
-    disconnectedTimePercent = Math.round(disconnectedTimePercent * 100) / 100; // Rounded to 2 decimal places
-    return { averageMarslinkLatencySeconds, averageDirectLatencySeconds, disconnectedTimePercent };
-  }
-
+  /**
+   * Updates the positions of planets and satellites.
+   * @param {THREE.Mesh} object - The planet or satellite mesh.
+   * @param {number} dOfs - Days offset since program start.
+   * @param {number} elapsedSecondsSinceLastUpdate - Elapsed seconds since last update.
+   * @param {boolean} rotate - Whether to rotate the object.
+   */
   updateObjectPosition(object, dOfs, elapsedSecondsSinceLastUpdate, rotate) {
     const xyz = helioCoords(object.params, dOfs);
     object.position.x = auTo3D(xyz.x);
     object.position.y = auTo3D(xyz.z);
     object.position.z = -auTo3D(xyz.y);
 
-    // object rotation
+    // Object rotation
     if (rotate && object.params.rotationHours) {
       object.rotation.y += (elapsedSecondsSinceLastUpdate / (object.params.rotationHours * 60 * 60)) * 2 * Math.PI;
     }
@@ -409,13 +408,17 @@ export class SolarSystemScene {
     nodes.push("Mars");
     positions["Mars"] = this.mars.position.clone();
 
-    // Add satellites
-    this.satellites.forEach((satellite, index) => {
-      const nodeName = satellite.nodeName || `Satellite${index}`;
-      satellite.nodeName = nodeName; // Ensure nodeName is set
+    // Add satellites from InstancedMesh
+    for (let i = 0; i < this.satellitesData.length; i++) {
+      const nodeName = `Satellite${i}`;
       nodes.push(nodeName);
-      positions[nodeName] = satellite.position.clone();
-    });
+      // Extract position from InstancedMesh
+      const matrix = new THREE.Matrix4();
+      this.satellitesInstancedMesh.getMatrixAt(i, matrix);
+      const position = new THREE.Vector3();
+      position.setFromMatrixPosition(matrix);
+      positions[nodeName] = position;
+    }
 
     // Initialize connections
     nodes.forEach((node) => {
@@ -466,8 +469,11 @@ export class SolarSystemScene {
           } else if (nodeA === "Mars") {
             posA = this.mars.position;
           } else {
-            const satA = this.satellites.find((sat) => sat.nodeName === nodeA);
-            posA = satA ? satA.position : null;
+            const indexA = parseInt(nodeA.replace("Satellite", ""));
+            if (indexA >= this.satellitesData.length || !this.satellitesData[indexA]) continue; // Invalid or inactive index
+            const matrixA = new THREE.Matrix4();
+            this.satellitesInstancedMesh.getMatrixAt(indexA, matrixA);
+            posA = new THREE.Vector3().setFromMatrixPosition(matrixA);
           }
 
           if (nodeB === "Earth") {
@@ -475,8 +481,11 @@ export class SolarSystemScene {
           } else if (nodeB === "Mars") {
             posB = this.mars.position;
           } else {
-            const satB = this.satellites.find((sat) => sat.nodeName === nodeB);
-            posB = satB ? satB.position : null;
+            const indexB = parseInt(nodeB.replace("Satellite", ""));
+            if (indexB >= this.satellitesData.length || !this.satellitesData[indexB]) continue; // Invalid or inactive index
+            const matrixB = new THREE.Matrix4();
+            this.satellitesInstancedMesh.getMatrixAt(indexB, matrixB);
+            posB = new THREE.Vector3().setFromMatrixPosition(matrixB);
           }
 
           if (posA && posB) {
@@ -652,8 +661,11 @@ export class SolarSystemScene {
       } else if (nodeA === "Mars") {
         posA = this.mars.position;
       } else {
-        const satA = this.satellites.find((sat) => sat.nodeName === nodeA);
-        posA = satA ? satA.position : null;
+        const indexA = parseInt(nodeA.replace("Satellite", ""));
+        if (indexA >= this.satellitesData.length || !this.satellitesData[indexA]) continue; // Invalid or inactive index
+        const matrixA = new THREE.Matrix4();
+        this.satellitesInstancedMesh.getMatrixAt(indexA, matrixA);
+        posA = new THREE.Vector3().setFromMatrixPosition(matrixA);
       }
 
       if (nodeB === "Earth") {
@@ -661,8 +673,11 @@ export class SolarSystemScene {
       } else if (nodeB === "Mars") {
         posB = this.mars.position;
       } else {
-        const satB = this.satellites.find((sat) => sat.nodeName === nodeB);
-        posB = satB ? satB.position : null;
+        const indexB = parseInt(nodeB.replace("Satellite", ""));
+        if (indexB >= this.satellitesData.length || !this.satellitesData[indexB]) continue; // Invalid or inactive index
+        const matrixB = new THREE.Matrix4();
+        this.satellitesInstancedMesh.getMatrixAt(indexB, matrixB);
+        posB = new THREE.Vector3().setFromMatrixPosition(matrixB);
       }
 
       if (posA && posB) {
@@ -705,7 +720,7 @@ export class SolarSystemScene {
     return this.shortestPathDistance3D;
   }
 
-  // Add a method to get the shortest path distance
+  // Add a method to get the direct path distance
   getDirectPathDistance3D() {
     return this.directPathDistance3D;
   }
