@@ -25,7 +25,8 @@ export function generateSatellites(satCount, satDistanceSun, ringName, ringType,
     for (let i = 0; i < satCountOneSide; i++) {
       if (Math.random() >= failedSatellitesPct / 100) {
         satellites.push(generateSatellite(ringName, ringType, a, n, (i + 1) * longIncrement, orbitdays));
-        satellites.push(generateSatellite(ringName, ringType, a, n, -(i + 1) * longIncrement, orbitdays));
+        if (!(marsSideExtensionDeg == 180 && i == satCountOneSide - 1))
+          satellites.push(generateSatellite(ringName, ringType, a, n, -(i + 1) * longIncrement, orbitdays));
       }
     }
   }

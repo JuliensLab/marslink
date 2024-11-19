@@ -96,7 +96,7 @@ const slidersData = {
         "satellite-count-slider": {
           label: "Satellites",
           min: 0,
-          max: 100,
+          max: 200,
           value: 12,
           step: 1,
           unit: "",
@@ -106,7 +106,7 @@ const slidersData = {
       },
     },
     {
-      id: "ring2",
+      id: "ring1",
       label: "Ring Circular High",
       sliders: {
         "distance-sun-slider": {
@@ -122,7 +122,33 @@ const slidersData = {
         "satellite-count-slider": {
           label: "Satellites",
           min: 0,
-          max: 100,
+          max: 200,
+          value: 0,
+          step: 1,
+          unit: "",
+          scale: "linear",
+          updateLongTermScore: true,
+        },
+      },
+    },
+    {
+      id: "ring2",
+      label: "Ring Circular Mid",
+      sliders: {
+        "distance-sun-slider": {
+          label: "Sun Distance",
+          min: 0.5,
+          max: 2,
+          value: 1.3,
+          step: 0.01,
+          unit: " AU",
+          scale: "linear",
+          updateLongTermScore: true,
+        },
+        "satellite-count-slider": {
+          label: "Satellites",
+          min: 0,
+          max: 200,
           value: 0,
           step: 1,
           unit: "",
@@ -148,7 +174,7 @@ const slidersData = {
         "satellite-count-slider": {
           label: "Satellites",
           min: 0,
-          max: 100,
+          max: 200,
           value: 0,
           step: 1,
           unit: "",
@@ -174,7 +200,7 @@ const slidersData = {
         "satellite-count-slider": {
           label: "Satellites",
           min: 0,
-          max: 100,
+          max: 200,
           value: 12,
           step: 1,
           unit: "",
@@ -287,10 +313,10 @@ function createSliders() {
               // Recalculate longtermScore and update info
               longtermScore = null;
               updateInfo();
-              setTimeout(function () {
-                longtermScore = solarSystemScene.calculateLongtermScore();
-                updateInfo();
-              }, 50);
+              // setTimeout(function () {
+              //   longtermScore = solarSystemScene.calculateLongtermScore();
+              //   updateInfo();
+              // }, 50);
             });
 
           // Load value from local storage if available
@@ -384,10 +410,10 @@ function createSliders() {
             // Recalculate longtermScore and update info
             longtermScore = null;
             updateInfo();
-            setTimeout(function () {
-              longtermScore = solarSystemScene.calculateLongtermScore();
-              updateInfo();
-            }, 50);
+            // setTimeout(function () {
+            //   longtermScore = solarSystemScene.calculateLongtermScore();
+            //   updateInfo();
+            // }, 50);
           });
 
         // Load value from local storage if available
@@ -493,7 +519,10 @@ solarSystemScene.updateSatellites(generateRings(slidersData.sim["failed-satellit
 // solarSystemScene.setMaxLinkDistance(mapSliderValueToUserFacing(slidersData.capability["max-link-distance-slider"]));
 solarSystemScene.setMinimumRateMbps(mapSliderValueToUserFacing(slidersData.capability["minimum-rate-mbps-slider"]));
 solarSystemScene.setTimeAccelerationFactor(mapSliderValueToUserFacing(slidersData.sim["time-acceleration-slider"]));
-longtermScore = solarSystemScene.calculateLongtermScore();
+
+document.getElementById("info-area").addEventListener("click", () => {
+  longtermScore = solarSystemScene.calculateLongtermScore();
+});
 
 export function updateInfo() {
   if (solarSystemScene) {

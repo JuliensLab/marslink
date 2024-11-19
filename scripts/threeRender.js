@@ -20,17 +20,27 @@ export class SolarSystemScene {
     this.sun = null;
     this.planets = [];
     this.satellites = [];
-    this.linesToEarth = [];
-    this.linesToMars = [];
     this.composer = null;
     this.bloomPass = null;
     this.lastUpdateTime = Date.now(); // Initialize last update time
     this.simTime = Date.now(); // Initialize program start time
     this.timeAccelerationFactor = 0; // Acceleration factor x100
     this.maxLinkDistance3D = 1;
+    this.minimumRateMbps = 4; // Initialize minimumRateMbps
+
     // Initialize the connections data structure
     this.connections = {};
-    this.styles = { links: { connected: { opacity: 0.2, color: 0xffbbbb }, active: { opacity: 1.0, color: 0xff0000 } } };
+    this.styles = {
+      links: {
+        connected: { opacity: 0.2, color: 0xffbbbb },
+        low_latency: { opacity: 1.0, color: 0xff0000 },
+        high_throughput: { opacity: 1.0, color: 0x00ff00 },
+      },
+    };
+
+    // Initialize line segments
+    this.connectionLines = null;
+    this.shortestPathLines = null;
 
     // Initialize the scene
     this.loadScene();
@@ -153,6 +163,32 @@ export class SolarSystemScene {
     // Store references to Earth and Mars
     this.earth = this.planets.find((planet) => planet.params.name === "Earth");
     this.mars = this.planets.find((planet) => planet.params.name === "Mars");
+
+    // Initialize LineSegments for connections
+    const connectionGeometry = new THREE.BufferGeometry();
+    connectionGeometry.setAttribute("position", new THREE.Float32BufferAttribute([], 3));
+
+    const connectionMaterial = new THREE.LineBasicMaterial({
+      color: this.styles.links.connected.color,
+      transparent: true,
+      opacity: this.styles.links.connected.opacity,
+    });
+
+    this.connectionLines = new THREE.LineSegments(connectionGeometry, connectionMaterial);
+    this.scene.add(this.connectionLines);
+
+    // Initialize LineSegments for shortest path
+    const shortestPathGeometry = new THREE.BufferGeometry();
+    shortestPathGeometry.setAttribute("position", new THREE.Float32BufferAttribute([], 3));
+
+    const shortestPathMaterial = new THREE.LineBasicMaterial({
+      // color: this.styles.links.active.color,
+      transparent: true,
+      // opacity: this.styles.links.active.opacity,
+    });
+
+    this.shortestPathLines = new THREE.LineSegments(shortestPathGeometry, shortestPathMaterial);
+    this.scene.add(this.shortestPathLines);
   }
 
   updateSatellites(satellitesData) {
@@ -166,7 +202,7 @@ export class SolarSystemScene {
       const color = new THREE.Color(colorArray[0] / 255, colorArray[1] / 255, colorArray[2] / 255);
 
       const material = new THREE.MeshPhongMaterial({
-        color: color, // Set the color of the material          // Set opacity to 50%
+        color: color, // Set the color of the material
         shininess: 10, // Adjust shininess for specular highlights
         specular: new THREE.Color(0x333333),
       });
@@ -201,6 +237,7 @@ export class SolarSystemScene {
 
     for (let satData of satellitesData) {
       const satellite = createSatellite(satData, this.solarSystemData.convertRadius);
+      satellite.nodeName = `Satellite${this.satellites.length}`; // Assign a unique name
       this.satellites.push(satellite);
       this.scene.add(satellite);
     }
@@ -210,6 +247,9 @@ export class SolarSystemScene {
     this.camera.aspect = window.innerWidth / window.innerHeight;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(window.innerWidth, window.innerHeight);
+    // Also update composer and bloom pass if needed
+    this.composer.setSize(window.innerWidth, window.innerHeight);
+    this.bloomPass.setSize(window.innerWidth, window.innerHeight);
   }
 
   animate() {
@@ -236,10 +276,12 @@ export class SolarSystemScene {
 
     // Update connections and draw them
     this.updateConnections();
-    this.drawConnections();
-    const shortestPath = this.calculateShortestPath();
-    this.drawShortestPath(shortestPath.path);
-    this.shortestPathDistance3D = shortestPath.shortestDistance3D;
+    this.drawConnections(); // Use instanced lines
+
+    const shortestPaths = this.calculateShortestPath();
+    // this.drawShortestPath(shortestPaths.shortestPath.path, "low_latency"); // Use instanced lines
+    this.drawShortestPath(shortestPaths.pathOfShortestLinks.path, "high_throughput"); // Use instanced lines
+    this.shortestPathDistance3D = shortestPaths.shortestPath.distance3D;
     this.directPathDistance3D = distance3D(this.earth.position, this.mars.position);
 
     this.controls.update();
@@ -277,7 +319,7 @@ export class SolarSystemScene {
       this.updateConnections();
 
       // Calculate shortest path
-      const shortestPathDistance3D = this.calculateShortestPath().shortestDistance3D;
+      const shortestPathDistance3D = this.calculateShortestPath().shortestPath.distance3D;
 
       // Calculate direct path distance between Earth and Mars
       const directPathDistance3D = distance3D(this.earth.position, this.mars.position);
@@ -347,7 +389,9 @@ export class SolarSystemScene {
     object.position.z = -auTo3D(xyz.y);
 
     // object rotation
-    if (rotate) object.rotation.y += (elapsedSecondsSinceLastUpdate / (object.params.rotationHours * 60 * 60)) * 2 * Math.PI;
+    if (rotate && object.params.rotationHours) {
+      object.rotation.y += (elapsedSecondsSinceLastUpdate / (object.params.rotationHours * 60 * 60)) * 2 * Math.PI;
+    }
   }
 
   updateConnections() {
@@ -367,9 +411,10 @@ export class SolarSystemScene {
 
     // Add satellites
     this.satellites.forEach((satellite, index) => {
-      satellite.nodeName = `Satellite${index}`;
-      nodes.push(satellite.nodeName);
-      positions[satellite.nodeName] = satellite.position.clone();
+      const nodeName = satellite.nodeName || `Satellite${index}`;
+      satellite.nodeName = nodeName; // Ensure nodeName is set
+      nodes.push(nodeName);
+      positions[nodeName] = satellite.position.clone();
     });
 
     // Initialize connections
@@ -394,9 +439,9 @@ export class SolarSystemScene {
         const nominalRateMbps = nominalRateTbps * 1000 * 1000;
         const nominalDistanceKm = 1000;
         const rateMbps = calculateDatarate(nominalRateMbps, nominalDistanceKm, distanceKm);
-        const minimumRateMbps = 4;
-        // if (distance3D <= this.maxLinkDistance3D) {
-        if (rateMbps >= this.minimumRateMbps) {
+        const minimumRateMbps = this.minimumRateMbps;
+
+        if (rateMbps >= minimumRateMbps) {
           connections[nodeA][nodeB] = distance3D;
           connections[nodeB][nodeA] = distance3D; // undirected
         }
@@ -408,17 +453,8 @@ export class SolarSystemScene {
   }
 
   drawConnections() {
-    // Remove old lines
-    if (this.allLines) {
-      this.allLines.forEach((line) => {
-        this.scene.remove(line);
-        if (line.geometry) line.geometry.dispose();
-        if (line.material) line.material.dispose();
-      });
-    }
-    this.allLines = [];
+    const positions = [];
 
-    // Draw lines based on connections
     for (let nodeA in this.connections) {
       for (let nodeB in this.connections[nodeA]) {
         // To avoid duplicate lines, ensure nodeA < nodeB
@@ -431,7 +467,7 @@ export class SolarSystemScene {
             posA = this.mars.position;
           } else {
             const satA = this.satellites.find((sat) => sat.nodeName === nodeA);
-            posA = satA.position;
+            posA = satA ? satA.position : null;
           }
 
           if (nodeB === "Earth") {
@@ -440,29 +476,32 @@ export class SolarSystemScene {
             posB = this.mars.position;
           } else {
             const satB = this.satellites.find((sat) => sat.nodeName === nodeB);
-            posB = satB.position;
+            posB = satB ? satB.position : null;
           }
 
-          const geometry = new THREE.BufferGeometry();
-          const positions = new Float32Array(6); // 2 points x 3 coordinates
-          positions[0] = posA.x;
-          positions[1] = posA.y;
-          positions[2] = posA.z;
-          positions[3] = posB.x;
-          positions[4] = posB.y;
-          positions[5] = posB.z;
-          geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-          const material = new THREE.LineBasicMaterial({
-            color: this.styles.links.connected.color,
-            transparent: true,
-            opacity: this.styles.links.connected.opacity,
-          });
-          const line = new THREE.Line(geometry, material);
-          this.scene.add(line);
-          this.allLines.push(line);
+          if (posA && posB) {
+            positions.push(posA.x, posA.y, posA.z);
+            positions.push(posB.x, posB.y, posB.z);
+          }
         }
       }
     }
+
+    // Update the BufferGeometry
+    const positionAttribute = this.connectionLines.geometry.attributes.position;
+
+    if (positions.length !== positionAttribute.count * 3) {
+      // If the number of vertices has changed, set a new buffer
+      this.connectionLines.geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+    } else {
+      // Otherwise, update the existing buffer
+      positionAttribute.array = new Float32Array(positions);
+      positionAttribute.needsUpdate = true;
+    }
+
+    // Optionally, adjust the opacity or other material properties if needed
+    this.connectionLines.material.opacity = this.styles.links.connected.opacity;
+    this.connectionLines.material.color.setHex(this.styles.links.connected.color);
   }
 
   calculateShortestPath() {
@@ -470,75 +509,138 @@ export class SolarSystemScene {
     const nodes = Object.keys(this.connections);
     const edges = this.connections;
 
-    // Now, implement Dijkstra's algorithm
-    const shortestDistances = {};
-    const visited = {};
-    const previousNodes = {};
+    // Helper function to perform Dijkstra's algorithm for total distance
+    const findShortestTotalDistance = () => {
+      const shortestDistances = {};
+      const visited = {};
+      const previousNodes = {};
 
-    // Initialize distances
-    nodes.forEach((node) => {
-      shortestDistances[node] = Infinity;
-      visited[node] = false;
-      previousNodes[node] = null;
-    });
-    shortestDistances["Earth"] = 0;
-
-    while (true) {
-      // Find the unvisited node with the smallest distance
-      let closestNode = null;
-      let closestDistance = Infinity;
+      // Initialize distances
       nodes.forEach((node) => {
-        if (!visited[node] && shortestDistances[node] < closestDistance) {
-          closestDistance = shortestDistances[node];
-          closestNode = node;
-        }
+        shortestDistances[node] = Infinity;
+        visited[node] = false;
+        previousNodes[node] = null;
       });
+      shortestDistances["Earth"] = 0;
 
-      if (closestNode === null || closestNode === "Mars") {
-        break;
-      }
+      while (true) {
+        // Find the unvisited node with the smallest distance
+        let closestNode = null;
+        let closestDistance = Infinity;
+        nodes.forEach((node) => {
+          if (!visited[node] && shortestDistances[node] < closestDistance) {
+            closestDistance = shortestDistances[node];
+            closestNode = node;
+          }
+        });
 
-      visited[closestNode] = true;
+        if (closestNode === null || closestNode === "Mars") {
+          break;
+        }
 
-      // Update distances to neighboring nodes
-      const neighbors = edges[closestNode];
-      for (let neighbor in neighbors) {
-        if (!visited[neighbor]) {
-          const tentativeDistance = shortestDistances[closestNode] + neighbors[neighbor];
-          if (tentativeDistance < shortestDistances[neighbor]) {
-            shortestDistances[neighbor] = tentativeDistance;
-            previousNodes[neighbor] = closestNode;
+        visited[closestNode] = true;
+
+        // Update distances to neighboring nodes
+        const neighbors = edges[closestNode];
+        for (let neighbor in neighbors) {
+          if (!visited[neighbor]) {
+            const tentativeDistance = shortestDistances[closestNode] + neighbors[neighbor];
+            if (tentativeDistance < shortestDistances[neighbor]) {
+              shortestDistances[neighbor] = tentativeDistance;
+              previousNodes[neighbor] = closestNode;
+            }
           }
         }
       }
-    }
 
-    // Retrieve the shortest path
-    const path = [];
-    let currentNode = "Mars";
-    while (currentNode !== null) {
-      path.unshift(currentNode);
-      currentNode = previousNodes[currentNode];
-    }
+      // Retrieve the shortest path
+      const path = [];
+      let currentNode = "Mars";
+      while (currentNode !== null) {
+        path.unshift(currentNode);
+        currentNode = previousNodes[currentNode];
+      }
 
-    // Calculate the total distance
-    const totalDistance = shortestDistances["Mars"];
+      // Calculate the total distance
+      const totalDistance = shortestDistances["Mars"];
 
-    return { path, shortestDistance3D: totalDistance };
+      return { path, distance3D: totalDistance };
+    };
+
+    // Helper function to perform Modified Dijkstra's algorithm for minimax path
+    const findMinimaxPath = () => {
+      const maxEdgeDistances = {};
+      const visited = {};
+      const previousNodes = {};
+
+      // Initialize maximum edge distances
+      nodes.forEach((node) => {
+        maxEdgeDistances[node] = Infinity;
+        visited[node] = false;
+        previousNodes[node] = null;
+      });
+      maxEdgeDistances["Earth"] = 0;
+
+      while (true) {
+        // Find the unvisited node with the smallest maximum edge distance
+        let currentNode = null;
+        let currentMax = Infinity;
+        nodes.forEach((node) => {
+          if (!visited[node] && maxEdgeDistances[node] < currentMax) {
+            currentMax = maxEdgeDistances[node];
+            currentNode = node;
+          }
+        });
+
+        if (currentNode === null || currentNode === "Mars") {
+          break;
+        }
+
+        visited[currentNode] = true;
+
+        // Update maximum edge distances to neighboring nodes
+        const neighbors = edges[currentNode];
+        for (let neighbor in neighbors) {
+          if (!visited[neighbor]) {
+            // The new path's maximum edge is the max between current max and the new edge
+            const tentativeMax = Math.max(maxEdgeDistances[currentNode], neighbors[neighbor]);
+            if (tentativeMax < maxEdgeDistances[neighbor]) {
+              maxEdgeDistances[neighbor] = tentativeMax;
+              previousNodes[neighbor] = currentNode;
+            }
+          }
+        }
+      }
+
+      // Retrieve the minimax path
+      const path = [];
+      let currentNodePath = "Mars";
+      while (currentNodePath !== null) {
+        path.unshift(currentNodePath);
+        currentNodePath = previousNodes[currentNodePath];
+      }
+
+      // The total distance for minimax path can be interpreted in different ways.
+      // Here, we'll return the maximum single link distance in the path.
+      const totalMaxEdge = maxEdgeDistances["Mars"];
+
+      return { path, distance3D: totalMaxEdge };
+    };
+
+    // Execute both algorithms
+    const shortestPath = findShortestTotalDistance();
+    const pathOfShortestLinks = findMinimaxPath();
+
+    // Return the desired object structure
+    return {
+      shortestPath: shortestPath,
+      pathOfShortestLinks: pathOfShortestLinks,
+    };
   }
 
-  drawShortestPath(path, edges) {
-    // Remove old shortest path lines
-    if (this.shortestPathLines) {
-      this.shortestPathLines.forEach((line) => {
-        this.scene.remove(line);
-        if (line.geometry) line.geometry.dispose();
-        if (line.material) line.material.dispose();
-      });
-    }
-    this.shortestPathLines = [];
+  drawShortestPath(path, pathType) {
+    const positions = [];
 
-    // Draw new lines for the shortest path
     for (let i = 0; i < path.length - 1; i++) {
       const nodeA = path[i];
       const nodeB = path[i + 1];
@@ -551,7 +653,7 @@ export class SolarSystemScene {
         posA = this.mars.position;
       } else {
         const satA = this.satellites.find((sat) => sat.nodeName === nodeA);
-        posA = satA.position;
+        posA = satA ? satA.position : null;
       }
 
       if (nodeB === "Earth") {
@@ -560,27 +662,30 @@ export class SolarSystemScene {
         posB = this.mars.position;
       } else {
         const satB = this.satellites.find((sat) => sat.nodeName === nodeB);
-        posB = satB.position;
+        posB = satB ? satB.position : null;
       }
 
-      const geometry = new THREE.BufferGeometry();
-      const positions = new Float32Array(6); // 2 points x 3 coordinates
-      positions[0] = posA.x;
-      positions[1] = posA.y;
-      positions[2] = posA.z;
-      positions[3] = posB.x;
-      positions[4] = posB.y;
-      positions[5] = posB.z;
-      geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-      const material = new THREE.LineBasicMaterial({
-        color: this.styles.links.active.color,
-        transparent: true,
-        opacity: this.styles.links.active.opacity,
-      });
-      const line = new THREE.Line(geometry, material);
-      this.scene.add(line);
-      this.shortestPathLines.push(line);
+      if (posA && posB) {
+        positions.push(posA.x, posA.y, posA.z);
+        positions.push(posB.x, posB.y, posB.z);
+      }
     }
+
+    // Update the BufferGeometry
+    const positionAttribute = this.shortestPathLines.geometry.attributes.position;
+
+    if (positions.length !== positionAttribute.count * 3) {
+      // If the number of vertices has changed, set a new buffer
+      this.shortestPathLines.geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+    } else {
+      // Otherwise, update the existing buffer
+      positionAttribute.array = new Float32Array(positions);
+      positionAttribute.needsUpdate = true;
+    }
+
+    // Optionally, adjust the opacity or other material properties if needed
+    this.shortestPathLines.material.opacity = this.styles.links[pathType].opacity;
+    this.shortestPathLines.material.color.setHex(this.styles.links[pathType].color);
   }
 
   setTimeAccelerationFactor(factor) {
@@ -594,6 +699,7 @@ export class SolarSystemScene {
   setMinimumRateMbps(minimumRateMbps) {
     this.minimumRateMbps = minimumRateMbps;
   }
+
   // Add a method to get the shortest path distance
   getShortestPathDistance3D() {
     return this.shortestPathDistance3D;
