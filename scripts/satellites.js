@@ -7,6 +7,7 @@ export function generateSatellites(
   laserPortsPerSatellite,
   failedSatellitesPct
 ) {
+  console.log("laserPortsPerSatellite", laserPortsPerSatellite, "failedSatellitesPct", failedSatellitesPct);
   if (satCount == 0) return [];
   const satellites = [];
   if (ringType == "Circular") {

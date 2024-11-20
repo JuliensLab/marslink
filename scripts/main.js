@@ -1,4 +1,4 @@
-// Solar System Simulator Configuration - Slider Organization by Sections with Unlimited Rings
+// main.js
 import { solarSystemData } from "./solarSystem.js";
 import { SolarSystemScene } from "./threeRender.js";
 import { generateSatellites } from "./satellites.js";
@@ -117,13 +117,13 @@ const slidersData = {
     },
     {
       id: "ring1",
-      label: "Ring Circular High",
+      label: "Ring Circular 1",
       sliders: {
         "distance-sun-slider": {
           label: "Sun Distance",
           min: 0.5,
           max: 2,
-          value: 1.3,
+          value: 1.5,
           step: 0.01,
           unit: " AU",
           scale: "linear",
@@ -143,7 +143,33 @@ const slidersData = {
     },
     {
       id: "ring2",
-      label: "Ring Circular Mid",
+      label: "Ring Circular 2",
+      sliders: {
+        "distance-sun-slider": {
+          label: "Sun Distance",
+          min: 0.5,
+          max: 2,
+          value: 1.4,
+          step: 0.01,
+          unit: " AU",
+          scale: "linear",
+          updateLongTermScore: true,
+        },
+        "satellite-count-slider": {
+          label: "Satellites",
+          min: 0,
+          max: 200,
+          value: 0,
+          step: 1,
+          unit: "",
+          scale: "linear",
+          updateLongTermScore: true,
+        },
+      },
+    },
+    {
+      id: "ring3",
+      label: "Ring Circular 3",
       sliders: {
         "distance-sun-slider": {
           label: "Sun Distance",
@@ -168,14 +194,40 @@ const slidersData = {
       },
     },
     {
-      id: "ring3",
-      label: "Ring Circular Low",
+      id: "ring4",
+      label: "Ring Circular 4",
       sliders: {
         "distance-sun-slider": {
           label: "Sun Distance",
           min: 0.5,
           max: 2,
-          value: 1.3,
+          value: 1.2,
+          step: 0.01,
+          unit: " AU",
+          scale: "linear",
+          updateLongTermScore: true,
+        },
+        "satellite-count-slider": {
+          label: "Satellites",
+          min: 0,
+          max: 200,
+          value: 0,
+          step: 1,
+          unit: "",
+          scale: "linear",
+          updateLongTermScore: true,
+        },
+      },
+    },
+    {
+      id: "ring5",
+      label: "Ring Circular 5",
+      sliders: {
+        "distance-sun-slider": {
+          label: "Sun Distance",
+          min: 0.5,
+          max: 2,
+          value: 1.1,
           step: 0.01,
           unit: " AU",
           scale: "linear",
@@ -479,7 +531,7 @@ function updateValues(sliderId, value) {
       localStorage.setItem(sliderId, value); // Save to local storage
 
       // Update satellites without recalculating longtermScore
-      solarSystemScene.updateSatellites(generateRings(slidersData.sim["failed-satellites-slider"].value));
+      solarSystemScene.updateSatellites(generateRings());
       updateInfo();
       return;
     }
@@ -506,7 +558,7 @@ function updateValues(sliderId, value) {
 
         case "laser-ports-per-satellite":
         case "failed-satellites-slider":
-          solarSystemScene.updateSatellites(generateRings(newValue));
+          solarSystemScene.updateSatellites(generateRings());
           break;
 
         case "minimum-rate-mbps-slider":
@@ -523,7 +575,7 @@ function updateValues(sliderId, value) {
 
         case "sats-per-launch-slider":
           updateInfo();
-          solarSystemScene.updateSatellites(generateRings(slidersData.sim["failed-satellites-slider"].value));
+          solarSystemScene.updateSatellites(generateRings());
           break;
 
         default:
@@ -533,7 +585,7 @@ function updateValues(sliderId, value) {
   }
 }
 
-function generateRings(failedSatellitesPct) {
+function generateRings() {
   const satellites = slidersData.rings.flatMap((ring) =>
     generateSatellites(
       ring.sliders["satellite-count-slider"].value,
@@ -542,7 +594,7 @@ function generateRings(failedSatellitesPct) {
       ring.id == "ringMars" ? "Mars" : ring.id == "ringEarth" ? "Earth" : "Circular",
       ring.sliders["side-extension-degrees-slider"] ? ring.sliders["side-extension-degrees-slider"].value : null,
       slidersData.capability["laser-ports-per-satellite"].value,
-      failedSatellitesPct
+      slidersData.sim["failed-satellites-slider"].value
     )
   );
   return satellites;
@@ -550,7 +602,7 @@ function generateRings(failedSatellitesPct) {
 
 createSliders();
 solarSystemScene = new SolarSystemScene(solarSystemData);
-solarSystemScene.updateSatellites(generateRings(slidersData.sim["failed-satellites-slider"].value));
+solarSystemScene.updateSatellites(generateRings());
 // solarSystemScene.setMaxLinkDistance(mapSliderValueToUserFacing(slidersData.capability["max-link-distance-slider"]));
 solarSystemScene.setMinimumRateMbps(mapSliderValueToUserFacing(slidersData.capability["minimum-rate-mbps-slider"]));
 solarSystemScene.setTimeAccelerationFactor(mapSliderValueToUserFacing(slidersData.sim["time-acceleration-slider"]));
@@ -576,13 +628,9 @@ export function updateInfo() {
     }
     const launchCount = launchCounts.reduce((acc, curr) => acc + curr, 0);
     const totalSatellites = slidersData.rings.reduce((sum, ring) => sum + ring.sliders["satellite-count-slider"].value, 0);
-    const marslinkLatencySeconds = auToKm(_3DToAu(solarSystemScene.getShortestPathDistance3D())) / 300000;
-    const directLatencySeconds = auToKm(_3DToAu(solarSystemScene.getDirectPathDistance3D())) / 300000;
-    const pctLonger = (marslinkLatencySeconds / directLatencySeconds - 1) * 100;
+    const marslinkGbps = (solarSystemScene.getTotalMbps() / 1000).toFixed(1);
     let html = "";
-    if (marslinkLatencySeconds !== Infinity) html += `Marslink latency `;
-    html += `${convertSecToText(marslinkLatencySeconds)}`;
-    if (marslinkLatencySeconds !== Infinity) html += ` (+${pctLonger.toFixed(0)}%)`;
+    if (marslinkGbps !== null) html += `Marslink ${marslinkGbps} Gbps`;
     html += "<br>";
     html += `${totalSatellites} sats,`;
     html += ` ${launchCount} launch${launchCount > 1 ? "es" : ""} (${launchCounts.join("+")})`;
@@ -596,8 +644,6 @@ export function updateInfo() {
       if (longtermScore.disconnectedTimePercent > 0) {
         html += `Disconnected ${longtermScore.disconnectedTimePercent.toFixed(2)}% of time`;
       } else {
-        const pctLonger = (longtermScore.averageMarslinkLatencySeconds / longtermScore.averageDirectLatencySeconds - 1) * 100;
-
         html += `Average latency ${convertSecToText(longtermScore.averageMarslinkLatencySeconds)} (+${pctLonger.toFixed(0)}%)`;
         html += "<br>";
         html += `Score ${((costTotal * longtermScore.averageMarslinkLatencySeconds) / 1000).toFixed(1)} k$.second`;

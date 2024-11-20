@@ -34,14 +34,16 @@ export class SolarSystemScene {
     this.connections = {};
     this.styles = {
       links: {
-        connected: { opacity: 0.2, color: 0xffbbbb },
+        active: { opacity: 0.9, color: 0xff0000 }, // Red for active
+        inactive: { opacity: 0.15, color: 0x6666ff }, // Blue for inactive
         low_latency: { opacity: 1.0, color: 0xff0000 },
         high_throughput: { opacity: 1.0, color: 0x00ff00 },
       },
     };
 
     // Initialize line segments
-    this.connectionLines = null;
+    this.activeConnectionLines;
+    this.inactiveConnectionLines;
     this.shortestPathLines = null;
 
     // Initialize the scene
@@ -166,19 +168,27 @@ export class SolarSystemScene {
     this.earth = this.planets.find((planet) => planet.params.name === "Earth");
     this.mars = this.planets.find((planet) => planet.params.name === "Mars");
 
-    // Initialize LineSegments for connections
-    const connectionGeometry = new THREE.BufferGeometry();
-    connectionGeometry.setAttribute("position", new THREE.Float32BufferAttribute([], 3));
-
-    const connectionMaterial = new THREE.LineBasicMaterial({
-      color: this.styles.links.connected.color,
-      vertexColors: true, // Enable vertex colors
+    // Initialize LineSegments for active connections
+    const activeConnectionGeometry = new THREE.BufferGeometry();
+    const activeConnectionMaterial = new THREE.LineBasicMaterial({
+      // color: this.styles.links.active.color, // Remove fixed color
       transparent: true,
-      opacity: this.styles.links.connected.opacity,
+      opacity: this.styles.links.active.opacity,
+      vertexColors: true, // Enable vertex colors
     });
+    this.activeConnectionLines = new THREE.LineSegments(activeConnectionGeometry, activeConnectionMaterial);
+    this.scene.add(this.activeConnectionLines);
 
-    this.connectionLines = new THREE.LineSegments(connectionGeometry, connectionMaterial);
-    this.scene.add(this.connectionLines);
+    // Initialize LineSegments for inactive connections
+    const inactiveConnectionGeometry = new THREE.BufferGeometry();
+    const inactiveConnectionMaterial = new THREE.LineBasicMaterial({
+      color: this.styles.links.inactive.color,
+      transparent: true,
+      opacity: this.styles.links.inactive.opacity,
+      vertexColors: false, // Uniform color per material
+    });
+    this.inactiveConnectionLines = new THREE.LineSegments(inactiveConnectionGeometry, inactiveConnectionMaterial);
+    this.scene.add(this.inactiveConnectionLines);
 
     // Initialize LineSegments for shortest path
     const shortestPathGeometry = new THREE.BufferGeometry();
@@ -190,30 +200,6 @@ export class SolarSystemScene {
 
     this.shortestPathLines = new THREE.LineSegments(shortestPathGeometry, shortestPathMaterial);
     this.scene.add(this.shortestPathLines);
-
-    // **Satellite Instancing Setup**
-    this.setupSatellitesInstancing();
-  }
-
-  setupSatellitesInstancing() {
-    // This method is now effectively handled by the updateSatellites method
-    // You can leave this method empty or remove it if not needed
-  }
-
-  /**
-   * Adds a new satellite to the scene.
-   * @param {Object} satData - Satellite parameters.
-   */
-  addSatellite(satData) {
-    // This method is no longer needed since satellites are managed via InstancedMesh reinitialization
-  }
-
-  /**
-   * Removes a satellite from the scene.
-   * @param {number} index - The instance index of the satellite to remove.
-   */
-  removeSatellite(index) {
-    // This method is no longer needed since satellites are managed via InstancedMesh reinitialization
   }
 
   /**
@@ -224,8 +210,17 @@ export class SolarSystemScene {
     // Dispose of the previous InstancedMesh if it exists
     if (this.satellitesInstancedMesh) {
       this.scene.remove(this.satellitesInstancedMesh);
+
+      // Dispose geometry and material
       this.satellitesInstancedMesh.geometry.dispose();
-      this.satellitesInstancedMesh.material.dispose();
+
+      if (Array.isArray(this.satellitesInstancedMesh.material)) {
+        this.satellitesInstancedMesh.material.forEach((mat) => mat.dispose());
+      } else {
+        this.satellitesInstancedMesh.material.dispose();
+      }
+
+      // Nullify the reference
       this.satellitesInstancedMesh = null;
     }
 
@@ -245,6 +240,7 @@ export class SolarSystemScene {
       color: 0xffffff,
       shininess: 10,
       specular: new THREE.Color(0x333333),
+      vertexColors: true, // Enable vertex colors for per-instance coloring
       transparent: false, // Set to true if using transparency
       opacity: 1.0, // Base opacity
     });
@@ -359,19 +355,25 @@ export class SolarSystemScene {
     // Update satellites' instance matrices
     this.updateSatellitesInstanceMatrices(totalElapsedDays, elapsedSecondsSinceLastUpdate);
 
-    // Update connections and draw them
+    // Update connections
     this.updateConnections();
-    this.drawConnections(); // Use instanced lines
 
-    const shortestPaths = this.calculateShortestPath();
-    // this.drawShortestPath(shortestPaths.shortestPath.path, "low_latency"); // Use instanced lines
-    this.drawShortestPath(shortestPaths.pathOfShortestLinks.path, "high_throughput"); // Use instanced lines
-    this.shortestPathDistance3D = shortestPaths.shortestPath.distance3D;
-    this.directPathDistance3D = distance3D(this.earth.position, this.mars.position);
+    // Calculate multiple paths with their Mbps contributions
+    const multipath = this.getMultiPath();
+    this.totalMbps = multipath.maxAggregateMbps;
+    console.log("multipath", multipath);
 
+    // Assign active Mbps rates to each connection based on the paths
+    this.assignActiveRates(multipath.setOfActiveLinks);
+
+    // Draw connections with updated active and inactive statuses
+    this.drawConnections();
+
+    // Update controls and render the scene using EffectComposer only
     this.controls.update();
-    this.composer.render();
-    this.renderer.render(this.scene, this.camera);
+    this.composer.render(); // Only use composer.render()
+
+    // Update any additional info (e.g., UI elements)
     updateInfo();
   }
 
@@ -413,6 +415,7 @@ export class SolarSystemScene {
     for (let i = 0; i < this.satellitesData.length; i++) {
       const nodeName = `Satellite${i}`;
       nodes.push(nodeName);
+      this.satellitesData[i].nodeName = nodeName;
       // Extract position from InstancedMesh
       const matrix = new THREE.Matrix4();
       this.satellitesInstancedMesh.getMatrixAt(i, matrix);
@@ -447,8 +450,8 @@ export class SolarSystemScene {
 
         if (rateMbps >= minimumRateMbps) {
           // Store both distance and rateMbps
-          connections[nodeA][nodeB] = { distance3D, rateMbps };
-          connections[nodeB][nodeA] = { distance3D, rateMbps }; // undirected
+          connections[nodeA][nodeB] = { distanceKm, rateMbps };
+          connections[nodeB][nodeA] = { distanceKm, rateMbps }; // undirected
         }
       }
     }
@@ -456,30 +459,168 @@ export class SolarSystemScene {
     // Store connections
     this.connections = connections;
   }
+
+  /**
+   * Assigns active Mbps rates to connections using setOfActiveLinks.
+   * @param {Array} setOfActiveLinks - Array of active link objects containing from, to, and activeMbps.
+   */
+  assignActiveRates(setOfActiveLinks) {
+    // Step 1: Reset all activeRateMbps to zero
+    for (let nodeA in this.connections) {
+      for (let nodeB in this.connections[nodeA]) {
+        const connection = this.connections[nodeA][nodeB];
+
+        if (Array.isArray(connection)) {
+          connection.forEach((conn) => {
+            if (typeof conn === "object") {
+              conn.activeRateMbps = 0;
+            } else {
+              console.error(`Expected connection object between ${nodeA} and ${nodeB}, but found type ${typeof conn}.`);
+            }
+          });
+        } else {
+          if (typeof connection === "object") {
+            connection.activeRateMbps = 0;
+          } else {
+            console.error(`Expected connection object between ${nodeA} and ${nodeB}, but found type ${typeof connection}.`);
+          }
+        }
+      }
+    }
+
+    // Step 2: Iterate over each active link and assign Mbps
+    setOfActiveLinks.forEach((link) => {
+      const { from, to, activeMbps } = link;
+      const [nodeA, nodeB] = from < to ? [from, to] : [to, from];
+
+      if (this.connections[nodeA] && this.connections[nodeA][nodeB]) {
+        const connection = this.connections[nodeA][nodeB];
+
+        if (Array.isArray(connection)) {
+          // Distribute activeMbps proportionally based on rateMbps
+          const totalCapacity = connection.reduce((sum, conn) => sum + conn.rateMbps, 0);
+
+          if (totalCapacity === 0) {
+            console.warn(`Total capacity for connection between ${nodeA} and ${nodeB} is zero. Skipping assignment.`);
+            return;
+          }
+
+          connection.forEach((conn, index) => {
+            if (typeof conn !== "object") {
+              console.error(`Expected connection object between ${nodeA} and ${nodeB}, but found type ${typeof conn}.`);
+              return;
+            }
+
+            let assignedMbps = (conn.rateMbps / totalCapacity) * activeMbps;
+
+            // Handle floating-point precision for the last connection
+            if (index === connection.length - 1) {
+              const assignedSum = connection.slice(0, index).reduce((sum, c) => sum + (c.rateMbps / totalCapacity) * activeMbps, 0);
+              assignedMbps = activeMbps - assignedSum;
+            }
+
+            conn.activeRateMbps += assignedMbps;
+            console.log(`Assigned ${assignedMbps.toFixed(2)} Mbps to connection between ${nodeA} and ${nodeB}`);
+          });
+        } else {
+          // Single connection
+          if (typeof connection !== "object") {
+            console.error(`Expected connection object between ${nodeA} and ${nodeB}, but found type ${typeof connection}.`);
+            return;
+          }
+
+          if (connection.activeRateMbps === undefined) {
+            console.log(`Initializing activeRateMbps for connection between ${nodeA} and ${nodeB}`);
+            connection.activeRateMbps = 0;
+          }
+          connection.activeRateMbps += activeMbps;
+          console.log(`Assigned ${activeMbps} Mbps to connection between ${nodeA} and ${nodeB}`);
+        }
+      } else {
+        console.warn(`Connection between ${nodeA} and ${nodeB} not found.`);
+      }
+    });
+
+    // Step 3: Validation to ensure activeRateMbps does not exceed rateMbps
+    for (let nodeA in this.connections) {
+      for (let nodeB in this.connections[nodeA]) {
+        const connection = this.connections[nodeA][nodeB];
+
+        if (Array.isArray(connection)) {
+          connection.forEach((conn) => {
+            if (conn.activeRateMbps > conn.rateMbps) {
+              console.warn(
+                `Active rate (${conn.activeRateMbps.toFixed(2)} Mbps) exceeds maximum rate (${
+                  conn.rateMbps
+                } Mbps) for connection between ${nodeA} and ${nodeB}. Clamping to maximum rate.`
+              );
+              conn.activeRateMbps = conn.rateMbps;
+            }
+          });
+        } else {
+          if (connection.activeRateMbps > connection.rateMbps) {
+            console.warn(
+              `Active rate (${connection.activeRateMbps.toFixed(2)} Mbps) exceeds maximum rate (${
+                connection.rateMbps
+              } Mbps) for connection between ${nodeA} and ${nodeB}. Clamping to maximum rate.`
+            );
+            connection.activeRateMbps = connection.rateMbps;
+          }
+        }
+      }
+    }
+  }
+
   drawConnections() {
-    // Helper function to interpolate color based on rateMbps
-    const getColorFromRate = (rateMbps) => {
-      const minRate = 0;
-      const maxRate = 200;
-      const clampedRate = Math.max(minRate, Math.min(maxRate, rateMbps));
-      const t = (clampedRate - minRate) / (maxRate - minRate); // 0 to 1
+    // Define color gradient for active connections
+    const highColor = new THREE.Color(0xff0000); // Red for highest throughput
+    const lowColor = new THREE.Color(0xaaaaff); // Light blue for lowest throughput
+    const inactiveColor = new THREE.Color(this.styles.links.inactive.color); // Fixed color for inactive
 
-      // Interpolate
-      const minColor = new THREE.Color(0x6666ff);
-      const maxColor = new THREE.Color(0xff6666);
-      const interpolatedColor = minColor.clone().lerp(maxColor, t);
-      return interpolatedColor;
-    };
+    const activePositions = [];
+    const activeColors = [];
+    const inactivePositions = [];
 
-    const positions = [];
-    const colors = [];
+    let minMbps = Infinity;
+    let maxMbps = -Infinity;
 
+    // First pass: Determine min and max activeRateMbps
+    for (let nodeA in this.connections) {
+      for (let nodeB in this.connections[nodeA]) {
+        // To avoid duplicate lines, ensure nodeA < nodeB
+        if (nodeA < nodeB) {
+          const connection = this.connections[nodeA][nodeB];
+          if (connection.activeRateMbps >= 200) {
+            // Active connection threshold
+            if (connection.activeRateMbps < minMbps) minMbps = connection.activeRateMbps;
+            if (connection.activeRateMbps > maxMbps) maxMbps = connection.activeRateMbps;
+          }
+        }
+      }
+    }
+
+    // Handle case where no active connections exist
+    if (minMbps === Infinity) minMbps = 0;
+    if (maxMbps === -Infinity) maxMbps = 1; // Avoid division by zero
+
+    // Second pass: Assign positions and colors
     for (let nodeA in this.connections) {
       for (let nodeB in this.connections[nodeA]) {
         // To avoid duplicate lines, ensure nodeA < nodeB
         if (nodeA < nodeB) {
           let posA, posB;
-          let rateMbps;
+          let isActive = false;
+          let connectionMbps = 0;
+
+          // Retrieve connection details
+          const connection = this.connections[nodeA][nodeB];
+          if (!connection) continue;
+
+          // Determine if the connection is active
+          if (connection.activeRateMbps >= 200) {
+            isActive = true;
+            connectionMbps = connection.activeRateMbps;
+          }
 
           // Retrieve positionA
           if (nodeA === "Earth") {
@@ -488,7 +629,7 @@ export class SolarSystemScene {
             posA = this.mars.position;
           } else {
             const indexA = parseInt(nodeA.replace("Satellite", ""));
-            if (indexA >= this.satellitesData.length || !this.satellitesData[indexA]) continue; // Invalid or inactive index
+            if (isNaN(indexA) || indexA >= this.satellitesData.length || !this.satellitesData[indexA]) continue; // Invalid or inactive index
             const matrixA = new THREE.Matrix4();
             this.satellitesInstancedMesh.getMatrixAt(indexA, matrixA);
             posA = new THREE.Vector3().setFromMatrixPosition(matrixA);
@@ -501,76 +642,67 @@ export class SolarSystemScene {
             posB = this.mars.position;
           } else {
             const indexB = parseInt(nodeB.replace("Satellite", ""));
-            if (indexB >= this.satellitesData.length || !this.satellitesData[indexB]) continue; // Invalid or inactive index
+            if (isNaN(indexB) || indexB >= this.satellitesData.length || !this.satellitesData[indexB]) continue; // Invalid or inactive index
             const matrixB = new THREE.Matrix4();
             this.satellitesInstancedMesh.getMatrixAt(indexB, matrixB);
             posB = new THREE.Vector3().setFromMatrixPosition(matrixB);
           }
 
-          // Get rateMbps
-          if (this.connections[nodeA][nodeB]) {
-            rateMbps = this.connections[nodeA][nodeB].rateMbps;
-          } else {
-            rateMbps = 0; // Default if not found
-          }
+          if (posA && posB) {
+            if (isActive) {
+              // Add positions for active connections
+              activePositions.push(posA.x, posA.y, posA.z);
+              activePositions.push(posB.x, posB.y, posB.z);
 
-          // Calculate color based on rateMbps
-          const color = getColorFromRate(rateMbps);
+              // Normalize the throughput value
+              const normalizedMbps = (connectionMbps - minMbps) / (maxMbps - minMbps);
 
-          // Validate positions and color
-          if (posA && posB && !isNaN(posA.x) && !isNaN(posA.y) && !isNaN(posA.z) && !isNaN(color.r) && !isNaN(color.g) && !isNaN(color.b)) {
-            // Add positions
-            positions.push(posA.x, posA.y, posA.z);
-            positions.push(posB.x, posB.y, posB.z);
+              // Interpolate color based on normalizedMbps
+              const interpolatedColor = highColor.clone().lerp(lowColor, 1 - normalizedMbps);
 
-            // Add colors for both vertices
-            colors.push(color.r, color.g, color.b);
-            colors.push(color.r, color.g, color.b);
+              // Add colors for both vertices of the line
+              activeColors.push(interpolatedColor.r, interpolatedColor.g, interpolatedColor.b);
+              activeColors.push(interpolatedColor.r, interpolatedColor.g, interpolatedColor.b);
+            } else {
+              // Add positions for inactive connections
+              inactivePositions.push(posA.x, posA.y, posA.z);
+              inactivePositions.push(posB.x, posB.y, posB.z);
+            }
           }
         }
       }
     }
 
-    const geometry = this.connectionLines.geometry;
+    // Update Active Connections Geometry
+    const activeGeometry = this.activeConnectionLines.geometry;
+    activeGeometry.setAttribute("position", new THREE.Float32BufferAttribute(activePositions, 3));
 
-    // Calculate the required number of vertices
-    const requiredCount = positions.length / 3;
-    const existingCount = geometry.attributes.position ? geometry.attributes.position.count : 0;
-
-    if (requiredCount !== existingCount) {
-      // Create a new BufferGeometry with updated positions and colors
-      const newGeometry = new THREE.BufferGeometry();
-      newGeometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
-      newGeometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
-
-      // Dispose of the old geometry to free up memory
-      geometry.dispose();
-
-      // Assign the new geometry to the connectionLines
-      this.connectionLines.geometry = newGeometry;
-    } else {
-      // Update the existing BufferGeometry using typed arrays
-      if (geometry.attributes.position) {
-        geometry.attributes.position.array = new Float32Array(positions);
-        geometry.attributes.position.needsUpdate = true;
-      }
-
-      if (geometry.attributes.color) {
-        geometry.attributes.color.array = new Float32Array(colors);
-        geometry.attributes.color.needsUpdate = true;
+    if (activeColors.length > 0) {
+      // Update or create the color attribute
+      if (activeGeometry.getAttribute("color")) {
+        // If color attribute exists, update it
+        activeGeometry.attributes.color.array = new Float32Array(activeColors);
+        activeGeometry.attributes.color.needsUpdate = true;
       } else {
-        // If color attribute doesn't exist, create it
-        geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+        // Otherwise, create it
+        activeGeometry.setAttribute("color", new THREE.Float32BufferAttribute(activeColors, 3));
+      }
+    } else {
+      // If no active connections, remove the color attribute if it exists
+      if (activeGeometry.getAttribute("color")) {
+        activeGeometry.deleteAttribute("color");
       }
     }
 
-    // Ensure the material uses vertex colors
-    this.connectionLines.material.vertexColors = true;
-    this.connectionLines.material.needsUpdate = true;
+    activeGeometry.attributes.position.needsUpdate = true;
 
-    // Optionally, adjust other material properties if needed
-    this.connectionLines.material.opacity = this.styles.links.connected.opacity;
-    this.connectionLines.material.color.setHex(0xffffff); // Base color won't affect vertex colors
+    // Update Inactive Connections Geometry
+    const inactiveGeometry = this.inactiveConnectionLines.geometry;
+    inactiveGeometry.setAttribute("position", new THREE.Float32BufferAttribute(inactivePositions, 3));
+    inactiveGeometry.attributes.position.needsUpdate = true;
+
+    // Optional: Log the number of active and inactive connections
+    console.debug(`Active Connections: ${activePositions.length / 6}, Inactive Connections: ${inactivePositions.length / 6}`);
   }
 
   calculateShortestPath() {
@@ -707,7 +839,282 @@ export class SolarSystemScene {
     };
   }
 
-  drawShortestPath(path, pathType) {
+  getMultiPath() {
+    // Step 1: Initialize Nodes and Edges
+    const nodes = new Set();
+    const edges = {}; // Residual graph: edges[from][to] = availableBandwidthKbps
+    const edgeCapacityMap = {}; // Map to store total capacity per edge for debugging
+
+    // Initialize Nodes and Collect All Nodes
+    Object.keys(this.connections).forEach((nodeA) => {
+      Object.keys(this.connections[nodeA]).forEach((nodeB) => {
+        nodes.add(nodeA);
+        nodes.add(nodeB);
+      });
+    });
+
+    // Initialize Edges with Residual Capacities and Populate Capacity Map
+    Object.keys(this.connections).forEach((nodeA) => {
+      Object.keys(this.connections[nodeA]).forEach((nodeB) => {
+        const connection = this.connections[nodeA][nodeB];
+        if (connection.rateMbps >= 200) {
+          // Consider edges with bandwidth >= 200 Mbps
+          // Initialize edge in both directions for residual graph
+          if (!edges[nodeA]) edges[nodeA] = {};
+          if (!edges[nodeB]) edges[nodeB] = {};
+
+          // Convert Mbps to Kbps
+          const capacityKbps = Math.floor(connection.rateMbps * 1000);
+
+          // If multiple connections exist, sum their capacities
+          edges[nodeA][nodeB] = (edges[nodeA][nodeB] || 0) + capacityKbps;
+          edges[nodeB][nodeA] = (edges[nodeB][nodeA] || 0) + capacityKbps; // For residual capacity
+
+          // Create a unique key for the undirected edge
+          const [sortedFrom, sortedTo] = nodeA < nodeB ? [nodeA, nodeB] : [nodeB, nodeA];
+          const edgeKey = `${sortedFrom}->${sortedTo}`;
+
+          // Sum capacities for multiple connections
+          edgeCapacityMap[edgeKey] = (edgeCapacityMap[edgeKey] || 0) + connection.rateMbps;
+        }
+      });
+    });
+
+    const source = "Earth";
+    const sink = "Mars";
+    let maxFlowKbps = 0;
+    const paths = [];
+
+    // Step 2: Edmonds-Karp Algorithm (BFS-based)
+    while (true) {
+      // BFS to find shortest augmenting path
+      const queue = [source];
+      const visited = new Set();
+      const parent = {}; // To reconstruct path
+      visited.add(source);
+
+      while (queue.length > 0) {
+        const current = queue.shift();
+
+        if (current === sink) break;
+
+        if (edges[current]) {
+          for (const neighbor in edges[current]) {
+            if (edges[current][neighbor] > 0 && !visited.has(neighbor)) {
+              visited.add(neighbor);
+              parent[neighbor] = current;
+              queue.push(neighbor);
+              if (neighbor === sink) break;
+            }
+          }
+        }
+      }
+
+      // No augmenting path found
+      if (!parent[sink]) break;
+
+      // Reconstruct path and find bottleneck capacity
+      const path = [];
+      let bottleneck = Infinity;
+      let current = sink;
+
+      while (current !== source) {
+        const prev = parent[current];
+        path.unshift(current);
+        bottleneck = Math.min(bottleneck, edges[prev][current]);
+        current = prev;
+      }
+      path.unshift(source);
+
+      // Augment flow
+      maxFlowKbps += bottleneck;
+      for (let i = 0; i < path.length - 1; i++) {
+        const from = path[i];
+        const to = path[i + 1];
+        edges[from][to] -= bottleneck;
+        edges[to][from] += bottleneck; // Update residual capacity
+      }
+
+      // Store the path and its flow
+      paths.push({
+        path: [...path],
+        pathMbpsKbps: bottleneck,
+      });
+    }
+
+    // Step 3: Flow Decomposition to Extract Paths with Distances
+    const decomposedPaths = [];
+    const residualEdges = {}; // Copy of edges to track used flows
+
+    // Reconstruct the original residual graph with flows
+    Object.keys(this.connections).forEach((nodeA) => {
+      Object.keys(this.connections[nodeA]).forEach((nodeB) => {
+        const connection = this.connections[nodeA][nodeB];
+        if (connection.rateMbps >= 200) {
+          if (!residualEdges[nodeA]) residualEdges[nodeA] = {};
+          const capacityKbps = Math.floor(connection.rateMbps * 1000);
+          residualEdges[nodeA][nodeB] = 0; // Initialize flow to 0
+        }
+      });
+    });
+
+    // Apply the flows from the paths found
+    paths.forEach(({ path, pathMbpsKbps }) => {
+      for (let i = 0; i < path.length - 1; i++) {
+        const from = path[i];
+        const to = path[i + 1];
+        residualEdges[from][to] += pathMbpsKbps;
+      }
+    });
+
+    // Function to find a path with positive flow
+    const findFlowPath = () => {
+      const queue = [source];
+      const visited = new Set();
+      const parent = {};
+
+      visited.add(source);
+
+      while (queue.length > 0) {
+        const current = queue.shift();
+
+        if (current === sink) break;
+
+        if (residualEdges[current]) {
+          for (const neighbor in residualEdges[current]) {
+            if (residualEdges[current][neighbor] > 0 && !visited.has(neighbor)) {
+              visited.add(neighbor);
+              parent[neighbor] = current;
+              queue.push(neighbor);
+              if (neighbor === sink) break;
+            }
+          }
+        }
+      }
+
+      if (!parent[sink]) return null;
+
+      const path = [];
+      let bottleneck = Infinity;
+      let current = sink;
+
+      while (current !== source) {
+        const prev = parent[current];
+        path.unshift(current);
+        bottleneck = Math.min(bottleneck, residualEdges[prev][current]);
+        current = prev;
+      }
+      path.unshift(source);
+
+      return { path, bottleneck };
+    };
+
+    // Extract paths with their flows and calculate distances
+    while (true) {
+      const flowPath = findFlowPath();
+      if (!flowPath) break;
+
+      const { path, bottleneck } = flowPath;
+
+      // Calculate total distance for the path
+      let totalDistanceKm = 0;
+      for (let i = 0; i < path.length - 1; i++) {
+        const from = path[i];
+        const to = path[i + 1];
+        const connection = this.connections[from][to] || this.connections[to][from];
+        if (connection) {
+          totalDistanceKm += connection.distanceKm;
+        } else {
+          throw new Error(`Connection not found between ${from} and ${to}`);
+        }
+      }
+
+      decomposedPaths.push({
+        path: [...path],
+        pathMbpsKbps: bottleneck,
+        pathDistanceKm: totalDistanceKm,
+      });
+
+      // Subtract the flow from the residualEdges
+      for (let i = 0; i < path.length - 1; i++) {
+        const from = path[i];
+        const to = path[i + 1];
+        residualEdges[from][to] -= bottleneck;
+      }
+    }
+
+    // Step 4: Aggregate Active Links
+    const setOfActiveLinksMap = new Map();
+
+    decomposedPaths.forEach(({ path, pathMbpsKbps }) => {
+      for (let i = 0; i < path.length - 1; i++) {
+        const from = path[i];
+        const to = path[i + 1];
+        const [sortedFrom, sortedTo] = from < to ? [from, to] : [to, from];
+        const edgeKey = `${sortedFrom}->${sortedTo}`;
+        if (setOfActiveLinksMap.has(edgeKey)) {
+          setOfActiveLinksMap.get(edgeKey).activeMbpsKbps += pathMbpsKbps;
+        } else {
+          setOfActiveLinksMap.set(edgeKey, {
+            from: sortedFrom,
+            to: sortedTo,
+            activeMbpsKbps: pathMbpsKbps,
+          });
+        }
+      }
+    });
+
+    // Convert Map to Array and convert Kbps back to Mbps
+    const setOfActiveLinksArray = Array.from(setOfActiveLinksMap.values()).map((link) => ({
+      from: link.from,
+      to: link.to,
+      activeMbps: link.activeMbpsKbps / 1000, // Convert back to Mbps
+    }));
+
+    // Convert decomposed paths to the required format and aggregate total Mbps
+    const formattedPaths = decomposedPaths.map((p) => ({
+      path: p.path,
+      pathMbps: p.pathMbpsKbps / 1000, // Convert back to Mbps
+      pathDistanceKm: p.pathDistanceKm,
+    }));
+
+    const maxAggregateMbps = formattedPaths.reduce((acc, p) => acc + p.pathMbps, 0);
+
+    // **Debug Step: Verify Active Mbps Against Capacity**
+    console.debug("=== Debug: Verifying Active Mbps Against Capacity ===");
+    let debugPassed = true;
+
+    setOfActiveLinksArray.forEach((link) => {
+      const { from, to, activeMbps } = link;
+      const edgeKey = `${from}->${to}`;
+      const capacityMbps = edgeCapacityMap[edgeKey] || 0;
+
+      if (activeMbps > capacityMbps) {
+        console.error(
+          `Bandwidth Overload Detected on Link ${from} -> ${to}: Active Mbps (${activeMbps}) exceeds Capacity Mbps (${capacityMbps})`
+        );
+        debugPassed = false;
+        // } else {
+        //   console.debug(`Link ${from} -> ${to}: Active Mbps (${activeMbps}) within Capacity Mbps (${capacityMbps})`);
+      }
+    });
+
+    if (debugPassed) {
+      console.debug("All active links are within their respective capacities.");
+    } else {
+      console.warn("Some active links exceed their capacities. Please review the flow assignments.");
+      // Optionally, throw an error to halt execution
+      // throw new Error("Bandwidth overload detected on one or more links.");
+    }
+
+    return {
+      maxAggregateMbps: maxAggregateMbps,
+      paths: formattedPaths,
+      setOfActiveLinks: setOfActiveLinksArray,
+    };
+  }
+
+  drawPath(path, pathType) {
     const positions = [];
 
     for (let i = 0; i < path.length - 1; i++) {
@@ -778,6 +1185,11 @@ export class SolarSystemScene {
   // Add a method to get the shortest path distance
   getShortestPathDistance3D() {
     return this.shortestPathDistance3D;
+  }
+
+  // Add a method to get the shortest path distance
+  getTotalMbps() {
+    return this.totalMbps;
   }
 
   // Add a method to get the direct path distance
