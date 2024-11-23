@@ -91,11 +91,23 @@ export class SimDisplay {
     this.solarSystemData = this.simSolarSystem.getSolarSystemData();
 
     // === Object Containers ===
-    this.planets = []; // Store planet meshes
+    this.planets = {}; // Store planet meshes
     this.satellitesGroup = new THREE.Group();
     this.scene.add(this.satellitesGroup);
     this.linksGroup = new THREE.Group();
     this.scene.add(this.linksGroup);
+
+    // Initialize links arrays
+    this.possibleLinks = [];
+    this.activeLinks = [];
+
+    // === Styles ===
+    this.styles = {
+      links: {
+        inactive: { color: 0x222222, opacity: 0.1 },
+        active: { colormax: 0xff0000, colormin: 0x0000ff, opacity: 0.8 },
+      },
+    };
 
     // === Load Scene Elements ===
     this.loadScene();
@@ -166,10 +178,11 @@ export class SimDisplay {
     this.composer.addPass(this.bloomPass);
 
     // === Initialize Links LineSegments ===
+    // MODIFY MATERIAL TO ENABLE VERTEX COLORS
     this.linksMaterial = new THREE.LineBasicMaterial({
-      color: 0xffffff,
+      vertexColors: true, // Enable vertex colors
       transparent: true,
-      opacity: 0.03,
+      opacity: 1.0, // Full opacity; control transparency via color if needed
     });
 
     this.linksGeometry = new THREE.BufferGeometry();
@@ -201,7 +214,7 @@ export class SimDisplay {
         planetMesh.receiveShadow = true;
         planetMesh.params = planetData; // Store parameters if needed
         this.scene.add(planetMesh);
-        this.planets.push(planetMesh);
+        this.planets[planetData.name] = planetMesh;
       } else if (planetData.shape === "car") {
         // Use the helper function to create the car model
         createCarModel(THREE, planetData, this.scene, this.planets, planetScaleFactor);
@@ -278,19 +291,27 @@ export class SimDisplay {
    * @param {Object} planetsPositions - An object mapping planet names to positions { x, y, z }.
    * @param {Array} satellitesPositions - Array of satellite position objects [{ x, y, z }, ...].
    * @param {Array} links - Array of link objects with properties:
-   *                        { from: { x, y, z }, to: { x, y, z } }.
+   *                        { fromId: string, toId: string, gbpsFlowActual: number, ... }.
    */
-  updateData(planets, satellites, links) {
+  updatePositions(planets, satellites) {
     // === Update Planet Positions ===
-    for (const i in planets) {
-      const position = planets[i].position;
-      const mesh = this.planets[i];
+    this.planetPositions = {};
+    for (let planet of Object.values(planets)) {
+      const position = planet.position;
+      const name = planet.name;
+      const mesh = this.planets[name];
       if (mesh) {
         mesh.position.set(
           auTo3D(position.x),
           auTo3D(position.z), // Swap y and z axes if needed
           -auTo3D(position.y)
         );
+        // Store position
+        this.planetPositions[name] = {
+          x: mesh.position.x,
+          y: mesh.position.y,
+          z: mesh.position.z,
+        };
         // Update rotation if provided
         if (position.rotation) {
           mesh.rotation.set(position.rotation.x || 0, position.rotation.y || 0, position.rotation.z || 0);
@@ -299,11 +320,12 @@ export class SimDisplay {
           mesh.rotation.set(0, 0, 0);
         }
       } else {
-        if (i != 9) console.warn(`Mesh for planet "${i}" not found.`);
+        if (name != "Tesla") console.warn(`Mesh for planet "${name}" not found.`);
       }
     }
 
     // === Update Satellite Positions ===
+    this.satellitePositions = {};
     if (this.satelliteMesh && satellites.length > 0) {
       const dummy = new THREE.Object3D();
       satellites.forEach((satellite, index) => {
@@ -322,31 +344,102 @@ export class SimDisplay {
         }
         dummy.updateMatrix();
         this.satelliteMesh.setMatrixAt(index, dummy.matrix); // Update matrix
+
+        // Store position
+        this.satellitePositions[satellite.name] = {
+          x: dummy.position.x,
+          y: dummy.position.y,
+          z: dummy.position.z,
+        };
       });
       this.satelliteMesh.instanceMatrix.needsUpdate = true; // Notify Three.js of the update
     }
 
-    // === Update Links ===
-    const numLinks = links.length;
-    const positions = new Float32Array(numLinks * 2 * 3); // Each link has two points
+    // === Update Links Positions ===
+    this.updateLinksPositions();
+  }
+
+  updatePossibleLinks(links) {
+    this.possibleLinks = links;
+  }
+
+  updateActiveLinks(links) {
+    this.activeLinks = links;
+  }
+
+  updateLinksPositions() {
+    const activeLinkSet = new Set(this.activeLinks.map((link) => link.fromId + "_" + link.toId));
+
+    // Filter out active links from possible links
+    const inactiveLinks = this.possibleLinks.filter(
+      (link) => !activeLinkSet.has(link.fromId + "_" + link.toId) && !activeLinkSet.has(link.toId + "_" + link.fromId)
+    );
+    // Combine all links
+    const allLinks = [...this.activeLinks, ...inactiveLinks];
+
+    const numLinks = allLinks.length;
+    const positions = new Float32Array(numLinks * 2 * 3);
+    const colors = new Float32Array(numLinks * 2 * 3);
+
+    // Calculate min and max flow for color mapping (for active links only)
+    const flows = this.activeLinks.map((link) => link.gbpsFlowActual);
+    const maxFlow = Math.max(...flows);
+    const minFlow = Math.min(...flows);
 
     for (let i = 0; i < numLinks; i++) {
-      const link = links[i];
+      const link = allLinks[i];
+      const isActive = activeLinkSet.has(link.fromId + "_" + link.toId);
 
-      // From point
-      positions[i * 6] = auTo3D(link.from.x);
-      positions[i * 6 + 1] = auTo3D(link.from.z); // Swap y and z axes if needed
-      positions[i * 6 + 2] = -auTo3D(link.from.y);
+      // Get 'from' and 'to' positions
+      const fromPosition = this.planetPositions[link.fromId] || this.satellitePositions[link.fromId];
+      const toPosition = this.planetPositions[link.toId] || this.satellitePositions[link.toId];
 
-      // To point
-      positions[i * 6 + 3] = auTo3D(link.to.x);
-      positions[i * 6 + 4] = auTo3D(link.to.z); // Swap y and z axes if needed
-      positions[i * 6 + 5] = -auTo3D(link.to.y);
+      if (!fromPosition || !toPosition) {
+        console.warn(`Cannot find positions for link between "${link.fromId}" and "${link.toId}"`);
+        continue;
+      }
+
+      // Set positions
+      positions[i * 6] = fromPosition.x;
+      positions[i * 6 + 1] = fromPosition.y;
+      positions[i * 6 + 2] = fromPosition.z;
+
+      positions[i * 6 + 3] = toPosition.x;
+      positions[i * 6 + 4] = toPosition.y;
+      positions[i * 6 + 5] = toPosition.z;
+
+      // Set colors
+      let color = new THREE.Color();
+      if (isActive) {
+        // Active link: interpolate color based on flow
+        let t = 0;
+        if (maxFlow > minFlow) {
+          t = (link.gbpsFlowActual - minFlow) / (maxFlow - minFlow);
+        }
+        t = isNaN(t) ? 0 : t;
+
+        color.lerpColors(new THREE.Color(this.styles.links.active.colormin), new THREE.Color(this.styles.links.active.colormax), t);
+      } else {
+        // Inactive link: use inactive color
+        color = new THREE.Color(this.styles.links.inactive.color);
+      }
+
+      // Set color for both vertices
+      colors[i * 6] = color.r;
+      colors[i * 6 + 1] = color.g;
+      colors[i * 6 + 2] = color.b;
+
+      colors[i * 6 + 3] = color.r;
+      colors[i * 6 + 4] = color.g;
+      colors[i * 6 + 5] = color.b;
     }
 
-    // Update the geometry with the new positions
+    // Update the geometry
     this.linksGeometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-    this.linksGeometry.computeBoundingSphere(); // Important for rendering
+    this.linksGeometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+    this.linksGeometry.attributes.position.needsUpdate = true;
+    this.linksGeometry.attributes.color.needsUpdate = true;
+    this.linksGeometry.computeBoundingSphere();
   }
 
   /**

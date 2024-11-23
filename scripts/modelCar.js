@@ -51,6 +51,6 @@ export function createCarModel(THREE, planetData, scene, planets) {
 
     carModel.params = planetData; // Store parameters if needed
     scene.add(carModel);
-    planets.push(carModel);
+    planets[planetData.name] = carModel;
   });
 }

@@ -10,7 +10,8 @@ export class SimSolarSystem {
   }
 
   updatePlanetsPositions(simDaysSinceStart) {
-    for (const object of this.solarSystemData.planets) object.position = helioCoords(object, simDaysSinceStart);
+    for (const [name, object] of Object.entries(this.solarSystemData.planets))
+      this.solarSystemData.planets[name].position = helioCoords(object, simDaysSinceStart);
     return this.solarSystemData.planets;
   }
 

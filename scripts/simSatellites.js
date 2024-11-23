@@ -8,13 +8,13 @@ export class SimSatellites {
   }
 
   setSatellitesConfig(satellitesConfig) {
-    // {satCount, satDistanceSun, ringName, ringType, marsSideExtensionDeg, laserPortsPerSatellite, failedSatellitesPct} = config
-    this.satellites = satellitesConfig.map((config) => this.generateSatellites(config)).flat();
-    return this.satellites;
+    this.satellites = [];
+    for (let config of satellitesConfig) this.satellites.push(...this.generateSatellites(config));
+    // return this.satellites;
   }
 
   updateSatellitesPositions(simDaysSinceStart) {
-    for (const object of this.satellites) object.position = helioCoords(object, simDaysSinceStart);
+    for (const satellite of this.satellites) satellite.position = helioCoords(satellite, simDaysSinceStart);
     return this.satellites;
   }
 
@@ -28,8 +28,10 @@ export class SimSatellites {
       const orbitdays = 360 / n;
       const longIncrement = 360 / satCount;
       for (let i = 0; i < satCount; i++)
-        if (Math.random() >= failedSatellitesPct / 100)
-          satellites.push(this.generateSatellite(ringName, ringType, a, n, i * longIncrement, orbitdays, laserPortsPerSatellite, i));
+        if (Math.random() >= failedSatellitesPct / 100) {
+          const name = `${ringName}-${i}`;
+          satellites.push(this.generateSatellite(ringName, ringType, a, n, i * longIncrement, orbitdays, laserPortsPerSatellite, name));
+        }
     } else {
       let a;
       let n;
@@ -45,23 +47,27 @@ export class SimSatellites {
       const longIncrement = sideExtensionDeg / satCountOneSide;
       for (let i = 0; i < satCountOneSide; i++) {
         if (Math.random() >= failedSatellitesPct / 100) {
+          let name = `${ringName}-${i + 1}`;
           satellites.push(
-            this.generateSatellite(ringName, ringType, a, n, (i + 1) * longIncrement, orbitdays, laserPortsPerSatellite, i + 1)
+            this.generateSatellite(ringName, ringType, a, n, (i + 1) * longIncrement, orbitdays, laserPortsPerSatellite, name)
           );
-          if (!(sideExtensionDeg == 180 && i == satCountOneSide - 1))
+
+          if (!(sideExtensionDeg == 180 && i == satCountOneSide - 1)) {
+            let name = `${ringName}-${-(i + 1)}`;
             satellites.push(
-              this.generateSatellite(ringName, ringType, a, n, -(i + 1) * longIncrement, orbitdays, laserPortsPerSatellite, -(i + 1))
+              this.generateSatellite(ringName, ringType, a, n, -(i + 1) * longIncrement, orbitdays, laserPortsPerSatellite, name)
             );
+          }
         }
       }
     }
     return satellites;
   }
 
-  generateSatellite(ringName, ringType, a, n, long, orbitdays, laserPortsPerSatellite, index) {
+  generateSatellite(ringName, ringType, a, n, long, orbitdays, laserPortsPerSatellite, name) {
     const elements = this.getOrbitaElements(ringType, a, n, long);
     const satelliteData = {
-      name: `${ringName}-${index}`,
+      name,
       ...elements,
       laserPortsPerSatellite,
       diameterKm: 10000,

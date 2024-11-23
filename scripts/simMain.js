@@ -10,6 +10,11 @@ import { SimDisplay } from "./simDisplay.js";
 
 export class SimMain {
   constructor() {
+    this.maxDistanceAU = 0.3;
+    this.maxLinksPerSatellite = 2;
+
+    this.previousLinkUpdateSimDate = 0;
+
     // Initialize simulation components
     this.simTime = new SimTime();
     this.simSolarSystem = new SimSolarSystem();
@@ -18,7 +23,6 @@ export class SimMain {
     this.simNetwork = new SimNetwork();
     this.simDisplay = new SimDisplay();
 
-    // Initialize UI, passing the SimMain instance for callbacks
     this.ui = new SimUi(this);
 
     // Start the simulation loop
@@ -42,27 +46,50 @@ export class SimMain {
    */
   setSatellitesConfig(satellitesConfig) {
     const simDate = this.simTime.getDate();
-    let satellites = this.simSatellites.setSatellitesConfig(satellitesConfig);
-    satellites = this.simSatellites.updateSatellitesPositions(simDate);
+    this.simSatellites.setSatellitesConfig(satellitesConfig);
+    const satellites = this.simSatellites.updateSatellitesPositions(simDate);
+    this.simDisplay.updateActiveLinks([]);
+    this.simDisplay.updatePossibleLinks([]);
     this.simDisplay.setSatellites(satellites);
+    this.updateLinks(simDate, satellites);
+  }
+
+  updateLinks(simDate, satellites) {
+    const planets = this.simSolarSystem.updatePlanetsPositions(simDate);
+    const possibleLinks = this.simLinks.getPossibleLinks(planets, satellites, this.maxDistanceAU);
+    this.simDisplay.updatePossibleLinks(possibleLinks);
+
+    // Get active links from simNetwork, passing possibleLinks to avoid recomputation
+    const { links: activeLinks, maxFlow: maxFlow } = this.simNetwork.getNetworkData(
+      planets,
+      satellites,
+      this.maxDistanceAU,
+      this.maxLinksPerSatellite
+    );
+    // Update simDisplay with active links
+    this.simDisplay.updateActiveLinks(activeLinks);
+    if (this.ui) this.ui.updateInfoArea(`Marslink: ${Math.round(maxFlow * 1000)} Mbps`);
   }
 
   /**
    * The core update loop that advances the simulation by one frame.
-   * It updates the positions of planets, satellites, links, and the display.
+   * It updates the positions of planets, satellites, and the display.
+   * The links are updated asynchronously when the worker sends data.
    */
   updateLoop() {
     const simDate = this.simTime.getDate();
-    // console.log("simDate", simDate);
 
     // Update simulation data
     const planets = this.simSolarSystem.updatePlanetsPositions(simDate);
     const satellites = this.simSatellites.updateSatellitesPositions(simDate);
-    // const links = this.simLinks.getLinksData(planets, satellites);
-    const links = this.simNetwork.getNetworkData(planets, satellites);
 
     // Update the display with new data
-    this.simDisplay.updateData(planets, satellites, links);
+    this.simDisplay.updatePositions(planets, satellites);
+    this.ui.updateSimTime(simDate);
+    if (Math.abs(simDate - this.previousLinkUpdateSimDate) > 1000 * 60 * 60 * 24) {
+      this.previousLinkUpdateSimDate = simDate;
+      this.updateLinks(simDate, satellites);
+    }
   }
 
   /**

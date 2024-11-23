@@ -66,6 +66,16 @@ export class SimUi {
     }
   }
 
+  formatSimTimeToUTC(simTime) {
+    // Create a Date object using the simulated Unix time
+    const simDate = new Date(simTime);
+
+    // Format the date to a readable string in UTC
+    const formattedDate = simDate.toISOString().replace("T", " ").slice(0, 19) + " UTC";
+
+    return formattedDate;
+  }
+
   /**
    * Creates sliders based on the slidersData configuration.
    * Sets up event listeners to handle user input and dispatch actions to simMain.
@@ -378,5 +388,14 @@ export class SimUi {
     });
 
     return satellitesConfig;
+  }
+
+  updateSimTime(simTime) {
+    const utcTime = this.formatSimTimeToUTC(simTime);
+    document.getElementById("simTime").innerHTML = utcTime;
+  }
+
+  updateInfoArea(info) {
+    document.getElementById("info-area").innerHTML = info;
   }
 }
