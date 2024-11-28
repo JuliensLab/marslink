@@ -11,7 +11,7 @@ export class SimSatellites {
     this.satellites = [];
     const newSatellites = [];
     for (let config of satellitesConfig) newSatellites.push(...this.generateSatellites(config));
-    this.satellites = newSatellites.slice(0, 1500);
+    this.satellites = newSatellites.slice(0, 2000);
     console.log(`${this.satellites.length} SATELLITES`);
   }
 

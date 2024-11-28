@@ -99,7 +99,7 @@ export class SimMain {
 
   setSatellitesConfig(uiConfig) {
     const satellitesConfig = [];
-    console.log(uiConfig);
+    // console.log(uiConfig);
 
     this.simLinkBudget.setTechnologyConfig(uiConfig);
     satellitesConfig.push(...this.setAutoringConfig(uiConfig));
@@ -107,7 +107,7 @@ export class SimMain {
     satellitesConfig.push(...this.generateSatellitesConfig(uiConfig, "ring_earth"));
 
     this.newSatellitesConfig = satellitesConfig;
-    console.log(satellitesConfig);
+    // console.log(satellitesConfig);
   }
 
   removeLinks() {
@@ -126,14 +126,8 @@ export class SimMain {
     this.simDisplay.updatePossibleLinks(possibleLinks);
 
     // Get active links from simNetwork, passing possibleLinks to avoid recomputation
-    if (false) {
-      const { links: activeLinks, maxFlow: maxFlow } = this.simNetwork.getNetworkData(
-        planets,
-        satellites,
-        this.simLinkBudget,
-        this.maxDistanceAU,
-        this.maxLinksPerSatellite
-      );
+    if (true) {
+      const { links: activeLinks, maxFlow: maxFlow } = this.simNetwork.getNetworkData(planets, satellites, possibleLinks);
       // Update simDisplay with active links
       this.simDisplay.updateActiveLinks(activeLinks);
       if (this.ui) this.ui.updateInfoArea(`Marslink: ${Math.round(maxFlow * 1000)} Mbps`);

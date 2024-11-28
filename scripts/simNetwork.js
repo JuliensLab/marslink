@@ -119,7 +119,7 @@ export class SimNetwork {
       });
     });
 
-    console.log("Step 1: Added Neighbor Links for All Rings");
+    // console.log("Step 1: Added Neighbor Links for All Rings");
 
     // Step 2: Add Links for Circular Rings Based on `a` and `vpo` (Excluding Mars and Earth Rings)
     // Identify circular rings (exclude 'ring_mars' and 'ring_earth')
@@ -245,7 +245,7 @@ export class SimNetwork {
       });
     }
 
-    console.log("Step 2: Added Links for Circular Rings Based on a and VPO");
+    // console.log("Step 2: Added Links for Circular Rings Based on a and VPO");
 
     // Step 3: Add Links for Mars and Earth Rings Using VPO Delta
     // Identify Mars and Earth rings
@@ -309,9 +309,6 @@ export class SimNetwork {
       const delta = calculateVpoDelta(targetRingName, firstSatellite);
       vpoDeltas[targetRingName] = delta;
     });
-
-    console.log("VPO Deltas:", vpoDeltas);
-
     // Function to apply VPO delta and normalize
     const applyVpoDelta = (vpo, delta) => {
       return (vpo + delta + 360) % 360;
@@ -328,7 +325,6 @@ export class SimNetwork {
       const targetSatellites = rings[targetRingName];
       // Add Earth and Mars to its ring
       targetSatellites.push(filteredPlanets.find((planet) => planet.name == convertRingToPlanet(targetRingName)));
-      console.log(targetSatellites);
       const vpoDelta = vpoDeltas[targetRingName] || 0;
 
       targetSatellites.forEach((satellite) => {
@@ -435,41 +431,24 @@ export class SimNetwork {
       });
     });
 
-    console.log("Step 3: Added Links for Mars and Earth Rings Using VPO Delta");
+    // console.log("Step 3: Added Links for Mars and Earth Rings Using VPO Delta");
     console.log(finalLinks);
     return finalLinks;
   }
-
   /**
-   * Calculates the optimal network configuration between Earth and Mars using the Edmonds-Karp algorithm.
+   * Constructs the network graph based on precomputed finalLinks and computes the maximum flow.
    *
-   * The total aggregated Gbps is calculated by modeling the communication network as a flow network and
-   * using the Edmonds-Karp algorithm (a specific implementation of the Ford-Fulkerson method) to find
-   * the maximum flow from the source node (Earth) to the sink node (Mars). The maximum flow represents
-   * the maximum possible data throughput (in Gbps) that can be achieved given the capacities of the
-   * links in the network.
-   *
-   * @param {Array} planets - Array of planet objects, each with properties { name, position: { x, y, z } }.
-   * @param {Array} satellites - Array of satellite objects with properties { name, position: { x, y, z } }.
-   * @param {number} [maxDistanceAU=0.3] - Maximum distance in AU for creating a link.
-   * @param {number} [maxLinksPerSatellite=2] - Maximum number of links (laser ports) per satellite.
-   * @returns {Array} links - Array of link objects with properties:
-   *                          {
-   *                            fromId: string,
-   *                            toId: string,
-   *                            distanceAU,
-   *                            distanceKm,
-   *                            latencySeconds,
-   *                            gbpsCapacity,
-   *                            gbpsFlowActual
-   *                          }
+   * @param {Array} planets - Array of planet objects (e.g., Earth, Mars) with properties like name and position.
+   * @param {Array} satellites - Array of satellite objects with properties like name, ringName, position, neighbors, and 'a'.
+   * @param {Array} finalLinks - Array of link objects precomputed by getPossibleLinks, each containing fromId, toId, distanceAU, distanceKm, latencySeconds, and gbpsCapacity.
+   * @returns {Object} - An object containing the established links with flow information and the total maximum flow.
    */
-  getNetworkData(planets, satellites, simLinkBudget, maxDistanceAU = 0.4, maxLinksPerSatellite = 2) {
-    // Constants
+  getNetworkData(planets, satellites, finalLinks) {
+    // Constants (if needed)
     const AU_IN_KM = 149597871; // 1 AU in kilometers
     const SPEED_OF_LIGHT_KM_S = 299792; // Speed of light in km/s
 
-    // Node IDs
+    // Node ID Assignment
     const nodeIds = new Map(); // Map to store node IDs
     let nodeIdCounter = 0;
 
@@ -479,195 +458,124 @@ export class SimNetwork {
 
     if (!earth || !mars) {
       console.warn("Earth or Mars position is not available.");
-      return [];
+      return { links: [], maxFlow: 0 };
     }
 
     nodeIds.set("Earth", nodeIdCounter++);
     nodeIds.set("Mars", nodeIdCounter++);
 
-    // For each satellite, create 'in' and 'out' nodes
+    // Add Satellites to node IDs (single node per satellite, no splitting)
     satellites.forEach((satellite) => {
-      nodeIds.set(`${satellite.name}_in`, nodeIdCounter++);
-      nodeIds.set(`${satellite.name}_out`, nodeIdCounter++);
+      nodeIds.set(satellite.name, nodeIdCounter++);
     });
 
-    // Build the graph
+    // Build the Graph
     const graph = {}; // Adjacency list representation
     const capacities = {}; // Edge capacities
     const positions = {}; // Node positions for reference
 
     // Initialize graph nodes
-    for (let [name, id] of nodeIds.entries()) {
+    nodeIds.forEach((id, name) => {
       graph[id] = [];
+      positions[name] = planetOrSatellitePosition(planets, satellites, name);
+    });
+
+    // Helper Function to Retrieve Position
+    function planetOrSatellitePosition(planets, satellites, name) {
+      const planet = planets.find((p) => p.name === name);
+      if (planet) return planet.position;
+      const satellite = satellites.find((s) => s.name === name);
+      return satellite ? satellite.position : null;
     }
 
-    // Helper function to add edges
+    // Helper Function to Add Edges (Bidirectional)
     const addEdge = (fromId, toId, capacity) => {
-      graph[fromId].push(toId);
-      graph[toId].push(fromId); // Add reverse edge for residual graph
+      if (!graph[fromId].includes(toId)) {
+        graph[fromId].push(toId);
+      }
+      if (!graph[toId].includes(fromId)) {
+        graph[toId].push(fromId);
+      }
       const edgeKey = `${fromId}_${toId}`;
       capacities[edgeKey] = capacity;
-      capacities[`${toId}_${fromId}`] = 0; // Reverse edge capacity
+      const reverseEdgeKey = `${toId}_${fromId}`;
+      capacities[reverseEdgeKey] = capacity; // Same capacity in reverse
     };
 
-    // Add positions for Earth and Mars
-    positions["Earth"] = earth.position;
-    positions["Mars"] = mars.position;
+    // Add All Links (Bidirectional)
+    finalLinks.forEach((link) => {
+      const { fromId, toId, gbpsCapacity } = link;
 
-    // Add satellite positions
-    satellites.forEach((satellite) => {
-      positions[satellite.name] = satellite.position;
-    });
-
-    // Add edges between satellite_in and satellite_out with capacities based on port constraints
-    satellites.forEach((satellite) => {
-      const inId = nodeIds.get(`${satellite.name}_in`);
-      const outId = nodeIds.get(`${satellite.name}_out`);
-      const maxSatelliteCapacity = Infinity; // Assuming unlimited capacity through the satellite
-      addEdge(inId, outId, maxSatelliteCapacity);
-    });
-
-    // Function to calculate distance between two positions in AU
-    const calculateDistanceAU = (a, b) => {
-      return Math.sqrt(Math.pow(a.x - b.x, 2) + Math.pow(a.y - b.y, 2) + Math.pow(a.z - b.z, 2));
-    };
-
-    // Function to calculate Gbps capacity based on distance
-    const calculateGbps = (distanceKm) => {
-      return simLinkBudget.calculateGbps(distanceKm);
-    };
-
-    // Function to calculate latency based on distance
-    const calculateLatency = (distanceKm) => {
-      return distanceKm / SPEED_OF_LIGHT_KM_S;
-    };
-
-    // Collect possible links
-    const possibleLinks = [];
-
-    // Satellites to Planets (Earth and Mars)
-    satellites.forEach((satellite) => {
-      const satInId = nodeIds.get(`${satellite.name}_in`);
-      const satOutId = nodeIds.get(`${satellite.name}_out`);
-      const satName = satellite.name;
-      const satPosition = satellite.position;
-
-      // From Earth to satellite_in
-      const distanceAU = calculateDistanceAU(earth.position, satPosition);
-      if (distanceAU <= maxDistanceAU) {
-        const distanceKm = distanceAU * AU_IN_KM;
-        const gbpsCapacity = calculateGbps(distanceKm);
-        const latencySeconds = calculateLatency(distanceKm);
-        const earthId = nodeIds.get("Earth");
-        addEdge(earthId, satInId, gbpsCapacity);
-        possibleLinks.push({
-          fromId: "Earth",
-          toId: satName,
-          fromNodeId: earthId,
-          toNodeId: satInId, // Store node IDs here
-          distanceAU,
-          distanceKm,
-          latencySeconds,
-          gbpsCapacity,
-        });
+      // Validate Node IDs
+      if (!nodeIds.has(fromId)) {
+        console.warn(`fromId "${fromId}" not found among planets or satellites.`);
+        return;
+      }
+      if (!nodeIds.has(toId)) {
+        console.warn(`toId "${toId}" not found among planets or satellites.`);
+        return;
       }
 
-      // From satellite_out to Mars
-      const distanceToMarsAU = calculateDistanceAU(satPosition, mars.position);
-      if (distanceToMarsAU <= maxDistanceAU) {
-        const distanceKm = distanceToMarsAU * AU_IN_KM;
-        const gbpsCapacity = calculateGbps(distanceKm);
-        const latencySeconds = calculateLatency(distanceKm);
-        const marsId = nodeIds.get("Mars");
-        addEdge(satOutId, marsId, gbpsCapacity);
-        possibleLinks.push({
-          fromId: satName,
-          toId: "Mars",
-          fromNodeId: satOutId, // Include fromNodeId
-          toNodeId: marsId, // Include toNodeId
-          distanceAU: distanceToMarsAU,
-          distanceKm,
-          latencySeconds,
-          gbpsCapacity,
-        });
-      }
+      const fromNodeId = nodeIds.get(fromId);
+      const toNodeId = nodeIds.get(toId);
+
+      addEdge(fromNodeId, toNodeId, gbpsCapacity);
     });
 
-    // Satellites to Satellites
-    for (let i = 0; i < satellites.length; i++) {
-      const satA = satellites[i];
-      const satAOutId = nodeIds.get(`${satA.name}_out`);
-      const satAName = satA.name;
-      for (let j = 0; j < satellites.length; j++) {
-        if (i === j) continue;
-        const satB = satellites[j];
-        const satBInId = nodeIds.get(`${satB.name}_in`);
-        const satBName = satB.name;
-        const distanceAU = calculateDistanceAU(satA.position, satB.position);
-        if (distanceAU <= maxDistanceAU) {
-          const distanceKm = distanceAU * AU_IN_KM;
-          const gbpsCapacity = calculateGbps(distanceKm);
-          const latencySeconds = calculateLatency(distanceKm);
-          addEdge(satAOutId, satBInId, gbpsCapacity);
-          possibleLinks.push({
-            fromId: satAName,
-            toId: satBName,
-            fromNodeId: satAOutId, // Use node IDs
-            toNodeId: satBInId, // Use node IDs
-            distanceAU,
-            distanceKm,
-            latencySeconds,
-            gbpsCapacity,
-          });
-        }
-      }
-    }
+    console.log("Graph Construction Complete:", graph);
 
-    // Earth to Mars direct link (if within max distance)
-    const earthMarsDistanceAU = calculateDistanceAU(earth.position, mars.position);
-    if (earthMarsDistanceAU <= maxDistanceAU) {
-      const earthId = nodeIds.get("Earth");
-      const marsId = nodeIds.get("Mars");
-      const distanceKm = earthMarsDistanceAU * AU_IN_KM;
-      const gbpsCapacity = calculateGbps(distanceKm);
-      const latencySeconds = calculateLatency(distanceKm);
-      addEdge(earthId, marsId, gbpsCapacity);
-      possibleLinks.push({
-        fromId: "Earth",
-        toId: "Mars",
-        fromNodeId: earthId, // Include fromNodeId
-        toNodeId: marsId, // Include toNodeId
-        distanceAU: earthMarsDistanceAU,
-        distanceKm,
-        latencySeconds,
-        gbpsCapacity,
-      });
-    }
+    // Implement the Edmonds-Karp Algorithm
+    const source = nodeIds.get("Earth");
+    const sink = nodeIds.get("Mars");
 
-    // Now, we need to implement the Edmonds-Karp algorithm
-    const maxFlowResult = this.edmondsKarp(graph, capacities, nodeIds.get("Earth"), nodeIds.get("Mars"));
+    const maxFlowResult = this.edmondsKarp(graph, capacities, source, sink);
 
-    // Extract the flows on each edge
+    // Extract the Flows on Each Link
     const flows = maxFlowResult.flows;
 
-    // Prepare the output links with flow > 0
+    // Prepare the Output Links with flow > 0
     const outputLinks = [];
 
-    for (const link of possibleLinks) {
-      const edgeKey = `${link.fromNodeId}_${link.toNodeId}`; // Use node IDs to construct edgeKey
-      const flow = flows[edgeKey] || 0;
-      if (flow > 0) {
+    finalLinks.forEach((link) => {
+      const { fromId, toId, distanceAU, distanceKm, latencySeconds, gbpsCapacity } = link;
+
+      // Retrieve Node IDs
+      const fromNodeId = nodeIds.get(fromId);
+      const toNodeId = nodeIds.get(toId);
+
+      // Define Edge Keys
+      const forwardEdgeKey = `${fromNodeId}_${toNodeId}`;
+      const reverseEdgeKey = `${toNodeId}_${fromNodeId}`;
+
+      // Calculate Net Flow (Forward - Reverse)
+      const forwardFlow = flows[forwardEdgeKey] || 0;
+      const reverseFlow = flows[reverseEdgeKey] || 0;
+      const netFlow = forwardFlow - reverseFlow;
+
+      if (netFlow > 0) {
         outputLinks.push({
-          fromId: link.fromId,
-          toId: link.toId,
-          distanceAU: Math.round(link.distanceAU * 1000000) / 1000000,
-          distanceKm: Math.round(link.distanceKm),
-          latencySeconds: Math.round(link.latencySeconds * 10) / 10,
-          gbpsCapacity: Math.round(link.gbpsCapacity * 1000000) / 1000000,
-          gbpsFlowActual: Math.round(flow * 1000000) / 1000000,
+          fromId: fromId,
+          toId: toId,
+          distanceAU: Math.round(distanceAU * 1e6) / 1e6,
+          distanceKm: Math.round(distanceKm),
+          latencySeconds: Math.round(latencySeconds * 10) / 10,
+          gbpsCapacity: Math.round(gbpsCapacity * 1e6) / 1e6,
+          gbpsFlowActual: Math.round(netFlow * 1e6) / 1e6,
         });
       }
-    }
+      // Optionally, handle negative flows if needed
+      else if (netFlow < 0) {
+        outputLinks.push({
+          fromId: toId,
+          toId: fromId,
+          distanceAU: Math.round(distanceAU * 1e6) / 1e6,
+          distanceKm: Math.round(distanceKm),
+          latencySeconds: Math.round(latencySeconds * 10) / 10,
+          gbpsCapacity: Math.round(gbpsCapacity * 1e6) / 1e6,
+          gbpsFlowActual: Math.round(-netFlow * 1e6) / 1e6,
+        });
+      }
+    });
 
     return { links: outputLinks, maxFlow: maxFlowResult.maxFlow };
   }
@@ -706,7 +614,7 @@ export class SimNetwork {
         }
       }
 
-      // If we didn't find a path to the sink, we're done
+      // If no path to sink, terminate
       if (!(sink in parents)) break;
 
       // Find minimum residual capacity along the path
