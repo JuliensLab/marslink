@@ -79,5 +79,5 @@ export function helioCoords(ele, date) {
     if (ele.rotationHours.z) rotation.z = computeRotationAngle(ele.rotationHours.z, elapsedSeconds);
   }
 
-  return { x, y, z, rotation };
+  return { x, y, z, rotation, vpo };
 }

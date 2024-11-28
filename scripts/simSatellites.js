@@ -9,8 +9,10 @@ export class SimSatellites {
 
   setSatellitesConfig(satellitesConfig) {
     this.satellites = [];
-    for (let config of satellitesConfig) this.satellites.push(...this.generateSatellites(config));
-    // return this.satellites;
+    const newSatellites = [];
+    for (let config of satellitesConfig) newSatellites.push(...this.generateSatellites(config));
+    this.satellites = newSatellites.slice(0, 1500);
+    console.log(`${this.satellites.length} SATELLITES`);
   }
 
   updateSatellitesPositions(simDaysSinceStart) {
@@ -19,7 +21,7 @@ export class SimSatellites {
   }
 
   generateSatellites(config) {
-    const { satCount, satDistanceSun, ringName, ringType, sideExtensionDeg, laserPortsPerSatellite, failedSatellitesPct } = config;
+    const { satCount, satDistanceSun, ringName, ringType, sideExtensionDeg } = config;
     if (satCount == 0) return [];
     const satellites = [];
     if (ringType == "Circular") {
@@ -27,11 +29,12 @@ export class SimSatellites {
       const n = this.meanMotion(a);
       const orbitdays = 360 / n;
       const longIncrement = 360 / satCount;
-      for (let i = 0; i < satCount; i++)
-        if (Math.random() >= failedSatellitesPct / 100) {
-          const name = `${ringName}-${i}`;
-          satellites.push(this.generateSatellite(ringName, ringType, a, n, i * longIncrement, orbitdays, laserPortsPerSatellite, name));
-        }
+      for (let i = 0; i < satCount; i++) {
+        const name = `${ringName}-${i}`;
+        const long = i * longIncrement;
+        const neighbors = [`${ringName}-${(i + 1) % satCount}`, `${ringName}-${(i - 1 + satCount) % satCount}`];
+        satellites.push(this.generateSatellite(ringName, ringType, a, n, long, orbitdays, name, neighbors));
+      }
     } else {
       let a;
       let n;
@@ -46,35 +49,40 @@ export class SimSatellites {
       const satCountOneSide = Math.ceil(satCount / 2);
       const longIncrement = sideExtensionDeg / satCountOneSide;
       for (let i = 0; i < satCountOneSide; i++) {
-        if (Math.random() >= failedSatellitesPct / 100) {
-          let name = `${ringName}-${i + 1}`;
-          satellites.push(
-            this.generateSatellite(ringName, ringType, a, n, (i + 1) * longIncrement, orbitdays, laserPortsPerSatellite, name)
-          );
+        const long = (i + 1) * longIncrement;
+        const name = `${ringName}-${i}`;
+        let neighbors = [];
+        if (i == 0) neighbors.push(`${ringType}`);
+        if (i > 0) neighbors.push(`${ringName}-${i - 1}`);
+        if (i < satCountOneSide - 1) neighbors.push(`${ringName}-${i + 1}`);
+        satellites.push(this.generateSatellite(ringName, ringType, a, n, long, orbitdays, name, neighbors));
 
-          if (!(sideExtensionDeg == 180 && i == satCountOneSide - 1)) {
-            let name = `${ringName}-${-(i + 1)}`;
-            satellites.push(
-              this.generateSatellite(ringName, ringType, a, n, -(i + 1) * longIncrement, orbitdays, laserPortsPerSatellite, name)
-            );
-          }
+        if (!(sideExtensionDeg == 180 && i == satCountOneSide - 1)) {
+          const name = `${ringName}--${i}`;
+          neighbors = [];
+          if (i == 0) neighbors.push(`${ringType}`);
+          if (i > 0) neighbors.push(`${ringName}--${i - 1}`);
+          if (i < satCountOneSide - 1) neighbors.push(`${ringName}--${i + 1}`);
+          satellites.push(this.generateSatellite(ringName, ringType, a, n, -long, orbitdays, name, neighbors));
         }
       }
     }
     return satellites;
   }
 
-  generateSatellite(ringName, ringType, a, n, long, orbitdays, laserPortsPerSatellite, name) {
+  generateSatellite(ringName, ringType, a, n, long, orbitdays, name, neighbors) {
     const elements = this.getOrbitaElements(ringType, a, n, long);
     const satelliteData = {
       name,
       ...elements,
-      laserPortsPerSatellite,
       diameterKm: 10000,
       orbitdays: orbitdays,
       rotationHours: 0,
       Dele: 2450680.5,
       color: [255, 255, 255],
+      long,
+      ringName,
+      neighbors,
     };
     return satelliteData;
   }
@@ -103,11 +111,11 @@ export class SimSatellites {
     else
       return {
         i: 0,
-        o: 49.5664,
-        p: 336.0882,
+        o: 49.5664, //RAAN
+        p: 336.0882, // arg perigee
         a: a,
         n: n,
-        e: 0.05,
+        e: 0, //0.05, // eccentricity
         l: long,
       };
   }

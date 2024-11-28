@@ -47,6 +47,14 @@ export class SimDisplay {
    *                                   Defaults to document.body if not provided.
    */
   constructor(container = document.body) {
+    // === Styles ===
+    this.styles = {
+      links: {
+        inactive: { color: 0x555555, opacity: 0.1 },
+        active: { colormax: 0xff0000, colormin: 0x0000ff, opacity: 0.8, gbpsmax: 1, gbpsmin: 0.1 },
+      },
+    };
+
     // === Scene Setup ===
     this.scene = new THREE.Scene();
 
@@ -100,14 +108,6 @@ export class SimDisplay {
     // Initialize links arrays
     this.possibleLinks = [];
     this.activeLinks = [];
-
-    // === Styles ===
-    this.styles = {
-      links: {
-        inactive: { color: 0x222222, opacity: 0.1 },
-        active: { colormax: 0xff0000, colormin: 0x0000ff, opacity: 0.8 },
-      },
-    };
 
     // === Load Scene Elements ===
     this.loadScene();
@@ -382,9 +382,13 @@ export class SimDisplay {
     const colors = new Float32Array(numLinks * 2 * 3);
 
     // Calculate min and max flow for color mapping (for active links only)
-    const flows = this.activeLinks.map((link) => link.gbpsFlowActual);
-    const maxFlow = Math.max(...flows);
-    const minFlow = Math.min(...flows);
+    // const flows = this.activeLinks.map((link) => link.gbpsFlowActual);
+    // const maxFlow = Math.max(...flows);
+    // const minFlow = Math.min(...flows);
+
+    const maxFlow = this.styles.links.active.gbpsmax;
+    const minFlow = this.styles.links.active.gbpsmin;
+    console.log(maxFlow, minFlow);
 
     for (let i = 0; i < numLinks; i++) {
       const link = allLinks[i];
