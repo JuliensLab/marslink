@@ -119,7 +119,6 @@ export class SimSatellites {
   }
 
   getOrbitaElements(ringType, a, n, eccentricity, argPeri, earthMarsInclinationPct, long) {
-    console.log(earthMarsInclinationPct);
     if (ringType == "Mars")
       return {
         i: 1.84992,
