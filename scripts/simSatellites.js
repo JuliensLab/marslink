@@ -11,8 +11,8 @@ export class SimSatellites {
     this.satellites = [];
     const newSatellites = [];
     for (let config of satellitesConfig) newSatellites.push(...this.generateSatellites(config));
-    this.satellites = newSatellites.slice(0, 2000);
-    console.log(`${this.satellites.length} SATELLITES`);
+    this.satellites = newSatellites; //.slice(0, 2000);
+    // console.log(`${this.satellites.length} SATELLITES`);
   }
 
   updateSatellitesPositions(simDaysSinceStart) {
@@ -21,7 +21,7 @@ export class SimSatellites {
   }
 
   generateSatellites(config) {
-    const { satCount, satDistanceSun, ringName, ringType, sideExtensionDeg } = config;
+    const { satCount, satDistanceSun, ringName, ringType, sideExtensionDeg, eccentricity, argPeri, earthMarsInclinationPct } = config;
     if (satCount == 0) return [];
     const satellites = [];
     if (ringType == "Circular") {
@@ -33,7 +33,22 @@ export class SimSatellites {
         const name = `${ringName}-${i}`;
         const long = i * longIncrement;
         const neighbors = [`${ringName}-${(i + 1) % satCount}`, `${ringName}-${(i - 1 + satCount) % satCount}`];
-        satellites.push(this.generateSatellite(ringName, ringType, a, n, long, orbitdays, name, neighbors));
+        satellites.push(
+          this.generateSatellite(ringName, ringType, a, n, eccentricity, argPeri, earthMarsInclinationPct, long, orbitdays, name, neighbors)
+        );
+      }
+    } else if (ringType == "Eccentric") {
+      const a = satDistanceSun;
+      const n = this.meanMotion(a);
+      const orbitdays = 360 / n;
+      const longIncrement = 360 / satCount;
+      for (let i = 0; i < satCount; i++) {
+        const name = `${ringName}-${i}`;
+        const long = i * longIncrement;
+        const neighbors = [`${ringName}-${(i + 1) % satCount}`, `${ringName}-${(i - 1 + satCount) % satCount}`];
+        satellites.push(
+          this.generateSatellite(ringName, ringType, a, n, eccentricity, argPeri, earthMarsInclinationPct, long, orbitdays, name, neighbors)
+        );
       }
     } else {
       let a;
@@ -55,7 +70,9 @@ export class SimSatellites {
         if (i == 0) neighbors.push(`${ringType}`);
         if (i > 0) neighbors.push(`${ringName}-${i - 1}`);
         if (i < satCountOneSide - 1) neighbors.push(`${ringName}-${i + 1}`);
-        satellites.push(this.generateSatellite(ringName, ringType, a, n, long, orbitdays, name, neighbors));
+        satellites.push(
+          this.generateSatellite(ringName, ringType, a, n, eccentricity, argPeri, earthMarsInclinationPct, long, orbitdays, name, neighbors)
+        );
 
         if (!(sideExtensionDeg == 180 && i == satCountOneSide - 1)) {
           const name = `${ringName}--${i}`;
@@ -63,15 +80,29 @@ export class SimSatellites {
           if (i == 0) neighbors.push(`${ringType}`);
           if (i > 0) neighbors.push(`${ringName}--${i - 1}`);
           if (i < satCountOneSide - 1) neighbors.push(`${ringName}--${i + 1}`);
-          satellites.push(this.generateSatellite(ringName, ringType, a, n, -long, orbitdays, name, neighbors));
+          satellites.push(
+            this.generateSatellite(
+              ringName,
+              ringType,
+              a,
+              n,
+              eccentricity,
+              argPeri,
+              earthMarsInclinationPct,
+              -long,
+              orbitdays,
+              name,
+              neighbors
+            )
+          );
         }
       }
     }
     return satellites;
   }
 
-  generateSatellite(ringName, ringType, a, n, long, orbitdays, name, neighbors) {
-    const elements = this.getOrbitaElements(ringType, a, n, long);
+  generateSatellite(ringName, ringType, a, n, eccentricity, argPeri, earthMarsInclinationPct, long, orbitdays, name, neighbors) {
+    const elements = this.getOrbitaElements(ringType, a, n, eccentricity, argPeri, earthMarsInclinationPct, long);
     const satelliteData = {
       name,
       ...elements,
@@ -87,7 +118,8 @@ export class SimSatellites {
     return satelliteData;
   }
 
-  getOrbitaElements(ringType, a, n, long) {
+  getOrbitaElements(ringType, a, n, eccentricity, argPeri, earthMarsInclinationPct, long) {
+    console.log(earthMarsInclinationPct);
     if (ringType == "Mars")
       return {
         i: 1.84992,
@@ -106,16 +138,26 @@ export class SimSatellites {
         a: 1.00002,
         n: 0.9855796,
         e: 0.0166967,
-        l: (328.40353 + +long + 360) % 360,
+        l: (328.40353 + long + 360) % 360,
       };
-    else
+    else if (ringType == "Circular")
       return {
-        i: 0,
+        i: (earthMarsInclinationPct / 100) * 1.84992,
         o: 49.5664, //RAAN
-        p: 336.0882, // arg perigee
+        p: 0, // arg perigee
         a: a,
         n: n,
-        e: 0, //0.05, // eccentricity
+        e: eccentricity,
+        l: long,
+      };
+    else if (ringType == "Eccentric")
+      return {
+        i: (earthMarsInclinationPct / 100) * 1.84992,
+        o: 49.5664, //RAAN
+        p: argPeri, // arg perigee
+        a: a,
+        n: n,
+        e: eccentricity,
         l: long,
       };
   }

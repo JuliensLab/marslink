@@ -382,13 +382,13 @@ export class SimDisplay {
     const colors = new Float32Array(numLinks * 2 * 3);
 
     // Calculate min and max flow for color mapping (for active links only)
-    // const flows = this.activeLinks.map((link) => link.gbpsFlowActual);
-    // const maxFlow = Math.max(...flows);
-    // const minFlow = Math.min(...flows);
+    const flows = this.activeLinks.map((link) => link.gbpsFlowActual);
+    const maxFlow = Math.max(...flows);
+    const minFlow = Math.min(...flows);
 
-    const maxFlow = this.styles.links.active.gbpsmax;
-    const minFlow = this.styles.links.active.gbpsmin;
-    console.log(maxFlow, minFlow);
+    // const maxFlow = this.styles.links.active.gbpsmax;
+    // const minFlow = this.styles.links.active.gbpsmin;
+    // console.log(maxFlow, minFlow);
 
     for (let i = 0; i < numLinks; i++) {
       const link = allLinks[i];

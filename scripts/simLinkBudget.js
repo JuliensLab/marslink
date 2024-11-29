@@ -10,6 +10,9 @@ export class SimLinkBudget {
   setTechnologyConfig(technologyConfig) {
     this.baseGbps = technologyConfig["current_technology_performance.current-throughput-gbps"];
     this.baseDistanceKm = technologyConfig["current_technology_performance.current-distance-km"];
+    this.maxDistanceAU = technologyConfig["simulation.maxDistanceAU"];
+    this.calctimeMs = technologyConfig["simulation.calctimeSec"] * 1000;
+    this.maxLinksPerSatellite = technologyConfig["capability.laser-ports-per-satellite"];
 
     const currentTelescopeDiameterM = 0.1;
     const telescopeAreaImprovement = (technologyConfig["technology_improvement.telescope-area-improvement"] = Math.pow(

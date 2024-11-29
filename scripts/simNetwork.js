@@ -1,14 +1,17 @@
 // simNetwork.js
 
 export class SimNetwork {
-  constructor() {}
+  constructor(simLinkBudget) {
+    this.AU_IN_KM = 149597871; // 1 AU in kilometers
+    this.SPEED_OF_LIGHT_KM_S = 299792; // Speed of light in km/s}
+    this.simLinkBudget = simLinkBudget;
+  }
 
   /**
-   * Generates all possible links between planets and satellites based on maxDistanceAU.
+   * Generates all possible links between planets and satellites.
    *
    * @param {Array} planets - Array of planet objects, each with properties { name, position: { x, y, z } }.
    * @param {Array} satellites - Array of satellite objects with properties { name, position: { x, y, z } }.
-   * @param {number} [maxDistanceAU=0.3] - Maximum distance in AU for creating a link.
    * @returns {Array} links - Array of link objects with properties:
    *                          {
    *                            fromId: string,
@@ -20,55 +23,31 @@ export class SimNetwork {
    *                          }
    */
 
-  getPossibleLinks(planets, satellites, simLinkBudget, maxDistanceAU, maxLinksPerSatellite) {
-    // Constants
-    const AU_IN_KM = 149597871; // 1 AU in kilometers
-    const SPEED_OF_LIGHT_KM_S = 299792; // Speed of light in km/s
-    const planetsOptions = ["Earth", "Mars"];
+  // Function to calculate Euclidean distance in AU between two satellites
+  calculateDistance2DAU = (pos1, pos2) => {
+    const dx = pos1.x - pos2.x;
+    const dy = pos1.y - pos2.y;
+    return Math.sqrt(dx * dx + dy * dy);
+  };
 
-    // Filter planets based on the provided options
-    const filteredPlanets = planets.filter((planet) => planetsOptions.includes(planet.name));
+  // Helper Functions
+  calculateDistanceAU = (a, b) => {
+    return Math.sqrt(Math.pow(a.x - b.x, 2) + Math.pow(a.y - b.y, 2) + Math.pow(a.z - b.z, 2));
+  };
 
-    // Positions mapping
-    const positions = {};
+  calculateGbps = (distanceKm) => {
+    return this.simLinkBudget.calculateGbps(distanceKm);
+  };
 
-    // Collect planet positions
-    filteredPlanets.forEach((planet) => {
-      positions[planet.name] = planet.position;
-    });
+  calculateLatency = (distanceKm) => {
+    return distanceKm / this.SPEED_OF_LIGHT_KM_S;
+  };
 
-    // Collect satellite positions
-    satellites.forEach((satellite) => {
-      positions[satellite.name] = satellite.position;
-    });
+  calculateDistanceToSun = (position) => {
+    return Math.sqrt(Math.pow(position.x, 2) + Math.pow(position.y, 2) + Math.pow(position.z, 2));
+  };
 
-    // Helper Functions
-    const calculateDistanceAU = (a, b) => {
-      return Math.sqrt(Math.pow(a.x - b.x, 2) + Math.pow(a.y - b.y, 2) + Math.pow(a.z - b.z, 2));
-    };
-
-    const calculateGbps = (distanceKm) => {
-      return simLinkBudget.calculateGbps(distanceKm);
-    };
-
-    const calculateLatency = (distanceKm) => {
-      return distanceKm / SPEED_OF_LIGHT_KM_S;
-    };
-
-    const calculateDistanceToSun = (position) => {
-      return Math.sqrt(Math.pow(position.x, 2) + Math.pow(position.y, 2) + Math.pow(position.z, 2));
-    };
-
-    // Initialize variables
-    const finalLinks = []; // Final list of links to return
-    const linkCounts = {}; // Track the number of links per satellite
-
-    // Initialize linkCounts for satellites
-    satellites.forEach((satellite) => {
-      linkCounts[satellite.name] = 0;
-    });
-
-    // Step 1: Add Neighbor Links for All Satellites (Circular, Mars, and Earth Rings)
+  getPossibleLinks(planets, satellites) {
     // Group satellites by ringName
     const rings = {}; // { ringName: [satellite1, satellite2, ...] }
 
@@ -78,6 +57,47 @@ export class SimNetwork {
       rings[ringName].push(satellite);
     });
 
+    // Positions mapping
+    const positions = {};
+
+    // Collect satellite positions
+    satellites.forEach((satellite) => {
+      positions[satellite.name] = satellite.position;
+    });
+
+    // Initialize variables
+    const linkCounts = {}; // Track the number of links per satellite
+
+    // Initialize linkCounts for satellites
+    satellites.forEach((satellite) => {
+      linkCounts[satellite.name] = 0;
+    });
+
+    // Constants
+    const planetsOptions = ["Earth", "Mars"];
+
+    // Filter planets based on the provided options
+    const filteredPlanets = planets.filter((planet) => planetsOptions.includes(planet.name));
+
+    // Collect planet positions
+    filteredPlanets.forEach((planet) => {
+      positions[planet.name] = planet.position;
+    });
+
+    const finalLinks = []; // Final list of links to return
+
+    this.intraRing(rings, positions, linkCounts, finalLinks);
+
+    this.interCircularRings(rings, positions, linkCounts, finalLinks);
+
+    this.marsEarthRings(rings, positions, linkCounts, finalLinks);
+
+    this.eccentricRings(rings, positions, linkCounts, finalLinks);
+
+    return finalLinks;
+  }
+
+  intraRing(rings, positions, linkCounts, finalLinks) {
     // Create neighbor links for all rings (including Mars and Earth)
     Object.entries(rings).forEach(([ringName, ringSatellites]) => {
       ringSatellites.forEach((satellite) => {
@@ -93,14 +113,14 @@ export class SimNetwork {
           if (linkExists) return;
 
           // Calculate distances and other metrics
-          const distanceAU = calculateDistanceAU(positions[satellite.name], positions[neighborName]);
-          const distanceKm = distanceAU * AU_IN_KM;
+          const distanceAU = this.calculateDistanceAU(positions[satellite.name], positions[neighborName]);
+          const distanceKm = distanceAU * this.AU_IN_KM;
 
           // Enforce maximum distance constraint
-          if (distanceAU > maxDistanceAU) return;
+          if (distanceAU > this.simLinkBudget.maxDistanceAU) return;
 
-          const gbpsCapacity = calculateGbps(distanceKm);
-          const latencySeconds = calculateLatency(distanceKm);
+          const gbpsCapacity = this.calculateGbps(distanceKm);
+          const latencySeconds = this.calculateLatency(distanceKm);
 
           // Add the link
           finalLinks.push({
@@ -118,18 +138,219 @@ export class SimNetwork {
         });
       });
     });
+  }
 
-    // console.log("Step 1: Added Neighbor Links for All Rings");
+  eccentricRings(rings, positions, linkCounts, finalLinks) {
+    // Step 3: Add Links for Eccentric Rings with Valid Ring Filtering and Shortest Links Prioritization
 
+    // Constants for binning
+    const BIN_SIZE_AU = 0.1;
+
+    // Define valid ring names: circular and eccentric rings only
+    const circularRingNames = Object.keys(rings).filter((ringName) => ringName.startsWith("ring_circ"));
+    const eccentricRingNames = Object.keys(rings).filter((ringName) => ringName.startsWith("ring_ecce"));
+    const validRingNames = new Set([...circularRingNames, ...eccentricRingNames]);
+
+    // Initialize the spatial matrix
+    const matrix_coords = {};
+
+    // Function to calculate bin index
+    const getBinIndex = (coord) => Math.floor(coord / BIN_SIZE_AU);
+
+    // Populate the spatial matrix with satellites from valid rings only
+    Object.keys(rings)
+      .filter((ringName) => validRingNames.has(ringName)) // Only include valid rings
+      .flatMap((ringName) => rings[ringName]) // Flatten satellites
+      .forEach((satellite) => {
+        const { x, y } = positions[satellite.name];
+        const binX = getBinIndex(x);
+        const binY = getBinIndex(y);
+
+        if (!matrix_coords[binX]) {
+          matrix_coords[binX] = {};
+        }
+        if (!matrix_coords[binX][binY]) {
+          matrix_coords[binX][binY] = [];
+        }
+
+        matrix_coords[binX][binY].push(satellite);
+      });
+
+    // Identify eccentric satellites (from valid eccentric rings)
+    const eccentricSatellites = eccentricRingNames.flatMap((ringName) => rings[ringName]);
+
+    // Initialize mappings to track connections
+    const targetConnectedRings = {}; // Tracks which rings have connected to each target satellite
+    const eccentricConnectedRings = {}; // Tracks which rings each eccentric satellite has connected to
+
+    // Initialize an array to hold all possible link options
+    const possibleLinks = [];
+
+    // Populate possibleLinks with all valid link options from eccentric satellites
+    eccentricSatellites.forEach((eccSatellite) => {
+      const { x: eccX, y: eccY } = positions[eccSatellite.name];
+      const binX = getBinIndex(eccX);
+      const binY = getBinIndex(eccY);
+
+      // Collect satellites from the 9 surrounding bins
+      const nearbySatellites = [];
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+          const currentBinX = binX + dx;
+          const currentBinY = binY + dy;
+
+          if (matrix_coords[currentBinX] && matrix_coords[currentBinX][currentBinY]) {
+            matrix_coords[currentBinX][currentBinY].forEach((sat) => {
+              // Exclude the satellite itself
+              if (sat.name === eccSatellite.name) return;
+              nearbySatellites.push(sat);
+            });
+          }
+        }
+      }
+
+      // For each nearby satellite, create a potential link
+      nearbySatellites.forEach((targetSat) => {
+        // Ensure the target satellite is from a valid ring (already filtered in matrix_coords)
+
+        const distanceAU = this.calculateDistance2DAU(positions[eccSatellite.name], positions[targetSat.name]);
+
+        // Enforce maximum distance constraint early to reduce the number of possible links
+        if (distanceAU > this.simLinkBudget.maxDistanceAU) return;
+
+        // Additional Constraint:
+        // If both satellites are eccentric, ensure they are not from the same ring
+        if (
+          eccentricRingNames.includes(eccSatellite.ringName) &&
+          eccentricRingNames.includes(targetSat.ringName) &&
+          eccSatellite.ringName === targetSat.ringName
+        ) {
+          return;
+        }
+
+        // Create a link object
+        possibleLinks.push({
+          fromSatellite: eccSatellite,
+          toSatellite: targetSat,
+          distanceAU,
+          distanceKm: distanceAU * this.AU_IN_KM,
+          gbpsCapacity: this.calculateGbps(distanceAU * this.AU_IN_KM),
+          latencySeconds: this.calculateLatency(distanceAU * this.AU_IN_KM),
+        });
+      });
+    });
+
+    // Determine the best Gbps capacity from the possibleLinks
+    const bestGbpsCapacityEcce = possibleLinks.reduce((max, link) => Math.max(max, link.gbpsCapacity), 0);
+
+    // Define the minimum Gbps capacity percentage (e.g., 80%)
+    const minGbpsCapacityPctOfBestEcce = 0.01; // Adjust as needed
+
+    // Filter the possibleLinks to retain only those with sufficient capacity
+    const filteredLinks = possibleLinks.filter((link) => link.gbpsCapacity >= bestGbpsCapacityEcce * minGbpsCapacityPctOfBestEcce);
+
+    // Sort all filtered links by distance ascending (shortest first)
+    filteredLinks.sort((a, b) => a.distanceAU - b.distanceAU);
+
+    // Function to check if a target satellite can accept a new connection from the current ring
+    const canAcceptConnection = (targetSat, currentRingName) => {
+      if (linkCounts[targetSat.name] >= this.simLinkBudget.maxLinksPerSatellite) return false;
+      if (targetSat.distanceAU > this.simLinkBudget.maxDistanceAU) return false;
+
+      // Initialize the set if it doesn't exist
+      if (!targetConnectedRings[targetSat.name]) {
+        targetConnectedRings[targetSat.name] = new Set();
+      }
+
+      // Check if the target satellite has already been connected to by the current ring
+      if (targetConnectedRings[targetSat.name].has(currentRingName)) {
+        return false;
+      }
+
+      // Additional Constraint:
+      // If the target satellite is eccentric, ensure it's not from the same ring
+      if (eccentricRingNames.includes(targetSat.ringName)) {
+        if (targetSat.ringName === currentRingName) {
+          return false;
+        }
+      }
+
+      return true;
+    };
+
+    // Function to check if the eccentric satellite has already connected to the target ring
+    const hasAlreadyConnectedToRing = (eccSatellite, targetRingName) => {
+      if (!eccentricConnectedRings[eccSatellite.name]) {
+        eccentricConnectedRings[eccSatellite.name] = new Set();
+      }
+      return eccentricConnectedRings[eccSatellite.name].has(targetRingName);
+    };
+
+    // Iterate through the sorted list of filtered links and add them if constraints are satisfied
+    filteredLinks.forEach((link) => {
+      const fromId = link.fromSatellite.name;
+      const toId = link.toSatellite.name;
+      const currentRingName = link.fromSatellite.ringName;
+      const targetRingName = link.toSatellite.ringName;
+
+      // Check if the eccentric satellite has already connected to the target ring
+      if (hasAlreadyConnectedToRing(link.fromSatellite, targetRingName)) return;
+
+      // Check if the target satellite can accept the connection
+      if (!canAcceptConnection(link.toSatellite, currentRingName)) return;
+
+      // If the target is eccentric, ensure it hasn't already connected to the same ring
+      if (eccentricRingNames.includes(link.toSatellite.ringName) && link.toSatellite.ringName === currentRingName) {
+        return;
+      }
+
+      // Order the IDs lexicographically to avoid duplicate links
+      const [orderedFromId, orderedToId] = fromId < toId ? [fromId, toId] : [toId, fromId];
+
+      // Check if the link already exists
+      const linkExists = finalLinks.some((existingLink) => existingLink.fromId === orderedFromId && existingLink.toId === orderedToId);
+      if (linkExists) return;
+
+      // Enforce maximum distance constraint (already checked, but double-checking)
+      if (link.distanceAU > this.simLinkBudget.maxDistanceAU) return;
+
+      // Add the link
+      finalLinks.push({
+        fromId: orderedFromId,
+        toId: orderedToId,
+        distanceAU: link.distanceAU,
+        distanceKm: link.distanceKm,
+        latencySeconds: link.latencySeconds,
+        gbpsCapacity: link.gbpsCapacity,
+      });
+
+      // Increment link counts
+      linkCounts[orderedFromId]++;
+      linkCounts[orderedToId]++;
+
+      // Update connection tracking
+      if (!targetConnectedRings[link.toSatellite.name]) {
+        targetConnectedRings[link.toSatellite.name] = new Set();
+      }
+      targetConnectedRings[link.toSatellite.name].add(currentRingName);
+
+      if (!eccentricConnectedRings[link.fromSatellite.name]) {
+        eccentricConnectedRings[link.fromSatellite.name] = new Set();
+      }
+      eccentricConnectedRings[link.fromSatellite.name].add(targetRingName);
+    });
+  }
+
+  interCircularRings(rings, positions, linkCounts, finalLinks) {
     // Step 2: Add Links for Circular Rings Based on `a` and `vpo` (Excluding Mars and Earth Rings)
     // Identify circular rings (exclude 'ring_mars' and 'ring_earth')
-    const circularRingNames = Object.keys(rings).filter((ringName) => !["ring_mars", "ring_earth"].includes(ringName));
+    const circularRingNames2 = Object.keys(rings).filter((ringName) => ringName.startsWith("ring_circ"));
 
     // Sort circular rings from furthest to closest based on 'a' (descending order)
-    const sortedCircularRings = circularRingNames.slice().sort((a, b) => {
+    const sortedCircularRings = circularRingNames2.slice().sort((a, b) => {
       const aDistance = rings[a][0].a; // 'a' is the distance from the sun in AU
       const bDistance = rings[b][0].a;
-      return bDistance - aDistance; // Descending order: furthest first
+      return aDistance - bDistance; // Descending order: furthest first
     });
 
     // Iterate through each circular ring and link to the next inner ring
@@ -197,29 +418,46 @@ export class SimNetwork {
           }
         };
 
-        const nearestLowerSatellite = findNearestLower();
-        const nearestHigherSatellite = findNearestHigher();
+        const nearestRightSatellite = findNearestLower();
+        const nearestLeftSatellite = findNearestHigher();
+        const distanceAURight = this.calculateDistanceAU(positions[currentSatellite.name], positions[nearestRightSatellite.name]);
+        const distanceAULeft = this.calculateDistanceAU(positions[currentSatellite.name], positions[nearestLeftSatellite.name]);
+        const nearestSatellite =
+          distanceAURight < distanceAULeft
+            ? { satellite: nearestRightSatellite, distanceAU: distanceAURight }
+            : { satellite: nearestLeftSatellite, distanceAU: distanceAULeft };
 
-        const targetSatellites = [nearestLowerSatellite, nearestHigherSatellite];
+        let targetSatellites;
+        if (this.simLinkBudget.maxLinksPerSatellite <= 4) targetSatellites = [nearestSatellite];
+        else
+          targetSatellites = [
+            { satellite: nearestRightSatellite, distanceAU: distanceAURight },
+            { satellite: nearestLeftSatellite, distanceAU: distanceAULeft },
+          ];
 
         targetSatellites.forEach((targetSatellite) => {
-          const toId = targetSatellite.name;
+          const toId = targetSatellite.satellite.name;
           const fromId = currentSatellite.name;
 
           // Check if both satellites can have more links
-          if (linkCounts[fromId] >= maxLinksPerSatellite || linkCounts[toId] >= maxLinksPerSatellite) {
+          if (
+            linkCounts[fromId] >= this.simLinkBudget.maxLinksPerSatellite ||
+            linkCounts[toId] >= this.simLinkBudget.maxLinksPerSatellite
+          ) {
             return;
           }
 
           // Calculate the actual distance
-          const distanceAU = calculateDistanceAU(positions[fromId], positions[toId]);
+          const distanceAU = targetSatellite.distanceAU;
 
           // Enforce maximum distance constraint
-          if (distanceAU > maxDistanceAU) return;
+          if (distanceAU > this.simLinkBudget.maxDistanceAU) return;
 
-          const distanceKm = distanceAU * AU_IN_KM;
-          const gbpsCapacity = calculateGbps(distanceKm);
-          const latencySeconds = calculateLatency(distanceKm);
+          const distanceKm = distanceAU * this.AU_IN_KM;
+          const gbpsCapacity = this.calculateGbps(distanceKm);
+          // bestGbpsCapacity = Math.max(bestGbpsCapacity, gbpsCapacity);
+          // if (gbpsCapacity < bestGbpsCapacity * minGbpsCapacityPctOfBest) return;
+          const latencySeconds = this.calculateLatency(distanceKm);
 
           // To avoid duplicate links, order the IDs lexicographically
           const [orderedFromId, orderedToId] = fromId < toId ? [fromId, toId] : [toId, fromId];
@@ -244,197 +482,165 @@ export class SimNetwork {
         });
       });
     }
+  }
 
-    // console.log("Step 2: Added Links for Circular Rings Based on a and VPO");
+  marsEarthRings(rings, positions, linkCounts, finalLinks) {
+    const binSizeAU = 0.3;
+    const maxConnectionsPerTargetFromSameRing = 1;
 
-    // Step 3: Add Links for Mars and Earth Rings Using VPO Delta
-    // Identify Mars and Earth rings
+    // Identify Mars and Earth rings and add planets to their respective rings
     const earthMarsRings = ["ring_earth", "ring_mars"].filter((ringName) => rings[ringName]);
 
+    // Add Mars and Earth to their respective rings
+    earthMarsRings.forEach((ringName) => {
+      const planetName = ringName.split("_")[1].charAt(0).toUpperCase() + ringName.split("_")[1].slice(1);
+      if (positions[planetName]) {
+        rings[ringName].push({ name: planetName, position: positions[planetName] });
+      }
+    });
     // Precompute ring 'a' values for all rings
     const ringAValues = {};
     Object.keys(rings).forEach((ringName) => {
       ringAValues[ringName] = rings[ringName][0].a; // Assume all satellites in a ring have the same 'a'
     });
 
-    // Function to find the nearest satellite in a circular ring to a given position
-    const findNearestSatellite = (circularSatellites, targetPosition) => {
-      if (circularSatellites.length === 0) return null;
+    // Spatial binning setup
+    const matrix_coords = {};
+    const getBinIndex = (coordinate) => Math.floor(coordinate / binSizeAU);
 
-      // Sort circularSatellites by distance to targetPosition
-      const sortedByDistance = circularSatellites.slice().sort((a, b) => {
-        const distA = calculateDistanceAU(a.position, targetPosition);
-        const distB = calculateDistanceAU(b.position, targetPosition);
-        return distA - distB;
-      });
+    // Populate the spatial matrix with all satellites
+    Object.values(rings)
+      .flat()
+      .forEach((satellite) => {
+        const { x, y } = positions[satellite.name];
+        const binX = getBinIndex(x);
+        const binY = getBinIndex(y);
 
-      return sortedByDistance[0]; // Return the closest satellite
-    };
-
-    // Function to calculate VPO delta for a given ring (Earth or Mars)
-    const calculateVpoDelta = (targetRingName, targetSatellite) => {
-      // Find the nearest circular ring based on 'a' (distance from the sun)
-      const targetA = ringAValues[targetRingName];
-      const otherRingNames = Object.keys(rings).filter((ringName) => !["ring_earth", "ring_mars"].includes(ringName));
-
-      // Find the circular ring with the closest 'a' value to targetA
-      const sortedByA = otherRingNames.slice().sort((a, b) => {
-        return Math.abs(ringAValues[a] - targetA) - Math.abs(ringAValues[b] - targetA);
-      });
-
-      const nearestCircularRingName = sortedByA[0];
-      const nearestCircularRing = rings[nearestCircularRingName];
-
-      if (!nearestCircularRing || nearestCircularRing.length === 0) return 0; // Default delta if no circular ring found
-
-      // Find the nearest satellite in the circular ring to the targetSatellite's position
-      const nearestCircularSatellite = findNearestSatellite(nearestCircularRing, targetSatellite.position);
-
-      if (!nearestCircularSatellite) return 0; // Default delta if no satellite found
-
-      // Calculate VPO delta
-      const vpoDelta = (targetSatellite.position.vpo - nearestCircularSatellite.position.vpo + 360) % 360;
-
-      return vpoDelta;
-    };
-
-    // Calculate VPO deltas for Earth and Mars rings
-    const vpoDeltas = {}; // { 'ring_earth': delta, 'ring_mars': delta }
-
-    earthMarsRings.forEach((targetRingName) => {
-      const targetSatellites = rings[targetRingName];
-      if (targetSatellites.length === 0) return;
-
-      const firstSatellite = targetSatellites[0];
-      const delta = calculateVpoDelta(targetRingName, firstSatellite);
-      vpoDeltas[targetRingName] = delta;
-    });
-    // Function to apply VPO delta and normalize
-    const applyVpoDelta = (vpo, delta) => {
-      return (vpo + delta + 360) % 360;
-    };
-
-    function convertRingToPlanet(ringName) {
-      // Extract the part after the underscore and capitalize it
-      const partAfterUnderscore = ringName.split("_")[1];
-      return partAfterUnderscore.charAt(0).toUpperCase() + partAfterUnderscore.slice(1).toLowerCase();
-    }
-
-    // Add Links for Earth and Mars Rings
-    earthMarsRings.forEach((targetRingName) => {
-      const targetSatellites = rings[targetRingName];
-      // Add Earth and Mars to its ring
-      targetSatellites.push(filteredPlanets.find((planet) => planet.name == convertRingToPlanet(targetRingName)));
-      const vpoDelta = vpoDeltas[targetRingName] || 0;
-
-      targetSatellites.forEach((satellite) => {
-        const satellitePosition = satellite.position;
-        const satelliteDistanceToSun = calculateDistanceToSun(satellitePosition);
-
-        // Determine the closest rings based on 'a' values
-        const otherRingNames = Object.keys(rings).filter((ringName) => ringName !== targetRingName);
-        const ringDifferences = otherRingNames.map((ringName) => {
-          const aValue = ringAValues[ringName];
-          const difference = Math.abs(satelliteDistanceToSun - aValue);
-          return { ringName, difference };
-        });
-
-        // Sort rings by difference
-        ringDifferences.sort((a, b) => a.difference - b.difference);
-
-        // Select closest and second closest rings based on the specified criteria
-        let selectedRings = [];
-        if (ringDifferences.length > 0) {
-          const firstDifference = ringDifferences[0].difference;
-          const secondDifference = ringDifferences[1] ? ringDifferences[1].difference : Infinity;
-
-          if (firstDifference < secondDifference / 2) {
-            selectedRings.push(ringDifferences[0].ringName);
-          } else {
-            selectedRings.push(ringDifferences[0].ringName);
-            if (ringDifferences[1]) {
-              selectedRings.push(ringDifferences[1].ringName);
-            }
-          }
+        if (!matrix_coords[binX]) {
+          matrix_coords[binX] = {};
+        }
+        if (!matrix_coords[binX][binY]) {
+          matrix_coords[binX][binY] = [];
         }
 
-        // For each selected ring, find target satellites
-        selectedRings.forEach((selectedRingName) => {
-          const selectedRingSatellites = rings[selectedRingName];
+        matrix_coords[binX][binY].push(satellite);
+      });
 
-          // Sort selected ring satellites by adjusted VPO distance to current satellite
-          const sortedByVpo = selectedRingSatellites.slice().sort((a, b) => {
-            const currentVpoAdjusted = applyVpoDelta(satellite.position.vpo, -vpoDelta);
-            const vpoA = a.position.vpo;
-            const vpoB = b.position.vpo;
+    // Track connections for target satellites
+    const targetRingConnectionCounts = {}; // { targetSat.name: count }
 
-            const diffA = Math.min(Math.abs(vpoA - currentVpoAdjusted), 360 - Math.abs(vpoA - currentVpoAdjusted));
-            const diffB = Math.min(Math.abs(vpoB - currentVpoAdjusted), 360 - Math.abs(vpoB - currentVpoAdjusted));
-            return diffA - diffB;
-          });
+    Object.values(rings)
+      .flat()
+      .forEach((satellite) => {
+        targetRingConnectionCounts[satellite.name] = 0;
+      });
 
-          // Take the top 10 satellites with nearest adjusted VPO
-          const top10VpoSatellites = sortedByVpo.slice(0, 4);
+    // Collect potential links for Earth and Mars rings
+    let potentialLinks = [];
 
-          // Calculate distances and select the 2 nearest satellites
-          const sortedByDistance = top10VpoSatellites
-            .map((targetSat) => {
-              const distanceAU = calculateDistanceAU(positions[satellite.name], positions[targetSat.name]);
-              return { satellite: targetSat, distanceAU };
-            })
-            .sort((a, b) => a.distanceAU - b.distanceAU);
+    earthMarsRings.forEach((targetRingName) => {
+      const targetSatellites = rings[targetRingName];
+      const excludedRing = targetRingName; // Prevent connecting to the same ring
 
-          const nearestTwoSatellites = sortedByDistance.slice(0, 2).map((item) => item.satellite);
+      // For each satellite in the Mars or Earth ring
+      targetSatellites.forEach((satellite) => {
+        const satellitePosition = positions[satellite.name];
+        const binX = getBinIndex(satellitePosition.x);
+        const binY = getBinIndex(satellitePosition.y);
 
-          // Add links to finalLinks
-          nearestTwoSatellites.forEach((targetSat) => {
-            const toId = targetSat.name;
-            const fromId = satellite.name;
+        let nearestSatellite = null;
+        let nearestDistanceAU = Infinity;
 
-            // Check if both satellites can have more links
-            if (linkCounts[fromId] >= maxLinksPerSatellite || linkCounts[toId] >= maxLinksPerSatellite) {
-              return;
-            }
+        // Explore nearby bins for potential connections
+        const nearbyBins = [
+          [binX - 1, binY - 1],
+          [binX - 1, binY],
+          [binX - 1, binY + 1],
+          [binX, binY - 1],
+          [binX, binY],
+          [binX, binY + 1],
+          [binX + 1, binY - 1],
+          [binX + 1, binY],
+          [binX + 1, binY + 1],
+        ];
 
-            // Calculate the actual distance
-            const distanceAU = calculateDistanceAU(positions[fromId], positions[toId]);
+        nearbyBins.forEach(([bx, by]) => {
+          if (matrix_coords[bx] && matrix_coords[bx][by]) {
+            const binSatellites = matrix_coords[bx][by];
 
-            // Enforce maximum distance constraint
-            // if (distanceAU > maxDistanceAU) return;
+            binSatellites.forEach((targetSat) => {
+              const targetRing = Object.keys(rings).find((ringName) => rings[ringName].includes(targetSat));
 
-            const distanceKm = distanceAU * AU_IN_KM;
-            const gbpsCapacity = calculateGbps(distanceKm);
-            const latencySeconds = calculateLatency(distanceKm);
+              if (!targetRing || targetRing === excludedRing) {
+                return; // Skip if invalid ring or excluded ring
+              }
 
-            // To avoid duplicate links, order the IDs lexicographically
-            const [orderedFromId, orderedToId] = fromId < toId ? [fromId, toId] : [toId, fromId];
+              // Check if the target satellite already has too many connections
+              if (targetRingConnectionCounts[targetSat.name] >= maxConnectionsPerTargetFromSameRing) {
+                return;
+              }
 
-            // Check if the link already exists
-            const linkExists = finalLinks.some((link) => link.fromId === orderedFromId && link.toId === orderedToId);
-            if (linkExists) return;
+              const distanceAU = this.calculateDistanceAU(positions[satellite.name], positions[targetSat.name]);
+              if (distanceAU > this.simLinkBudget.maxDistanceAU) return; // Skip if distance exceeds max
 
-            // Add the link
-            finalLinks.push({
-              fromId: orderedFromId,
-              toId: orderedToId,
-              distanceAU,
-              distanceKm,
-              latencySeconds,
-              gbpsCapacity,
+              // Track the nearest satellite
+              if (distanceAU < nearestDistanceAU) {
+                nearestSatellite = targetSat;
+                nearestDistanceAU = distanceAU;
+              }
             });
-
-            // Increment link counts
-            linkCounts[fromId]++;
-            linkCounts[toId]++;
-          });
+          }
         });
+
+        if (nearestSatellite) {
+          const distanceKm = nearestDistanceAU * this.AU_IN_KM;
+          const gbpsCapacity = this.calculateGbps(distanceKm);
+          const latencySeconds = this.calculateLatency(distanceKm);
+
+          // Order IDs lexicographically to avoid duplicates
+          const [orderedFromId, orderedToId] =
+            satellite.name < nearestSatellite.name ? [satellite.name, nearestSatellite.name] : [nearestSatellite.name, satellite.name];
+
+          potentialLinks.push({
+            fromId: orderedFromId,
+            toId: orderedToId,
+            distanceAU: nearestDistanceAU,
+            distanceKm,
+            latencySeconds,
+            gbpsCapacity,
+          });
+
+          // Increment connection count for the target satellite
+          targetRingConnectionCounts[nearestSatellite.name]++;
+        }
       });
     });
 
-    // console.log("Step 3: Added Links for Mars and Earth Rings Using VPO Delta");
-    console.log(finalLinks);
-    return finalLinks;
+    // Sort potential links by distance (ascending)
+    potentialLinks.sort((a, b) => a.distanceAU - b.distanceAU);
+
+    // Assign links while respecting constraints
+    potentialLinks.forEach((link) => {
+      const { fromId, toId } = link;
+
+      // Initialize link counts if not present
+      if (!(fromId in linkCounts)) linkCounts[fromId] = 0;
+      if (!(toId in linkCounts)) linkCounts[toId] = 0;
+
+      // Check if satellites can have more links
+      if (linkCounts[fromId] >= this.simLinkBudget.maxLinksPerSatellite || linkCounts[toId] >= this.simLinkBudget.maxLinksPerSatellite) {
+        return;
+      }
+
+      // Add the link to finalLinks
+      finalLinks.push(link);
+
+      // Increment link counts
+      linkCounts[fromId]++;
+      linkCounts[toId]++;
+    });
   }
+
   /**
    * Constructs the network graph based on precomputed finalLinks and computes the maximum flow.
    *
@@ -444,9 +650,7 @@ export class SimNetwork {
    * @returns {Object} - An object containing the established links with flow information and the total maximum flow.
    */
   getNetworkData(planets, satellites, finalLinks) {
-    // Constants (if needed)
-    const AU_IN_KM = 149597871; // 1 AU in kilometers
-    const SPEED_OF_LIGHT_KM_S = 299792; // Speed of light in km/s
+    const perfStart = performance.now();
 
     // Node ID Assignment
     const nodeIds = new Map(); // Map to store node IDs
@@ -522,13 +726,14 @@ export class SimNetwork {
       addEdge(fromNodeId, toNodeId, gbpsCapacity);
     });
 
-    console.log("Graph Construction Complete:", graph);
+    // console.log("Graph Construction Complete:", graph);
 
     // Implement the Edmonds-Karp Algorithm
     const source = nodeIds.get("Earth");
     const sink = nodeIds.get("Mars");
 
-    const maxFlowResult = this.edmondsKarp(graph, capacities, source, sink);
+    const maxFlowResult = this.edmondsKarp(graph, capacities, source, sink, perfStart);
+    if (maxFlowResult === null) return { links: [], maxFlowGbps: 0, error: "timed out" };
 
     // Extract the Flows on Each Link
     const flows = maxFlowResult.flows;
@@ -576,8 +781,16 @@ export class SimNetwork {
         });
       }
     });
-
-    return { links: outputLinks, maxFlow: maxFlowResult.maxFlow };
+    return {
+      links: outputLinks,
+      maxFlowGbps: maxFlowResult.maxFlow,
+      graph, // Adjacency list
+      capacities, // Edge capacities
+      flows, // Flow per edge
+      nodeIds, // Map of node names to IDs
+      positions, // Node positions
+      error: null,
+    };
   }
 
   /**
@@ -589,11 +802,12 @@ export class SimNetwork {
    * @param {number} sink - Sink node ID.
    * @returns {Object} - { maxFlow, flows }
    */
-  edmondsKarp(graph, capacities, source, sink) {
+  edmondsKarp(graph, capacities, source, sink, perfStart) {
     const flows = {}; // Edge flows
     let maxFlow = 0;
 
     while (true) {
+      if (performance.now() - perfStart > this.simLinkBudget.calctimeMs) return null;
       // Breadth-First Search (BFS) to find the shortest augmenting path
       const queue = [];
       const parents = {};
@@ -643,5 +857,131 @@ export class SimNetwork {
     }
 
     return { maxFlow, flows };
+  }
+
+  /**
+   * Calculates latencies for the network flows and aggregates the gbps per latency bin.
+   *
+   * @param {Object} networkData - The object returned by getNetworkData containing graph, flows, etc.
+   * @param {Number} binSize - The size of each latency bin in seconds.
+   * @returns {Object} - An object containing the latency histogram, best latency, and average latency.
+   */
+  calculateLatencies(networkData, binSize = 60) {
+    const { graph, flows, nodeIds, capacities } = networkData;
+    const inverseNodeIds = new Map();
+    nodeIds.forEach((id, name) => inverseNodeIds.set(id, name));
+
+    const source = nodeIds.get("Earth");
+    const sink = nodeIds.get("Mars");
+
+    // Initialize variables for statistics
+    const paths = [];
+    let totalFlowLatencyProduct = 0;
+    let totalFlow = 0;
+    let minLatency = Infinity;
+
+    // Helper Function to Find a Path with Positive Flow
+    const findPathWithFlow = () => {
+      const parent = new Array(Object.keys(graph).length).fill(-1);
+      const queue = [];
+      queue.push(source);
+      while (queue.length > 0) {
+        const current = queue.shift();
+        for (const neighbor of graph[current]) {
+          const edgeKey = `${current}_${neighbor}`;
+          if (flows[edgeKey] > 0 && parent[neighbor] === -1 && neighbor !== source) {
+            parent[neighbor] = current;
+            queue.push(neighbor);
+            if (neighbor === sink) break;
+          }
+        }
+      }
+
+      if (parent[sink] === -1) return null; // No path found
+
+      // Reconstruct Path
+      const path = [];
+      let node = sink;
+      while (node !== source) {
+        const prev = parent[node];
+        path.unshift({ from: prev, to: node });
+        node = prev;
+      }
+      return path;
+    };
+
+    while (true) {
+      const path = findPathWithFlow();
+      if (!path) break;
+
+      // Find minimum flow along the path
+      let minFlow = Infinity;
+      for (const edge of path) {
+        const edgeKey = `${edge.from}_${edge.to}`;
+        if (flows[edgeKey] < minFlow) {
+          minFlow = flows[edgeKey];
+        }
+      }
+
+      // Calculate total latency for the path
+      let totalLatency = 0;
+      for (const edge of path) {
+        const fromName = inverseNodeIds.get(edge.from);
+        const toName = inverseNodeIds.get(edge.to);
+        // Retrieve the link's latency
+        const link = networkData.links.find(
+          (l) => (l.fromId === fromName && l.toId === toName) || (l.fromId === toName && l.toId === fromName)
+        );
+        if (link) {
+          totalLatency += link.latencySeconds;
+        } else {
+          console.warn(`Link not found between ${fromName} and ${toName}`);
+        }
+      }
+
+      // Update statistics
+      totalFlowLatencyProduct += minFlow * totalLatency;
+      totalFlow += minFlow;
+      if (totalLatency < minLatency) {
+        minLatency = totalLatency;
+      }
+
+      paths.push({ path, flow: minFlow, latency: totalLatency });
+
+      // Subtract the flow from the edges
+      for (const edge of path) {
+        const edgeKey = `${edge.from}_${edge.to}`;
+        flows[edgeKey] -= minFlow;
+        const reverseEdgeKey = `${edge.to}_${edge.from}`;
+        flows[reverseEdgeKey] += minFlow; // Update reverse flow
+      }
+    }
+
+    // Aggregate flows into latency bins
+    const latencyBins = {};
+    paths.forEach(({ flow, latency }) => {
+      const bin = Math.floor(latency / binSize) * binSize;
+      if (!latencyBins[bin]) {
+        latencyBins[bin] = 0;
+      }
+      latencyBins[bin] += flow;
+    });
+
+    // Convert latencyBins to sorted array
+    const sortedBins = Object.keys(latencyBins)
+      .map(Number)
+      .sort((a, b) => a - b)
+      .map((bin) => ({
+        latency: bin, // in seconds
+        totalGbps: Math.round(latencyBins[bin] * 1e6) / 1e6, // Round to 6 decimal places
+      }));
+
+    const averageLatency = totalFlow > 0 ? totalFlowLatencyProduct / totalFlow : 0;
+
+    return {
+      histogram: sortedBins,
+      bestLatency: minLatency,
+      averageLatency: averageLatency,
+    };
   }
 }

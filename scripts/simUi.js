@@ -23,6 +23,7 @@ export class SimUi {
     const timeAccelerationSlider = this.slidersData.simulation["time-acceleration-slider"];
     const timeAccelerationValue = this.mapSliderValueToUserFacing(timeAccelerationSlider, timeAccelerationSlider.value);
     this.simMain.setTimeAccelerationFactor(timeAccelerationValue);
+    this.simMain.setCosts(this.getGroupsConfig(["costs"]));
     this.simMain.setSatellitesConfig(
       this.getGroupsConfig([
         "capability",
@@ -31,6 +32,7 @@ export class SimUi {
         "technology_improvement",
         "ring_mars",
         "circular_rings",
+        "eccentric_rings",
         "ring_earth",
       ])
     );
@@ -180,7 +182,6 @@ export class SimUi {
 
         // Update slidersData with the initial value
         slider.value = parseFloat(sliderValue);
-        console.log(slider.label, sliderValue);
       }
     }
 
@@ -237,6 +238,8 @@ export class SimUi {
         case "technology_improvement.transmitter-power-improvement":
         case "technology_improvement.modulation-improvement":
         case "capability.laser-ports-per-satellite":
+        case "simulation.maxDistanceAU":
+        case "simulation.calctimeMs":
         case "simulation.failed-satellites-slider":
         case "ring_mars.side-extension-degrees-slider":
         case "ring_mars.satellite-count-slider":
@@ -244,6 +247,13 @@ export class SimUi {
         case "circular_rings.requiredmbpsbetweensats":
         case "circular_rings.distance-sun-slider-outer-au":
         case "circular_rings.distance-sun-slider-inner-au":
+        case "circular_rings.earth-mars-orbit-inclination-pct":
+        case "eccentric_rings.ringcount":
+        case "eccentric_rings.requiredmbpsbetweensats":
+        case "eccentric_rings.distance-sun-average-au":
+        case "eccentric_rings.eccentricity":
+        case "eccentric_rings.argument-of-perihelion":
+        case "eccentric_rings.earth-mars-orbit-inclination-pct":
         case "ring_earth.side-extension-degrees-slider":
         case "ring_earth.satellite-count-slider":
           this.simMain.setSatellitesConfig(
@@ -254,10 +264,16 @@ export class SimUi {
               "technology_improvement",
               "ring_mars",
               "circular_rings",
+              "eccentric_rings",
               "ring_earth",
             ])
           );
           break;
+
+        case "costs.satellite-cost-slider":
+        case "costs.launch-cost-slider":
+        case "costs.sats-per-launch-slider":
+          this.simMain.setCosts(this.getGroupsConfig(["costs"]));
 
         // Add other cases as needed
         default:
@@ -283,6 +299,6 @@ export class SimUi {
   }
 
   updateInfoArea(info) {
-    document.getElementById("info-area").innerHTML = info;
+    document.getElementById("info-area-data").innerHTML = info;
   }
 }
