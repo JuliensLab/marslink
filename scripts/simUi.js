@@ -242,7 +242,7 @@ export class SimUi {
         case "simulation.calctimeMs":
         case "simulation.failed-satellites-slider":
         case "ring_mars.side-extension-degrees-slider":
-        case "ring_mars.satellite-count-slider":
+        case "ring_mars.requiredmbpsbetweensats":
         case "circular_rings.ringcount":
         case "circular_rings.requiredmbpsbetweensats":
         case "circular_rings.distance-sun-slider-outer-au":
@@ -255,7 +255,7 @@ export class SimUi {
         case "eccentric_rings.argument-of-perihelion":
         case "eccentric_rings.earth-mars-orbit-inclination-pct":
         case "ring_earth.side-extension-degrees-slider":
-        case "ring_earth.satellite-count-slider":
+        case "ring_earth.requiredmbpsbetweensats":
           this.simMain.setSatellitesConfig(
             this.getGroupsConfig([
               "capability",

@@ -120,17 +120,24 @@ export class SimMain {
     const satellitesConfig = [];
 
     // Fetch values from slidersData (already updated)
-    const satCount = uiConfig[ringName + ".satellite-count-slider"];
-    const satDistanceSun = uiConfig[ringName + ".distance-sun-slider"];
+    const mbpsBetweenSats = uiConfig[ringName + ".requiredmbpsbetweensats"];
     const sideExtensionDeg = uiConfig[ringName + ".side-extension-degrees-slider"];
 
     // Determine ring type
     let ringType = ringName == "ring_mars" ? "Mars" : "Earth";
+    const { a, n } = this.simSatellites.getParams_a_n(ringType);
+    const distAverageAu = a;
+
+    const distanceKmBetweenSats = this.simLinkBudget.calculateKm(mbpsBetweenSats / 1000);
+    const distanceAuBetweenSats = distanceKmBetweenSats / this.km_per_au;
+    const circumferenceAu = 2 * Math.PI * distAverageAu;
+    const actualCircumferenceAu = (circumferenceAu * sideExtensionDeg * 2) / 360;
+    const satCount = Math.ceil(actualCircumferenceAu / distanceAuBetweenSats);
 
     // Push the satellite configuration for this ring
     satellitesConfig.push({
       satCount: satCount,
-      satDistanceSun: satDistanceSun,
+      satDistanceSun: null,
       ringName: ringName,
       ringType: ringType,
       sideExtensionDeg: sideExtensionDeg,

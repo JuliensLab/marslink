@@ -199,7 +199,7 @@ export class SimNetwork {
     const minGbpsCapacityPctOfBest = 0.001; // Adjust as needed
 
     const filteredLinks = possibleLinks.filter((link) => link.gbpsCapacity >= bestGbpsCapacity * minGbpsCapacityPctOfBest);
-    console.log(filteredLinks);
+    // console.log(filteredLinks);
 
     // Step 4: Sort the possible links by Gbps capacity descending (or distance ascending if preferred)
     filteredLinks.sort((a, b) => b.gbpsCapacity - a.gbpsCapacity);
@@ -645,7 +645,7 @@ export class SimNetwork {
     // Determine the best Gbps capacity from the possibleLinks
     const bestGbpsCapacity = possibleLinks.reduce((max, link) => Math.max(max, link.gbpsCapacity), 0);
     // Define the minimum Gbps capacity percentage (e.g., 1%)
-    const minGbpsCapacityPctOfBest = 0.01; // Adjust as needed
+    const minGbpsCapacityPctOfBest = 0.1; // Adjust as needed
     // Filter the possibleLinks
     const filteredLinks = possibleLinks.filter((link) => link.gbpsCapacity >= bestGbpsCapacity * minGbpsCapacityPctOfBest);
 

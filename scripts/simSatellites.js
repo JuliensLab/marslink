@@ -51,15 +51,8 @@ export class SimSatellites {
         );
       }
     } else {
-      let a;
-      let n;
-      if (ringType == "Mars") {
-        a = 1.5236365;
-        n = 0.5240613;
-      } else if (ringType == "Earth") {
-        a = 1.00002;
-        n = 0.9855796;
-      }
+      const { a, n } = this.getParams_a_n(ringType);
+
       const orbitdays = 360 / n;
       const satCountOneSide = Math.ceil(satCount / 2);
       const longIncrement = sideExtensionDeg / satCountOneSide;
@@ -80,6 +73,7 @@ export class SimSatellites {
           if (i == 0) neighbors.push(`${ringType}`);
           if (i > 0) neighbors.push(`${ringName}--${i - 1}`);
           if (i < satCountOneSide - 1) neighbors.push(`${ringName}--${i + 1}`);
+          if (sideExtensionDeg == 180 && i == satCountOneSide - 2) neighbors.push(`${ringName}-${i + 1}`);
           satellites.push(
             this.generateSatellite(
               ringName,
@@ -99,6 +93,18 @@ export class SimSatellites {
       }
     }
     return satellites;
+  }
+
+  getParams_a_n(ringType) {
+    let a, n;
+    if (ringType == "Mars") {
+      a = 1.5236365;
+      n = 0.5240613;
+    } else if (ringType == "Earth") {
+      a = 1.00002;
+      n = 0.9855796;
+    }
+    return { a, n };
   }
 
   generateSatellite(ringName, ringType, a, n, eccentricity, argPeri, earthMarsInclinationPct, long, orbitdays, name, neighbors) {

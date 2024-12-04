@@ -12,10 +12,10 @@ import { createCarModel } from "./modelCar.js?v=2.4";
  * Converts astronomical units (AU) to 3D units using a scale factor.
  *
  * @param {number} au - Distance in astronomical units.
- * @returns {number} Distance in 3D units.
+ * @returns {number} Distance in 3D units
  */
 export const sunScaleFactor = 20;
-export const planetScaleFactor = 200;
+export const planetScaleFactor = 400;
 
 export function auTo3D(au) {
   return au;
@@ -50,8 +50,8 @@ export class SimDisplay {
     // === Styles ===
     this.styles = {
       links: {
-        inactive: { color: 0x555555, opacity: 0.1 },
-        active: { colormax: 0xff0000, colormin: 0x0000ff, opacity: 0.8, gbpsmax: 1, gbpsmin: 0.1 },
+        inactive: { color: 0xbbbbbb, opacity: 0.1 },
+        active: { colormax: 0xff3300, colormin: 0x0033ff, opacity: 0.8, gbpsmax: 1, gbpsmin: 0.1 },
       },
     };
 
@@ -162,7 +162,7 @@ export class SimDisplay {
     this.scene.add(sunlight);
 
     // === Ambient Light ===
-    const ambientLight = new THREE.AmbientLight(0x888888); // Dim ambient light
+    const ambientLight = new THREE.AmbientLight(0xbbbbbb); // Dim ambient light
     this.scene.add(ambientLight);
 
     // === Set Up Composer and Bloom Pass ===
