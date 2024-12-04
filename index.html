@@ -7,7 +7,7 @@
     <meta name="description"
         content="A simulation of Marslink, a projected heliocentric satellite constellation to link Earth and Mars via SpaceX satellites. Developed by Julien Villa-Massone. Not affiliated with SpaceX.">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js?v=2.3"></script>
     <link rel="stylesheet" href="styles.css">
 </head>
 
@@ -18,11 +18,6 @@
             <img src="img/x_logo.jpg" alt="Follow on X" class="x-logo">
             Follow Dev @julienvm
         </a>
-    </div>
-
-    <!-- Simulation Information in the top-left corner -->
-    <div id="overlay-top-left" class="overlay">
-        <div id="sliders-container"></div>
         <div id="info-area">
             <div id="info-area-costs"></div>
             <br>
@@ -33,9 +28,14 @@
         </div>
     </div>
 
+    <!-- Simulation Information in the top-left corner -->
+    <div id="overlay-top-left" class="overlay">
+        <div id="sliders-container"></div>
+    </div>
+
     <div id="overlay-bottom-left" class="overlay">
         <div>Object sizes not to scale - Distances and calculations to scale</div>
-        <div>Not affiliated with SpaceX - Spot the Tesla Roadster (red object)</div>
+        <div>Not affiliated with SpaceX - Spot the Tesla Roadster</div>
     </div>
 
     <div id="overlay-bottom-right" class="overlay">
@@ -46,12 +46,12 @@
     <script type="importmap">
         {
           "imports": {
-            "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+            "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js?v=2.3",
             "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
           }
         }
     </script>
-    <script type="module" src="scripts/simMain.js"></script>
+    <script type="module" src="scripts/simMain.js?v=2.3"></script>
 </body>
 
 </html>

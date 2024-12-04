@@ -1,12 +1,12 @@
 // simMain.js
 
-import { SimUi } from "./simUi.js";
-import { SimTime } from "./simTime.js";
-import { SimSolarSystem } from "./simSolarSystem.js";
-import { SimSatellites } from "./simSatellites.js";
-import { SimLinkBudget } from "./simLinkBudget.js";
-import { SimNetwork } from "./simNetwork.js";
-import { SimDisplay } from "./simDisplay.js";
+import { SimUi } from "./simUi.js?v=2.3";
+import { SimTime } from "./simTime.js?v=2.3";
+import { SimSolarSystem } from "./simSolarSystem.js?v=2.3";
+import { SimSatellites } from "./simSatellites.js?v=2.3";
+import { SimLinkBudget } from "./simLinkBudget.js?v=2.3";
+import { SimNetwork } from "./simNetwork.js?v=2.3";
+import { SimDisplay } from "./simDisplay.js?v=2.3";
 
 export class SimMain {
   constructor() {
@@ -167,69 +167,78 @@ export class SimMain {
    */
   makeLatencyChart(latencyData, binSize) {
     // Use the histogram from latencyData
-    const latencyHistogram = latencyData.histogram;
+    if (latencyData) {
+      const latencyHistogram = latencyData.histogram;
 
-    // Get the canvas context
-    const canvas = document.getElementById("latencyChart");
-    if (!canvas) {
-      console.warn("Latency chart canvas not found.");
-      return;
-    }
-    const ctx = canvas.getContext("2d");
+      // Get the canvas context
+      const canvas = document.getElementById("latencyChart");
+      if (!canvas) {
+        console.warn("Latency chart canvas not found.");
+        return;
+      }
+      const ctx = canvas.getContext("2d");
 
-    // Prepare data for Chart.js
-    const labels = latencyHistogram.map((bin) => {
-      const startMin = bin.latency / 60;
-      const endMin = (bin.latency + binSize) / 60;
-      return `${startMin} - ${endMin} min`;
-    });
-    const data = latencyHistogram.map((bin) => bin.totalGbps);
+      // Prepare data for Chart.js
+      const labels = latencyHistogram.map((bin) => {
+        const startMin = bin.latency / 60;
+        const endMin = (bin.latency + binSize) / 60;
+        return `${startMin} - ${endMin} min`;
+      });
+      const data = latencyHistogram.map((bin) => bin.totalGbps);
 
-    if (this.latencyChartInstance) {
-      // Update existing chart
-      this.latencyChartInstance.data.labels = labels;
-      this.latencyChartInstance.data.datasets[0].data = data;
-      this.latencyChartInstance.update();
-    } else {
-      // Create a new chart
-      this.latencyChartInstance = new Chart(ctx, {
-        type: "bar",
-        data: {
-          labels: labels,
-          datasets: [
-            {
-              label: "Aggregate GBps per Latency Bin",
-              data: data,
-              backgroundColor: "rgba(75, 192, 192, 0.6)",
-            },
-          ],
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          scales: {
-            x: {
-              title: { display: true, text: "Latency (minutes)" },
-            },
-            y: {
-              title: { display: true, text: "Aggregate GBps" },
-              beginAtZero: true,
-            },
+      if (this.latencyChartInstance) {
+        // Update existing chart
+        this.latencyChartInstance.data.labels = labels;
+        this.latencyChartInstance.data.datasets[0].data = data;
+        this.latencyChartInstance.update();
+      } else {
+        // Create a new chart
+        this.latencyChartInstance = new Chart(ctx, {
+          type: "bar",
+          data: {
+            labels: labels,
+            datasets: [
+              {
+                label: "Aggregate GBps per Latency Bin",
+                data: data,
+                backgroundColor: "rgba(75, 192, 192, 0.6)",
+              },
+            ],
           },
-          plugins: {
-            tooltip: {
-              callbacks: {
-                label: function (context) {
-                  return `${context.parsed.y} GBps`;
-                },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+              x: {
+                title: { display: true, text: "Latency (minutes)" },
+              },
+              y: {
+                title: { display: true, text: "Aggregate GBps" },
+                beginAtZero: true,
               },
             },
-            legend: {
-              display: false,
+            plugins: {
+              tooltip: {
+                callbacks: {
+                  label: function (context) {
+                    return `${context.parsed.y} GBps`;
+                  },
+                },
+              },
+              legend: {
+                display: false,
+              },
             },
           },
-        },
-      });
+        });
+      }
+    } else {
+      // Clear the canvas entirely if latencyData is not available
+      const canvas = document.getElementById("latencyChart");
+      if (canvas) {
+        const ctx = canvas.getContext("2d");
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      }
     }
   }
 
@@ -281,7 +290,7 @@ export class SimMain {
       if (this.networkData && this.networkData.maxFlowGbps > 0) {
         const costPerMbps = Math.round(totalCosts / (this.networkData.maxFlowGbps * 1000));
         html += `<br>`;
-        html += `&nbsp;$${formatCost(costPerMbps, scale)} / Mbps`;
+        html += `&nbsp;$${formatCost(costPerMbps, "m")} / Mbps`;
       }
     }
 
@@ -336,14 +345,14 @@ export class SimMain {
       this.simDisplay.updateActiveLinks(this.networkData.links);
 
       if (this.ui) {
-        this.binSize = 60 * 5; // Bin size in seconds (1 minute)
-        this.latencyData = this.simNetwork.calculateLatencies(this.networkData, this.binSize);
+        const binSize = 60 * 5; // Bin size in seconds (1 minute)
+        const latencyData = this.simNetwork.calculateLatencies(this.networkData, binSize);
 
         this.updateCosts();
         // Pass latencyData to getInfoAreaHTML and makeLatencyChart
-        this.ui.updateInfoArea(this.getInfoAreaHTML(this.networkData, this.satellites, this.latencyData));
+        this.ui.updateInfoArea(this.getInfoAreaHTML(this.networkData, latencyData));
         // After updating the info area, create or update the latency chart
-        this.makeLatencyChart(this.latencyData, this.binSize);
+        this.makeLatencyChart(latencyData, binSize);
       }
     }
   }

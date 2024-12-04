@@ -1,8 +1,8 @@
 // carModel.js
 
-import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";
-import { RGBELoader } from "three/addons/loaders/RGBELoader.js";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js?v=2.3";
+import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js?v=2.3";
+import { RGBELoader } from "three/addons/loaders/RGBELoader.js?v=2.3";
 
 // Function to load and create a car model
 export function createCarModel(THREE, planetData, scene, planets) {

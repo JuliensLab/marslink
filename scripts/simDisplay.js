@@ -1,12 +1,12 @@
 // simDisplay.js
 
 import * as THREE from "three";
-import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
-import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
-import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
-import { SimSolarSystem } from "./simSolarSystem.js";
-import { createCarModel } from "./modelCar.js";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js?v=2.3";
+import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js?v=2.3";
+import { RenderPass } from "three/addons/postprocessing/RenderPass.js?v=2.3";
+import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js?v=2.3";
+import { SimSolarSystem } from "./simSolarSystem.js?v=2.3";
+import { createCarModel } from "./modelCar.js?v=2.3";
 
 /**
  * Converts astronomical units (AU) to 3D units using a scale factor.

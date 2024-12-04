@@ -94,6 +94,8 @@ export class SimNetwork {
 
     this.eccentricRings(rings, positions, linkCounts, finalLinks);
 
+    this.connectEccentricAndCircularRings(rings, positions, linkCounts, finalLinks);
+
     return finalLinks;
   }
 
@@ -141,178 +143,109 @@ export class SimNetwork {
   }
 
   eccentricRings(rings, positions, linkCounts, finalLinks) {
-    // Step 3: Add Links for Eccentric Rings with Valid Ring Filtering and Shortest Links Prioritization
-
-    // Constants for binning
-    const BIN_SIZE_AU = 0.1;
-
-    // Define valid ring names: circular and eccentric rings only
-    const circularRingNames = Object.keys(rings).filter((ringName) => ringName.startsWith("ring_circ"));
+    // Step 1: Identify valid rings (eccentric and circular rings)
     const eccentricRingNames = Object.keys(rings).filter((ringName) => ringName.startsWith("ring_ecce"));
-    const validRingNames = new Set([...circularRingNames, ...eccentricRingNames]);
+    const circularRingNames = Object.keys(rings).filter((ringName) => ringName.startsWith("ring_circ"));
+    const validRingNames = new Set([...eccentricRingNames, ...circularRingNames]);
 
-    // Initialize the spatial matrix
-    const matrix_coords = {};
-
-    // Function to calculate bin index
-    const getBinIndex = (coord) => Math.floor(coord / BIN_SIZE_AU);
-
-    // Populate the spatial matrix with satellites from valid rings only
-    Object.keys(rings)
-      .filter((ringName) => validRingNames.has(ringName)) // Only include valid rings
-      .flatMap((ringName) => rings[ringName]) // Flatten satellites
-      .forEach((satellite) => {
-        const { x, y } = positions[satellite.name];
-        const binX = getBinIndex(x);
-        const binY = getBinIndex(y);
-
-        if (!matrix_coords[binX]) {
-          matrix_coords[binX] = {};
-        }
-        if (!matrix_coords[binX][binY]) {
-          matrix_coords[binX][binY] = [];
-        }
-
-        matrix_coords[binX][binY].push(satellite);
-      });
-
-    // Identify eccentric satellites (from valid eccentric rings)
-    const eccentricSatellites = eccentricRingNames.flatMap((ringName) => rings[ringName]);
-
-    // Initialize mappings to track connections
-    const targetConnectedRings = {}; // Tracks which rings have connected to each target satellite
-    const eccentricConnectedRings = {}; // Tracks which rings each eccentric satellite has connected to
-
-    // Initialize an array to hold all possible link options
+    // Step 2: Collect all possible link options between eccentric satellites and satellites in valid rings
     const possibleLinks = [];
 
-    // Populate possibleLinks with all valid link options from eccentric satellites
-    eccentricSatellites.forEach((eccSatellite) => {
-      const { x: eccX, y: eccY } = positions[eccSatellite.name];
-      const binX = getBinIndex(eccX);
-      const binY = getBinIndex(eccY);
+    // For each eccentric satellite
+    eccentricRingNames.forEach((eccentricRingName) => {
+      const eccSatellites = rings[eccentricRingName];
 
-      // Collect satellites from the 9 surrounding bins
-      const nearbySatellites = [];
-      for (let dx = -1; dx <= 1; dx++) {
-        for (let dy = -1; dy <= 1; dy++) {
-          const currentBinX = binX + dx;
-          const currentBinY = binY + dy;
+      eccSatellites.forEach((eccSatellite) => {
+        // For each satellite in valid rings (excluding itself)
+        validRingNames.forEach((targetRingName) => {
+          const targetSatellites = rings[targetRingName];
 
-          if (matrix_coords[currentBinX] && matrix_coords[currentBinX][currentBinY]) {
-            matrix_coords[currentBinX][currentBinY].forEach((sat) => {
-              // Exclude the satellite itself
-              if (sat.name === eccSatellite.name) return;
-              nearbySatellites.push(sat);
+          targetSatellites.forEach((targetSatellite) => {
+            // Exclude the same satellite
+            if (eccSatellite.name === targetSatellite.name) return;
+
+            // Exclude if both satellites are in the same eccentric ring
+            if (
+              eccentricRingNames.includes(eccentricRingName) &&
+              eccentricRingNames.includes(targetRingName) &&
+              eccentricRingName === targetRingName
+            ) {
+              return;
+            }
+
+            const distanceAU = this.calculateDistanceAU(positions[eccSatellite.name], positions[targetSatellite.name]);
+            // Enforce maximum distance constraint
+            if (distanceAU > this.simLinkBudget.maxDistanceAU) return;
+
+            const distanceKm = distanceAU * this.AU_IN_KM;
+            const gbpsCapacity = this.calculateGbps(distanceKm);
+            const latencySeconds = this.calculateLatency(distanceKm);
+
+            possibleLinks.push({
+              fromSatellite: eccSatellite,
+              toSatellite: targetSatellite,
+              distanceAU,
+              distanceKm,
+              gbpsCapacity,
+              latencySeconds,
             });
-          }
-        }
-      }
-
-      // For each nearby satellite, create a potential link
-      nearbySatellites.forEach((targetSat) => {
-        // Ensure the target satellite is from a valid ring (already filtered in matrix_coords)
-
-        const distanceAU = this.calculateDistance2DAU(positions[eccSatellite.name], positions[targetSat.name]);
-
-        // Enforce maximum distance constraint early to reduce the number of possible links
-        if (distanceAU > this.simLinkBudget.maxDistanceAU) return;
-
-        // Additional Constraint:
-        // If both satellites are eccentric, ensure they are not from the same ring
-        if (
-          eccentricRingNames.includes(eccSatellite.ringName) &&
-          eccentricRingNames.includes(targetSat.ringName) &&
-          eccSatellite.ringName === targetSat.ringName
-        ) {
-          return;
-        }
-
-        // Create a link object
-        possibleLinks.push({
-          fromSatellite: eccSatellite,
-          toSatellite: targetSat,
-          distanceAU,
-          distanceKm: distanceAU * this.AU_IN_KM,
-          gbpsCapacity: this.calculateGbps(distanceAU * this.AU_IN_KM),
-          latencySeconds: this.calculateLatency(distanceAU * this.AU_IN_KM),
+          });
         });
       });
     });
 
-    // Determine the best Gbps capacity from the possibleLinks
-    const bestGbpsCapacityEcce = possibleLinks.reduce((max, link) => Math.max(max, link.gbpsCapacity), 0);
+    // Step 3: Filter the possibleLinks to retain only those with sufficient capacity
+    const bestGbpsCapacity = possibleLinks.reduce((max, link) => Math.max(max, link.gbpsCapacity), 0);
+    const minGbpsCapacityPctOfBest = 0.001; // Adjust as needed
 
-    // Define the minimum Gbps capacity percentage (e.g., 80%)
-    const minGbpsCapacityPctOfBestEcce = 0.01; // Adjust as needed
+    const filteredLinks = possibleLinks.filter((link) => link.gbpsCapacity >= bestGbpsCapacity * minGbpsCapacityPctOfBest);
+    console.log(filteredLinks);
 
-    // Filter the possibleLinks to retain only those with sufficient capacity
-    const filteredLinks = possibleLinks.filter((link) => link.gbpsCapacity >= bestGbpsCapacityEcce * minGbpsCapacityPctOfBestEcce);
+    // Step 4: Sort the possible links by Gbps capacity descending (or distance ascending if preferred)
+    filteredLinks.sort((a, b) => b.gbpsCapacity - a.gbpsCapacity);
 
-    // Sort all filtered links by distance ascending (shortest first)
-    filteredLinks.sort((a, b) => a.distanceAU - b.distanceAU);
+    // Step 5: Assign links while respecting constraints
+    const connectedEccentricSatellites = new Set();
+    const connectedTargetSatellites = new Set();
+    const maxConnectionsPerSatellite = this.simLinkBudget.maxLinksPerSatellite;
+    // const maxConnectionsPerRing = {}; // { ringName: Set of connected satellite names }
 
-    // Function to check if a target satellite can accept a new connection from the current ring
-    const canAcceptConnection = (targetSat, currentRingName) => {
-      if (linkCounts[targetSat.name] >= this.simLinkBudget.maxLinksPerSatellite) return false;
-      if (targetSat.distanceAU > this.simLinkBudget.maxDistanceAU) return false;
-
-      // Initialize the set if it doesn't exist
-      if (!targetConnectedRings[targetSat.name]) {
-        targetConnectedRings[targetSat.name] = new Set();
-      }
-
-      // Check if the target satellite has already been connected to by the current ring
-      if (targetConnectedRings[targetSat.name].has(currentRingName)) {
-        return false;
-      }
-
-      // Additional Constraint:
-      // If the target satellite is eccentric, ensure it's not from the same ring
-      if (eccentricRingNames.includes(targetSat.ringName)) {
-        if (targetSat.ringName === currentRingName) {
-          return false;
-        }
-      }
-
-      return true;
-    };
-
-    // Function to check if the eccentric satellite has already connected to the target ring
-    const hasAlreadyConnectedToRing = (eccSatellite, targetRingName) => {
-      if (!eccentricConnectedRings[eccSatellite.name]) {
-        eccentricConnectedRings[eccSatellite.name] = new Set();
-      }
-      return eccentricConnectedRings[eccSatellite.name].has(targetRingName);
-    };
-
-    // Iterate through the sorted list of filtered links and add them if constraints are satisfied
     filteredLinks.forEach((link) => {
       const fromId = link.fromSatellite.name;
       const toId = link.toSatellite.name;
-      const currentRingName = link.fromSatellite.ringName;
-      const targetRingName = link.toSatellite.ringName;
+      const fromRing = link.fromSatellite.ringName;
+      const toRing = link.toSatellite.ringName;
 
-      // Check if the eccentric satellite has already connected to the target ring
-      if (hasAlreadyConnectedToRing(link.fromSatellite, targetRingName)) return;
+      // Initialize connection sets for rings if not present
+      // if (!maxConnectionsPerRing[fromRing]) maxConnectionsPerRing[fromRing] = new Set();
+      // if (!maxConnectionsPerRing[toRing]) maxConnectionsPerRing[toRing] = new Set();
 
-      // Check if the target satellite can accept the connection
-      if (!canAcceptConnection(link.toSatellite, currentRingName)) return;
-
-      // If the target is eccentric, ensure it hasn't already connected to the same ring
-      if (eccentricRingNames.includes(link.toSatellite.ringName) && link.toSatellite.ringName === currentRingName) {
+      // Check if satellites have reached maximum links
+      if (linkCounts[fromId] >= maxConnectionsPerSatellite || linkCounts[toId] >= maxConnectionsPerSatellite) {
         return;
       }
 
-      // Order the IDs lexicographically to avoid duplicate links
+      // Check if satellites have already been connected in this step
+      if (connectedEccentricSatellites.has(fromId) && connectedTargetSatellites.has(toId)) {
+        return;
+      }
+
+      // // Check if the eccentric satellite has already connected to the target ring
+      // if (maxConnectionsPerRing[fromRing].has(toRing)) {
+      //   return;
+      // }
+
+      // Exclude links between satellites from the same eccentric ring
+      if (eccentricRingNames.includes(fromRing) && eccentricRingNames.includes(toRing) && fromRing === toRing) {
+        return;
+      }
+
+      // To avoid duplicate links, order the IDs lexicographically
       const [orderedFromId, orderedToId] = fromId < toId ? [fromId, toId] : [toId, fromId];
 
       // Check if the link already exists
       const linkExists = finalLinks.some((existingLink) => existingLink.fromId === orderedFromId && existingLink.toId === orderedToId);
       if (linkExists) return;
-
-      // Enforce maximum distance constraint (already checked, but double-checking)
-      if (link.distanceAU > this.simLinkBudget.maxDistanceAU) return;
 
       // Add the link
       finalLinks.push({
@@ -325,19 +258,13 @@ export class SimNetwork {
       });
 
       // Increment link counts
-      linkCounts[orderedFromId]++;
-      linkCounts[orderedToId]++;
+      linkCounts[fromId]++;
+      linkCounts[toId]++;
 
-      // Update connection tracking
-      if (!targetConnectedRings[link.toSatellite.name]) {
-        targetConnectedRings[link.toSatellite.name] = new Set();
-      }
-      targetConnectedRings[link.toSatellite.name].add(currentRingName);
-
-      if (!eccentricConnectedRings[link.fromSatellite.name]) {
-        eccentricConnectedRings[link.fromSatellite.name] = new Set();
-      }
-      eccentricConnectedRings[link.fromSatellite.name].add(targetRingName);
+      // Mark satellites and rings as connected
+      connectedEccentricSatellites.add(fromId);
+      connectedTargetSatellites.add(toId);
+      // maxConnectionsPerRing[fromRing].add(toRing);
     });
   }
 
@@ -641,6 +568,135 @@ export class SimNetwork {
     });
   }
 
+  connectEccentricAndCircularRings(rings, positions, linkCounts, finalLinks) {
+    // Step 1: Identify eccentric rings and circular rings
+    const eccentricRingNames = Object.keys(rings).filter((ringName) => ringName.startsWith("ring_ecce"));
+    const circularRingNames = Object.keys(rings).filter((ringName) => ringName.startsWith("ring_circ"));
+
+    // Step 2: Build a spatial matrix for satellites in circular rings
+    const BIN_SIZE_AU = 0.1; // Adjust bin size as appropriate
+    const matrix_coords = {};
+    const getBinIndex = (coord) => Math.floor(coord / BIN_SIZE_AU);
+
+    // Populate the spatial matrix with satellites from circular rings
+    circularRingNames.forEach((ringName) => {
+      rings[ringName].forEach((satellite) => {
+        const { x, y } = positions[satellite.name];
+        const binX = getBinIndex(x);
+        const binY = getBinIndex(y);
+        if (!matrix_coords[binX]) matrix_coords[binX] = {};
+        if (!matrix_coords[binX][binY]) matrix_coords[binX][binY] = [];
+        matrix_coords[binX][binY].push(satellite);
+      });
+    });
+
+    // Step 3: Collect possible links from eccentric satellites to nearby circular satellites
+    const possibleLinks = [];
+
+    // For each satellite in eccentric rings
+    eccentricRingNames.forEach((ecceRingName) => {
+      const eccSatellites = rings[ecceRingName];
+      eccSatellites.forEach((eccSatellite) => {
+        const { x, y } = positions[eccSatellite.name];
+        const binX = getBinIndex(x);
+        const binY = getBinIndex(y);
+
+        // Collect satellites from the 9 surrounding bins
+        const nearbySatellites = [];
+        for (let dx = -1; dx <= 1; dx++) {
+          for (let dy = -1; dy <= 1; dy++) {
+            const currentBinX = binX + dx;
+            const currentBinY = binY + dy;
+            if (matrix_coords[currentBinX] && matrix_coords[currentBinX][currentBinY]) {
+              matrix_coords[currentBinX][currentBinY].forEach((sat) => {
+                nearbySatellites.push(sat);
+              });
+            }
+          }
+        }
+
+        // For each nearby satellite, create a potential link
+        nearbySatellites.forEach((circSatellite) => {
+          // Exclude the satellite itself
+          if (circSatellite.name === eccSatellite.name) return;
+
+          const distanceAU = this.calculateDistanceAU(positions[eccSatellite.name], positions[circSatellite.name]);
+          // Enforce maximum distance constraint
+          if (distanceAU > this.simLinkBudget.maxDistanceAU) return;
+
+          const distanceKm = distanceAU * this.AU_IN_KM;
+          const gbpsCapacity = this.calculateGbps(distanceKm);
+          const latencySeconds = this.calculateLatency(distanceKm);
+
+          // Create a link object
+          possibleLinks.push({
+            fromSatellite: eccSatellite,
+            toSatellite: circSatellite,
+            distanceAU,
+            distanceKm,
+            gbpsCapacity,
+            latencySeconds,
+          });
+        });
+      });
+    });
+
+    // Step 4: Filter the possibleLinks to retain only those with sufficient capacity
+    // Determine the best Gbps capacity from the possibleLinks
+    const bestGbpsCapacity = possibleLinks.reduce((max, link) => Math.max(max, link.gbpsCapacity), 0);
+    // Define the minimum Gbps capacity percentage (e.g., 1%)
+    const minGbpsCapacityPctOfBest = 0.01; // Adjust as needed
+    // Filter the possibleLinks
+    const filteredLinks = possibleLinks.filter((link) => link.gbpsCapacity >= bestGbpsCapacity * minGbpsCapacityPctOfBest);
+
+    // Step 5: Sort the possible links by Gbps capacity descending
+    filteredLinks.sort((a, b) => b.gbpsCapacity - a.gbpsCapacity);
+
+    // Step 6: Connect the satellites, one such link per satellite, respecting constraints
+    const connectedEccentricSatellites = new Set();
+    const connectedCircularSatellites = new Set();
+
+    filteredLinks.forEach((link) => {
+      const fromId = link.fromSatellite.name;
+      const toId = link.toSatellite.name;
+
+      // Check if either satellite has already been connected in this step
+      if (connectedEccentricSatellites.has(fromId) || connectedCircularSatellites.has(toId)) {
+        return; // Skip this link
+      }
+
+      // Check if the satellites have not exceeded their max links
+      if (linkCounts[fromId] >= this.simLinkBudget.maxLinksPerSatellite || linkCounts[toId] >= this.simLinkBudget.maxLinksPerSatellite) {
+        return; // Skip this link
+      }
+
+      // To avoid duplicate links, order the IDs lexicographically
+      const [orderedFromId, orderedToId] = fromId < toId ? [fromId, toId] : [toId, fromId];
+
+      // Check if the link already exists
+      const linkExists = finalLinks.some((existingLink) => existingLink.fromId === orderedFromId && existingLink.toId === orderedToId);
+      if (linkExists) return;
+
+      // Add the link
+      finalLinks.push({
+        fromId: orderedFromId,
+        toId: orderedToId,
+        distanceAU: link.distanceAU,
+        distanceKm: link.distanceKm,
+        latencySeconds: link.latencySeconds,
+        gbpsCapacity: link.gbpsCapacity,
+      });
+
+      // Increment link counts
+      linkCounts[fromId]++;
+      linkCounts[toId]++;
+
+      // Mark satellites as connected
+      connectedEccentricSatellites.add(fromId);
+      connectedCircularSatellites.add(toId);
+    });
+  }
+
   /**
    * Constructs the network graph based on precomputed finalLinks and computes the maximum flow.
    *
@@ -869,6 +925,7 @@ export class SimNetwork {
   calculateLatencies(networkData, binSize = 60) {
     const { graph, flows, nodeIds, capacities } = networkData;
     const inverseNodeIds = new Map();
+    if (nodeIds === undefined) return null;
     nodeIds.forEach((id, name) => inverseNodeIds.set(id, name));
 
     const source = nodeIds.get("Earth");
