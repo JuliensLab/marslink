@@ -1,6 +1,6 @@
 // simUi.js
 
-import { slidersData } from "./slidersData.js?v=2.3";
+import { slidersData } from "./slidersData.js?v=2.4";
 
 export class SimUi {
   constructor(simMain) {

@@ -1,12 +1,12 @@
 // simMain.js
 
-import { SimUi } from "./simUi.js?v=2.3";
-import { SimTime } from "./simTime.js?v=2.3";
-import { SimSolarSystem } from "./simSolarSystem.js?v=2.3";
-import { SimSatellites } from "./simSatellites.js?v=2.3";
-import { SimLinkBudget } from "./simLinkBudget.js?v=2.3";
-import { SimNetwork } from "./simNetwork.js?v=2.3";
-import { SimDisplay } from "./simDisplay.js?v=2.3";
+import { SimUi } from "./simUi.js?v=2.4";
+import { SimTime } from "./simTime.js?v=2.4";
+import { SimSolarSystem } from "./simSolarSystem.js?v=2.4";
+import { SimSatellites } from "./simSatellites.js?v=2.4";
+import { SimLinkBudget } from "./simLinkBudget.js?v=2.4";
+import { SimNetwork } from "./simNetwork.js?v=2.4";
+import { SimDisplay } from "./simDisplay.js?v=2.4";
 
 export class SimMain {
   constructor() {
