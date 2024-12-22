@@ -24,7 +24,7 @@ export class SimLinkBudget {
       telescopeAreaImprovement *
       technologyConfig["technology_improvement.receiver-sensitivity-improvement"] *
       technologyConfig["technology_improvement.transmitter-power-improvement"] *
-      technologyConfig["technology_improvement.modulation-improvement"];
+      technologyConfig["technology_improvement.efficiency-improvement"];
   }
 
   // Function to calculate Gbps capacity based on distance

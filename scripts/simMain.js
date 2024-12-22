@@ -44,8 +44,9 @@ export class SimMain {
   }
 
   setCircularRingsConfig(uiConfig) {
-    const ringCount = uiConfig["circular_rings.ringcount"];
+    let ringCount = uiConfig["circular_rings.ringcount"];
     if (ringCount == 0) return [];
+    ringCount += 2;
     const mbpsBetweenSats = uiConfig["circular_rings.requiredmbpsbetweensats"];
     const distOuterAu = uiConfig["circular_rings.distance-sun-slider-outer-au"];
     const distInnerAu = uiConfig["circular_rings.distance-sun-slider-inner-au"];
@@ -54,11 +55,11 @@ export class SimMain {
     const distanceAuBetweenSats = distanceKmBetweenSats / this.km_per_au;
     const distanceAuBetweenRings = Math.abs(distOuterAu - distInnerAu) / (ringCount - 1);
     const satellitesConfig = [];
-    for (let ringId = 0; ringId < ringCount; ringId++) {
+    for (let ringId = 1; ringId < ringCount - 1; ringId++) {
       // Determine ring type
       const ringType = "Circular";
       let satDistanceSunAu = Math.min(distInnerAu, distOuterAu) + distanceAuBetweenRings * ringId;
-      if (ringCount == 1) satDistanceSunAu = (distInnerAu + distOuterAu) / 2;
+      // if (ringCount == 3) satDistanceSunAu = (distInnerAu + distOuterAu) / 2;
       const circumferenceAu = 2 * Math.PI * satDistanceSunAu;
       const satCount = Math.ceil(circumferenceAu / distanceAuBetweenSats);
 
@@ -206,7 +207,7 @@ export class SimMain {
             labels: labels,
             datasets: [
               {
-                label: "Aggregate GBps per Latency Bin",
+                label: "Aggregate Gbps per Latency Bin",
                 data: data,
                 backgroundColor: "rgba(75, 192, 192, 0.6)",
               },
@@ -220,7 +221,7 @@ export class SimMain {
                 title: { display: true, text: "Latency (minutes)" },
               },
               y: {
-                title: { display: true, text: "Aggregate GBps" },
+                title: { display: true, text: "Aggregate Gbps" },
                 beginAtZero: true,
               },
             },
@@ -228,7 +229,7 @@ export class SimMain {
               tooltip: {
                 callbacks: {
                   label: function (context) {
-                    return `${context.parsed.y} GBps`;
+                    return `${context.parsed.y} Gbps`;
                   },
                 },
               },
@@ -253,62 +254,67 @@ export class SimMain {
     this.costPerLaunch = costConfig["costs.launch-cost-slider"];
     this.costPerSatellite = costConfig["costs.satellite-cost-slider"];
     this.satsPerLaunch = costConfig["costs.sats-per-launch-slider"];
-    this.updateCosts();
+    if (this.ui) this.ui.updateInfoAreaCosts(this.getCostsHtml(this.calculateCosts(this.maxFlowGbps)));
   }
 
-  updateCosts() {
-    let html = "";
-    const satellites = this.satellites;
-
-    // Helper function to format numbers into m, b, or t based on the determined scale
-    const formatCost = (value, scale) => {
-      if (scale === "t") {
-        return `${(value / 1_000_000).toFixed(1)}t`; // Trillions
-      } else if (scale === "b") {
-        return `${(value / 1_000).toFixed(1)}b`; // Billions
-      } else {
-        return `${value}m`; // Millions
-      }
-    };
-
-    if (satellites) {
-      const launchCount = Math.ceil(satellites.length / this.satsPerLaunch);
-
-      html += `${satellites.length} satellites ${launchCount} launches`;
-
-      html += `<br>`;
-      html += `<br>`;
-
+  calculateCosts(maxFlowGbps) {
+    const satellitesCount = this.satellitesCount;
+    if (satellitesCount) {
+      const launchCount = Math.ceil(satellitesCount / this.satsPerLaunch);
       const launchCost = Math.round((launchCount * this.costPerLaunch) / 10) * 10;
-      const satellitesCost = Math.round((satellites.length * this.costPerSatellite) / 10) * 10;
+      const satellitesCost = Math.round((satellitesCount * this.costPerSatellite) / 10) * 10;
       const totalCosts = launchCost + satellitesCost;
+      let costPerMbps = Infinity;
+      if (maxFlowGbps) costPerMbps = Math.round(totalCosts / (maxFlowGbps * 1000));
+      return { satellitesCount, launchCount, launchCost, satellitesCost, totalCosts, costPerMbps };
+    }
+  }
+
+  getCostsHtml(costs) {
+    let html = "";
+    html += `${this.satellitesCount} satellites`;
+
+    if (costs) {
+      html = "";
+      // Helper function to format numbers into m, b, or t based on the determined scale
+      const formatCost = (value, scale) => {
+        if (scale === "t") {
+          return `${(value / 1_000_000).toFixed(1)}t`; // Trillions
+        } else if (scale === "b") {
+          return `${(value / 1_000).toFixed(1)}b`; // Billions
+        } else {
+          return `${value}m`; // Millions
+        }
+      };
+
+      html += `${costs.satellitesCount} satellites ${costs.launchCount} launches`;
+
+      html += `<br>`;
+      html += `<br>`;
 
       // Determine the scale (m, b, t) based on the highest value
       let scale = "m";
-      if (totalCosts >= 1_000_000 || launchCost >= 1_000_000 || satellitesCost >= 1_000_000) {
+      if (costs.totalCosts >= 1_000_000 || costs.launchCost >= 1_000_000 || costs.satellitesCost >= 1_000_000) {
         scale = "t"; // Trillions
-      } else if (totalCosts >= 1_000 || launchCost >= 1_000 || satellitesCost >= 1_000) {
+      } else if (costs.totalCosts >= 1_000 || costs.launchCost >= 1_000 || costs.satellitesCost >= 1_000) {
         scale = "b"; // Billions
       }
 
-      html += `Total cost $${formatCost(totalCosts, scale)}`;
+      html += `Total cost $${formatCost(costs.totalCosts, scale)}`;
       html += "<br>";
-      html += `&nbsp;&nbsp;Launch $${formatCost(launchCost, scale)} + Sats $${formatCost(satellitesCost, scale)}`;
-      if (this.networkData && this.networkData.maxFlowGbps > 0) {
-        const costPerMbps = Math.round(totalCosts / (this.networkData.maxFlowGbps * 1000));
+      html += `&nbsp;&nbsp;Launch $${formatCost(costs.launchCost, scale)} + Sats $${formatCost(costs.satellitesCost, scale)}`;
+      if (costs.costPerMbps) {
         html += `<br>`;
-        html += `&nbsp;$${formatCost(costPerMbps, "m")} / Mbps`;
+        html += `&nbsp;$${formatCost(costs.costPerMbps, "m")} / Mbps`;
       }
     }
-
-    document.getElementById("info-area-costs").innerHTML = html;
+    return html;
   }
 
   /**
    * Prepares the HTML for the info area, including the latency chart.
    *
    * @param {Object} networkData - The network data containing flows and graph information.
-   * @param {Array} satellites - Array of satellite objects.
    * @param {Object} latencyData - The latency data containing histogram, bestLatency, averageLatency.
    * @returns {string} - The HTML string for the info area.
    */
@@ -335,62 +341,61 @@ export class SimMain {
   }
 
   /**
-   * Updates the links and the latency chart.
-   *
-   * @param {Array} planets - Array of planet objects.
-   * @param {Array} satellites - Array of satellite objects.
-   */
-  updateLinks() {
-    const possibleLinks = this.simNetwork.getPossibleLinks(this.planets, this.satellites, this.simLinkBudget);
-    this.simDisplay.updatePossibleLinks(possibleLinks);
-
-    // Get active links from simNetwork, passing possibleLinks to avoid recomputation
-    if (true) {
-      this.networkData = this.simNetwork.getNetworkData(this.planets, this.satellites, possibleLinks);
-
-      // Update simDisplay with active links
-      this.simDisplay.updateActiveLinks(this.networkData.links);
-
-      if (this.ui) {
-        const binSize = 60 * 5; // Bin size in seconds (1 minute)
-        const latencyData = this.simNetwork.calculateLatencies(this.networkData, binSize);
-
-        this.updateCosts();
-        // Pass latencyData to getInfoAreaHTML and makeLatencyChart
-        this.ui.updateInfoArea(this.getInfoAreaHTML(this.networkData, latencyData));
-        // After updating the info area, create or update the latency chart
-        this.makeLatencyChart(latencyData, binSize);
-      }
-    }
-  }
-
-  /**
    * The core update loop that advances the simulation by one frame.
    * It updates the positions of planets, satellites, and the display.
    * The links are updated asynchronously when the worker sends data.
    */
   updateLoop() {
     const simDate = this.simTime.getDate();
-    this.planets = this.simSolarSystem.updatePlanetsPositions(simDate);
+    const planets = this.simSolarSystem.updatePlanetsPositions(simDate);
 
+    let satellites;
     if (this.newSatellitesConfig) {
       this.simSatellites.setSatellitesConfig(this.newSatellitesConfig);
-      this.satellites = this.simSatellites.updateSatellitesPositions(simDate);
-      // console.log(satellites);
-      this.removeLinks();
+      satellites = this.simSatellites.updateSatellitesPositions(simDate);
+      this.satellitesCount = satellites.length;
       this.requestLinksUpdate = true;
-      this.simDisplay.setSatellites(this.satellites);
       this.newSatellitesConfig = null;
-    } else this.satellites = this.simSatellites.updateSatellitesPositions(simDate);
-
-    this.simDisplay.updatePositions(this.planets, this.satellites);
-    this.ui.updateSimTime(simDate);
+    } else satellites = this.simSatellites.updateSatellitesPositions(simDate);
 
     if (this.requestLinksUpdate || Math.abs(simDate - this.previousLinkUpdateSimDate) > 1000 * 60 * 60 * 24) {
       this.previousLinkUpdateSimDate = simDate;
+
+      let perf = performance.now();
+      const possibleLinks = this.simNetwork.getPossibleLinks(planets, satellites, this.simLinkBudget);
+      console.log(`Possible links: ${Math.round(performance.now() - perf)} ms`);
+
       this.removeLinks();
-      this.updateLinks();
+      this.simDisplay.updatePossibleLinks(possibleLinks);
+      this.simDisplay.setSatellites(satellites);
+      this.simDisplay.updatePositions(planets, satellites);
+      this.ui.updateSimTime(simDate);
+
+      if (this.simLinkBudget.calctimeMs > 0) {
+        let perf = performance.now();
+        const networkData = this.simNetwork.getNetworkData(planets, satellites, possibleLinks, this.simLinkBudget.calctimeMs);
+        console.log(`Flow: ${Math.round(performance.now() - perf)} ms`);
+        this.maxFlowGbps = networkData.maxFlowGbps;
+        this.simDisplay.updateActiveLinks(networkData.links);
+
+        if (this.ui) {
+          const binSize = 60 * 5; // Bin size in seconds (1 minute)
+          const latencyData = this.simNetwork.calculateLatencies(networkData, binSize);
+
+          this.ui.updateInfoAreaCosts(this.getCostsHtml(this.calculateCosts(networkData.maxFlowGbps)));
+          // Pass latencyData to getInfoAreaHTML and makeLatencyChart
+          this.ui.updateInfoAreaData(this.getInfoAreaHTML(networkData, latencyData));
+          // After updating the info area, create or update the latency chart
+          this.makeLatencyChart(latencyData, binSize);
+        }
+      } else {
+        this.ui.updateInfoAreaCosts(this.getCostsHtml(null));
+        this.ui.updateInfoAreaData("");
+        this.makeLatencyChart(null);
+      }
       this.requestLinksUpdate = false;
+    } else {
+      this.simDisplay.updatePositions(planets, satellites);
     }
   }
 
@@ -403,6 +408,144 @@ export class SimMain {
       requestAnimationFrame(loop);
     };
     loop();
+  }
+
+  longTermRun(dates) {
+    const data = [];
+    const calctimeMs = 20000;
+
+    // Helper function to round numbers to a specified precision
+    function rnd(number, precision) {
+      const factor = Math.pow(10, precision);
+      return Math.round(number * factor) / factor;
+    }
+
+    // Initialize start and end dates
+    let currentDate = new Date(dates.from);
+    const endDate = new Date(dates.to);
+
+    let networkData; // Declare networkData outside the loop
+
+    // Loop through each date, stepping by 'stepDays'
+    while (currentDate <= endDate) {
+      const simDate = new Date(currentDate); // Clone the current date
+      console.log(simDate.toUTCString());
+
+      // Update positions of planets and satellites for the current simulation date
+      const planets = this.simSolarSystem.updatePlanetsPositions(simDate);
+      const satellites = this.simSatellites.updateSatellitesPositions(simDate);
+
+      // Get possible links based on current positions
+      let perf = performance.now();
+      const possibleLinks = this.simNetwork.getPossibleLinks(planets, satellites, this.simLinkBudget);
+      // console.log(`Possible links: ${Math.round(performance.now() - perf)} ms`);
+
+      // Retrieve network data
+      perf = performance.now();
+      networkData = this.simNetwork.getNetworkData(planets, satellites, possibleLinks, calctimeMs);
+      // console.log(`Flow: ${Math.round(performance.now() - perf)} ms`);
+
+      this.removeLinks();
+      this.simDisplay.updatePositions(planets, satellites);
+      this.simDisplay.updatePossibleLinks(possibleLinks);
+      this.simDisplay.updateActiveLinks(networkData.links);
+      this.simDisplay.animate();
+
+      // Calculate latency data
+      const latencyData = this.simNetwork.calculateLatencies(networkData);
+
+      // Calculate costs based on network data
+      const costs = this.calculateCosts(networkData.maxFlowGbps);
+
+      // Extract relevant metrics
+      const maxFlowGbps = networkData.error ? null : networkData.maxFlowGbps;
+      const bestLatencyMinutes = latencyData.bestLatency !== null ? rnd(latencyData.bestLatency / 60, 1) : null;
+      const avgLatencyMinutes = latencyData.averageLatency !== null ? rnd(latencyData.averageLatency / 60, 1) : null;
+      const possibleLinksCount = possibleLinks.length;
+
+      // Push the collected data into the 'data' array
+      data.push({
+        simDate: simDate.toISOString(), // Format date to ISO string
+        possibleLinksCount,
+        maxFlowGbps,
+        bestLatencyMinutes,
+        avgLatencyMinutes,
+        costPerMbps: costs.costPerMbps,
+      });
+
+      // Increment the current date by 'stepDays'
+      currentDate.setDate(currentDate.getDate() + dates.stepDays);
+    }
+
+    // After the loop, networkData holds the last iteration's data
+    if (networkData) {
+      const finalCosts = this.calculateCosts(networkData.maxFlowGbps);
+      delete finalCosts.costPerMbps; // Remove 'costPerMbps' as per refactoring
+
+      // Summarize the collected data
+      const dataSummary = this.summarizeLongTermData(data);
+      this.updateLoop();
+      return { dates, calctimeMs, costs: finalCosts, dataSummary };
+    } else {
+      // Handle the case where networkData is undefined
+      console.error("No networkData was generated during the simulation.");
+      const dataSummary = this.summarizeLongTermData(data);
+      this.updateLoop();
+      return { dates, calctimeMs, costs: {}, dataSummary };
+    }
+  }
+
+  /**
+   * Summarizes the long-term simulation data by calculating the minimum and average values
+   * for each metric, along with the total number of simulated days.
+   *
+   * @param {Array<Object>} data - The array of simulation data objects.
+   * @returns {Object} - An object containing the summary:
+   *                     {
+   *                       dayCount: number,
+   *                       possibleLinksCount: { min: number, avg: number },
+   *                       maxFlowGbps: { min: number, avg: number },
+   *                       bestLatencyMinutes: { min: number, avg: number },
+   *                       avgLatencyMinutes: { min: number, avg: number },
+   *                       costPerMbps: { min: number, avg: number }
+   *                     }
+   */
+  summarizeLongTermData(data) {
+    // Initialize summary object with dayCount
+    const summary = {
+      dayCount: data.length,
+      possibleLinksCount: { min: null, avg: null, max: null },
+      maxFlowGbps: { min: null, avg: null, max: null },
+      bestLatencyMinutes: { min: null, avg: null, max: null },
+      avgLatencyMinutes: { min: null, avg: null, max: null },
+      costPerMbps: { min: null, avg: null, max: null },
+    };
+
+    // Define the fields to summarize
+    const fields = ["possibleLinksCount", "maxFlowGbps", "bestLatencyMinutes", "avgLatencyMinutes", "costPerMbps"];
+
+    fields.forEach((field) => {
+      // Extract non-null values for the current field
+      const values = data.map((entry) => entry[field]).filter((value) => value !== null && value !== undefined);
+
+      if (values.length > 0) {
+        // Calculate minimum value
+        const min = Math.min(...values);
+        const max = Math.max(...values);
+
+        // Calculate average value
+        const sum = values.reduce((acc, val) => acc + val, 0);
+        const avg = sum / values.length;
+
+        // Assign to summary
+        summary[field] = { min, avg, max };
+      } else {
+        // If no valid data, keep min and avg as null
+        summary[field] = { min: null, avg: null, max: null };
+      }
+    });
+
+    return summary;
   }
 }
 

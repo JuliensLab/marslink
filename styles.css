@@ -181,3 +181,18 @@ input[type="range"]::-moz-range-track {
   max-height: 1000px; /* A high enough value to accommodate content */
   padding: 10px 0;
 }
+
+.long-term-button {
+  padding: 10px 20px;
+  background-color: #4caf50; /* Green background */
+  color: white;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 16px;
+  margin-top: 10px;
+}
+
+.long-term-button:hover {
+  background-color: #45a049; /* Darker green on hover */
+}

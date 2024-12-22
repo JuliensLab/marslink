@@ -14,8 +14,8 @@ import { createCarModel } from "./modelCar.js?v=2.4";
  * @param {number} au - Distance in astronomical units.
  * @returns {number} Distance in 3D units
  */
-export const sunScaleFactor = 20;
-export const planetScaleFactor = 400;
+export const sunScaleFactor = 30;
+export const planetScaleFactor = 300;
 
 export function auTo3D(au) {
   return au;

@@ -13,6 +13,10 @@ export class SimUi {
 
     // Initialize simMain with initial slider values
     this.initializeSimMain();
+
+    // Set up the Start Long-Term Run button
+    this.setupLongTermRunButton();
+    this.setupLongTermScenariosRunButton();
   }
 
   /**
@@ -36,6 +40,197 @@ export class SimUi {
         "ring_earth",
       ])
     );
+  }
+
+  saveToJson(object, fileName) {
+    // Convert the object to JSON
+    const jsonString = JSON.stringify(object, null, 2);
+
+    // Create a Blob with the JSON content
+    const blob = new Blob([jsonString], { type: "application/json" });
+
+    // Create a link element
+    const link = document.createElement("a");
+
+    // Set the download attribute with a filename
+    link.download = `${fileName}.json`;
+
+    // Create a URL for the Blob and set it as the href
+    link.href = URL.createObjectURL(blob);
+
+    // Append the link to the document (this is required for some browsers)
+    document.body.appendChild(link);
+
+    // Programmatically click the link to trigger the download
+    link.click();
+
+    // Remove the link from the document
+    document.body.removeChild(link);
+  }
+
+  /**
+   * Sets up the Start Long-Term Run button with its event listener.
+   */
+  setupLongTermRunButton() {
+    const startButton = document.getElementById("startLongTermRun");
+    const summaryContainer = document.getElementById("long-term-summary");
+
+    if (startButton && summaryContainer) {
+      startButton.addEventListener("click", async () => {
+        // Disable the button to prevent multiple clicks
+        startButton.disabled = true;
+        startButton.textContent = "Running...";
+
+        // Optionally, you can display a loading indicator here
+
+        try {
+          // Run the long-term simulation
+          // If longTermRun is synchronous and time-consuming, consider wrapping it in a Promise
+          const simulationResult = await new Promise((resolve, reject) => {
+            // Use setTimeout to allow the UI to update before running the simulation
+            setTimeout(() => {
+              try {
+                const dates = { from: "2025-01-01", to: "2026-01-01", stepDays: 30 };
+                const result = this.simMain.longTermRun(dates);
+                resolve(result);
+              } catch (error) {
+                reject(error);
+              }
+            }, 100); // Slight delay to allow UI updates
+          });
+
+          console.log("Long-Term Simulation Result:", simulationResult);
+          this.saveToJson(simulationResult, "SimulationResult");
+
+          // Helper function to round numbers to a specified precision
+          function rnd(number, precision) {
+            const factor = Math.pow(10, precision);
+            return Math.round(number * factor) / factor;
+          }
+
+          // Display the summary in the UI
+          let html = "";
+          html += "<h3>Long-Term Run Summary:</h3>";
+          html += `${simulationResult.dataSummary.dayCount} samples, every ${simulationResult.dates.stepDays} days`;
+          html += "<br>";
+          html += `from ${simulationResult.dates.from} to ${simulationResult.dates.to}`;
+          html += "<br>";
+          html += `Latency avg of avg: ${rnd(simulationResult.dataSummary.avgLatencyMinutes.avg, 1)} minutes`;
+          html += "<br>";
+          html += `Latency avg of best: ${rnd(simulationResult.dataSummary.bestLatencyMinutes.avg, 1)} minutes`;
+          html += "<br>";
+          html += `Througput avg: ${rnd(simulationResult.dataSummary.maxFlowGbps.avg * 1000, 0)} mbps`;
+          html += "<br>";
+          html += `Througput worst: ${rnd(simulationResult.dataSummary.maxFlowGbps.min * 1000, 0)} mbps`;
+
+          summaryContainer.innerHTML = html;
+        } catch (error) {
+          console.error("Error during long-term simulation:", error);
+          summaryContainer.textContent = "An error occurred during the simulation.";
+        } finally {
+          // Re-enable the button after completion
+          startButton.disabled = false;
+          startButton.textContent = "Start Long-Term Run";
+        }
+      });
+    } else {
+      console.error("Start Long-Term Run button or summary container not found.");
+    }
+  }
+
+  /**
+   * Sets up the Start Long-Term Run button with its event listener.
+   */
+  setupLongTermScenariosRunButton() {
+    const startButton = document.getElementById("startLongTermScenariosRun");
+    const summaryContainer = document.getElementById("long-term-summary");
+
+    if (startButton && summaryContainer) {
+      startButton.addEventListener("click", async () => {
+        // Disable the button to prevent multiple clicks
+        startButton.disabled = true;
+        startButton.textContent = "Running...";
+
+        // Optionally, you can display a loading indicator here
+
+        try {
+          // Run the long-term simulation
+          // If longTermRun is synchronous and time-consuming, consider wrapping it in a Promise
+          const simulationResult = await new Promise((resolve, reject) => {
+            // Use setTimeout to allow the UI to update before running the simulation
+            setTimeout(() => {
+              try {
+                const dates = { from: "2025-01-01", to: "2025-03-01", stepDays: 30 };
+                const circularRingsCountInputs = { from: 3, to: 4, step: 1 };
+                const circularRingsMbpsInputs = { from: 10, to: 300, step: 100 };
+                const satellitesConfig = this.getGroupsConfig([
+                  "capability",
+                  "simulation",
+                  "current_technology_performance",
+                  "technology_improvement",
+                  "ring_mars",
+                  "circular_rings",
+                  "eccentric_rings",
+                  "ring_earth",
+                ]);
+                const resultArray = [];
+                for (
+                  let circularRingsCount = circularRingsCountInputs.from;
+                  circularRingsCount <= circularRingsCountInputs.to;
+                  circularRingsCount += circularRingsCountInputs.step
+                ) {
+                  for (
+                    let circularRingsMbps = circularRingsMbpsInputs.from;
+                    circularRingsMbps <= circularRingsMbpsInputs.to;
+                    circularRingsMbps += circularRingsMbpsInputs.step
+                  ) {
+                    satellitesConfig["circular_rings.ringcount"] = circularRingsCount;
+                    satellitesConfig["circular_rings.requiredmbpsbetweensats"] = circularRingsMbps;
+                    this.simMain.setSatellitesConfig(satellitesConfig);
+                    const result = this.simMain.longTermRun(dates);
+                    resultArray.push(result);
+                  }
+                }
+
+                resolve(resultArray);
+              } catch (error) {
+                reject(error);
+              }
+            }, 100); // Slight delay to allow UI updates
+          });
+
+          console.log("Long-Term Scenarios Simulation Result:", simulationResult);
+          this.saveToJson(simulationResult, "SimulationScenariosResult");
+
+          // Helper function to round numbers to a specified precision
+          function rnd(number, precision) {
+            const factor = Math.pow(10, precision);
+            return Math.round(number * factor) / factor;
+          }
+
+          // Display the summary in the UI
+          let html = "";
+          html += "<h3>Scenarios Run Summary:</h3>";
+          html += `${simulationResult.length} scenarios`;
+          html += "<br>";
+          html += `${simulationResult[0].dataSummary.dayCount} samples, every ${simulationResult[0].dates.stepDays} days`;
+          html += "<br>";
+          html += `from ${simulationResult[0].dates.from} to ${simulationResult[0].dates.to}`;
+          html += "<br>";
+
+          summaryContainer.innerHTML = html;
+        } catch (error) {
+          console.error("Error during long-term simulation:", error);
+          summaryContainer.textContent = "An error occurred during the simulation.";
+        } finally {
+          // Re-enable the button after completion
+          startButton.disabled = false;
+          startButton.textContent = "Start Scenarios Run";
+        }
+      });
+    } else {
+      console.error("Start Scenarios Run button or summary container not found.");
+    }
   }
 
   /**
@@ -153,8 +348,8 @@ export class SimUi {
         input.className = "slider";
         input.min = min;
         input.max = max;
-        input.value = sliderValue;
         input.step = step;
+        input.value = sliderValue;
 
         const valueSpan = document.createElement("span");
         valueSpan.id = `${fullSliderId}-value`;
@@ -236,7 +431,7 @@ export class SimUi {
         case "technology_improvement.telescope-diameter-m":
         case "technology_improvement.receiver-sensitivity-improvement":
         case "technology_improvement.transmitter-power-improvement":
-        case "technology_improvement.modulation-improvement":
+        case "technology_improvement.efficiency-improvement":
         case "capability.laser-ports-per-satellite":
         case "simulation.maxDistanceAU":
         case "simulation.calctimeMs":
@@ -274,6 +469,7 @@ export class SimUi {
         case "costs.launch-cost-slider":
         case "costs.sats-per-launch-slider":
           this.simMain.setCosts(this.getGroupsConfig(["costs"]));
+          break;
 
         // Add other cases as needed
         default:
@@ -283,11 +479,13 @@ export class SimUi {
   }
 
   getGroupsConfig(categoryKeys) {
-    const config = [];
+    const config = {};
     for (const categoryKey of categoryKeys) {
       const group = this.slidersData[categoryKey];
       for (const [sliderKey, sliderData] of Object.entries(group)) {
-        config[`${categoryKey}.${sliderKey}`] = this.slidersData[categoryKey][sliderKey]?.value;
+        config[`${categoryKey}.${sliderKey}`] = this.sliders[categoryKey][sliderKey]
+          ? parseFloat(this.sliders[categoryKey][sliderKey].value)
+          : sliderData.value;
       }
     }
     return config;
@@ -298,7 +496,22 @@ export class SimUi {
     document.getElementById("simTime").innerHTML = utcTime;
   }
 
-  updateInfoArea(info) {
-    document.getElementById("info-area-data").innerHTML = info;
+  updateInfoAreaData(html) {
+    document.getElementById("info-area-data").innerHTML = html;
+  }
+
+  updateInfoAreaCosts(html) {
+    document.getElementById("info-area-costs").innerHTML = html;
+  }
+
+  /**
+   * Updates the long-term run summary in the UI.
+   * @param {Object} summary - The summarized simulation data.
+   */
+  updateLongTermSummary(summary) {
+    const summaryContainer = document.getElementById("long-term-summary");
+    if (summaryContainer) {
+      summaryContainer.textContent = JSON.stringify(summary, null, 2);
+    }
   }
 }

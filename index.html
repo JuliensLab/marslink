@@ -7,7 +7,8 @@
     <meta name="description"
         content="A simulation of Marslink, a projected heliocentric satellite constellation to link Earth and Mars via SpaceX satellites. Developed by Julien Villa-Massone. Not affiliated with SpaceX.">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js?v=2.4"></script>
+    <!-- <script src="https://cdn.jsdelivr.net/npm/chart.js?v=2.5"></script> -->
+    <script src="scripts/imported/chart/chart.js?v=2.5"></script>
     <link rel="stylesheet" href="styles.css">
 </head>
 
@@ -25,6 +26,14 @@
             <div style="width: 100%; height: 200px;">
                 <canvas id="latencyChart"></canvas>
             </div>
+        </div>
+        <!-- Start Long-Term Run Button -->
+        <button id="startLongTermRun" class="long-term-button">Start Long-Term Run</button>
+        <br>
+        <button id="startLongTermScenariosRun" class="long-term-button">Start Scenarios Run</button>
+        <!-- Container to Display Long-Term Run Results -->
+        <div id="long-term-results" style="margin-top: 20px;">
+            <pre id="long-term-summary"></pre>
         </div>
     </div>
 
@@ -46,12 +55,12 @@
     <script type="importmap">
         {
           "imports": {
-            "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js?v=2.4",
+            "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js?v=2.5",
             "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
           }
         }
     </script>
-    <script type="module" src="scripts/simMain.js?v=2.4"></script>
+    <script type="module" src="scripts/simMain.js?v=2.5"></script>
 </body>
 
 </html>

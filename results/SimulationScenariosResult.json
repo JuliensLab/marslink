@@ -1,0 +1,260 @@
+[
+  {
+    "dates": {
+      "from": "2025-01-01",
+      "to": "2025-03-01",
+      "stepDays": 30
+    },
+    "calctimeMs": 20000,
+    "costs": {
+      "satellitesCount": 1053,
+      "launchCount": 53,
+      "launchCost": 530,
+      "satellitesCost": 5270,
+      "totalCosts": 5800
+    },
+    "dataSummary": {
+      "dayCount": 2,
+      "possibleLinksCount": {
+        "min": 2644,
+        "avg": 2644.5,
+        "max": 2645
+      },
+      "maxFlowGbps": {
+        "min": 0.14976204692970801,
+        "avg": 0.1520711798344066,
+        "max": 0.1543803127391052
+      },
+      "bestLatencyMinutes": {
+        "min": 6,
+        "avg": 6.05,
+        "max": 6.1
+      },
+      "avgLatencyMinutes": {
+        "min": 14.4,
+        "avg": 14.45,
+        "max": 14.5
+      },
+      "costPerMbps": {
+        "min": 38,
+        "avg": 38.5,
+        "max": 39
+      }
+    }
+  },
+  {
+    "dates": {
+      "from": "2025-01-01",
+      "to": "2025-03-01",
+      "stepDays": 30
+    },
+    "calctimeMs": 20000,
+    "costs": {
+      "satellitesCount": 674,
+      "launchCount": 34,
+      "launchCost": 340,
+      "satellitesCost": 3370,
+      "totalCosts": 3710
+    },
+    "dataSummary": {
+      "dayCount": 2,
+      "possibleLinksCount": {
+        "min": 1526,
+        "avg": 1526.5,
+        "max": 1527
+      },
+      "maxFlowGbps": {
+        "min": 0.06786376896285408,
+        "avg": 0.06878618749931129,
+        "max": 0.06970860603576849
+      },
+      "bestLatencyMinutes": {
+        "min": 6.2,
+        "avg": 6.2,
+        "max": 6.2
+      },
+      "avgLatencyMinutes": {
+        "min": 15.1,
+        "avg": 15.2,
+        "max": 15.3
+      },
+      "costPerMbps": {
+        "min": 53,
+        "avg": 54,
+        "max": 55
+      }
+    }
+  },
+  {
+    "dates": {
+      "from": "2025-01-01",
+      "to": "2025-03-01",
+      "stepDays": 30
+    },
+    "calctimeMs": 20000,
+    "costs": {
+      "satellitesCount": 1646,
+      "launchCount": 83,
+      "launchCost": 830,
+      "satellitesCost": 8230,
+      "totalCosts": 9060
+    },
+    "dataSummary": {
+      "dayCount": 2,
+      "possibleLinksCount": {
+        "min": 3884,
+        "avg": 3884,
+        "max": 3884
+      },
+      "maxFlowGbps": {
+        "min": 0.14181748873524586,
+        "avg": 0.14275819417426694,
+        "max": 0.143698899613288
+      },
+      "bestLatencyMinutes": {
+        "min": 6.4,
+        "avg": 6.5,
+        "max": 6.6
+      },
+      "avgLatencyMinutes": {
+        "min": 11.8,
+        "avg": 11.95,
+        "max": 12.1
+      },
+      "costPerMbps": {
+        "min": 63,
+        "avg": 63.5,
+        "max": 64
+      }
+    }
+  },
+  {
+    "dates": {
+      "from": "2025-01-01",
+      "to": "2025-03-01",
+      "stepDays": 30
+    },
+    "calctimeMs": 20000,
+    "costs": {
+      "satellitesCount": 2176,
+      "launchCount": 109,
+      "launchCost": 1090,
+      "satellitesCost": 10880,
+      "totalCosts": 11970
+    },
+    "dataSummary": {
+      "dayCount": 2,
+      "possibleLinksCount": {
+        "min": 5170,
+        "avg": 5170,
+        "max": 5170
+      },
+      "maxFlowGbps": {
+        "min": 0.1418746618307258,
+        "avg": 0.1428122064914154,
+        "max": 0.14374975115210498
+      },
+      "bestLatencyMinutes": {
+        "min": 6.4,
+        "avg": 6.45,
+        "max": 6.5
+      },
+      "avgLatencyMinutes": {
+        "min": 11.6,
+        "avg": 11.75,
+        "max": 11.9
+      },
+      "costPerMbps": {
+        "min": 83,
+        "avg": 83.5,
+        "max": 84
+      }
+    }
+  },
+  {
+    "dates": {
+      "from": "2025-01-01",
+      "to": "2025-03-01",
+      "stepDays": 30
+    },
+    "calctimeMs": 20000,
+    "costs": {
+      "satellitesCount": 815,
+      "launchCount": 41,
+      "launchCost": 410,
+      "satellitesCost": 4080,
+      "totalCosts": 4490
+    },
+    "dataSummary": {
+      "dayCount": 2,
+      "possibleLinksCount": {
+        "min": 1957,
+        "avg": 1957.5,
+        "max": 1958
+      },
+      "maxFlowGbps": {
+        "min": 0.09656600360303101,
+        "avg": 0.09659311403715762,
+        "max": 0.09662022447128421
+      },
+      "bestLatencyMinutes": {
+        "min": 6.1,
+        "avg": 6.1,
+        "max": 6.1
+      },
+      "avgLatencyMinutes": {
+        "min": 14.8,
+        "avg": 14.95,
+        "max": 15.1
+      },
+      "costPerMbps": {
+        "min": 46,
+        "avg": 46,
+        "max": 46
+      }
+    }
+  },
+  {
+    "dates": {
+      "from": "2025-01-01",
+      "to": "2025-03-01",
+      "stepDays": 30
+    },
+    "calctimeMs": 20000,
+    "costs": {
+      "satellitesCount": 2110,
+      "launchCount": 106,
+      "launchCost": 1060,
+      "satellitesCost": 10550,
+      "totalCosts": 11610
+    },
+    "dataSummary": {
+      "dayCount": 2,
+      "possibleLinksCount": {
+        "min": 5302,
+        "avg": 5302,
+        "max": 5302
+      },
+      "maxFlowGbps": {
+        "min": 0.22932377273046683,
+        "avg": 0.23098554448382214,
+        "max": 0.23264731623717744
+      },
+      "bestLatencyMinutes": {
+        "min": 6.3,
+        "avg": 6.4,
+        "max": 6.5
+      },
+      "avgLatencyMinutes": {
+        "min": 11.9,
+        "avg": 12.05,
+        "max": 12.2
+      },
+      "costPerMbps": {
+        "min": 50,
+        "avg": 50.5,
+        "max": 51
+      }
+    }
+  }
+]
