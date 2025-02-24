@@ -19,6 +19,7 @@
             <img src="img/x_logo.jpg" alt="Follow on X" class="x-logo">
             Follow Dev @julienvm
         </a>
+
         <div id="info-area">
             <div id="info-area-costs"></div>
             <br>
@@ -27,15 +28,34 @@
                 <canvas id="latencyChart"></canvas>
             </div>
         </div>
+
         <!-- Start Long-Term Run Button -->
         <button id="startLongTermRun" class="long-term-button">Start Long-Term Run</button>
         <br>
+
+        <!-- Start Scenarios Run Button -->
         <button id="startLongTermScenariosRun" class="long-term-button">Start Scenarios Run</button>
-        <!-- Container to Display Long-Term Run Results -->
+
+        <!-- Container to Display Simulation Results -->
         <div id="long-term-results" style="margin-top: 20px;">
-            <pre id="long-term-summary"></pre>
+
+            <!-- Long-Term Run Summary -->
+            <div id="long-term-summary-run" style="margin-bottom: 30px;">
+                <h3>Run Summary:</h3>
+
+                <!-- Progress Bar for Long-Term Run -->
+                <div id="progress-container-run" style="width: 100%; background-color: #f3f3f3; border: 1px solid #ccc; margin-top: 10px;">
+                    <div id="progress-bar-run" style="width: 0%; height: 20px; background-color: #4caf50;"></div>
+                </div>
+                <p id="progress-text-run">Progress: 0%</p>
+
+                <!-- Summary Text for Long-Term Run -->
+                <pre id="long-term-summary-run-text"></pre>
+            </div>
+
         </div>
     </div>
+
 
     <!-- Simulation Information in the top-left corner -->
     <div id="overlay-top-left" class="overlay">

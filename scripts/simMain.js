@@ -4,6 +4,7 @@ import { SimUi } from "./simUi.js?v=2.4";
 import { SimTime } from "./simTime.js?v=2.4";
 import { SimSolarSystem } from "./simSolarSystem.js?v=2.4";
 import { SimSatellites } from "./simSatellites.js?v=2.4";
+import { SimDeployment } from "./simDeployment.js?v=2.4";
 import { SimLinkBudget } from "./simLinkBudget.js?v=2.4";
 import { SimNetwork } from "./simNetwork.js?v=2.4";
 import { SimDisplay } from "./simDisplay.js?v=2.4";
@@ -20,6 +21,7 @@ export class SimMain {
     this.simTime = new SimTime();
     this.simSolarSystem = new SimSolarSystem();
     this.simSatellites = new SimSatellites();
+    this.simDeployment = new SimDeployment();
     this.simLinkBudget = new SimLinkBudget();
     this.simNetwork = new SimNetwork(this.simLinkBudget);
     this.simDisplay = new SimDisplay();
@@ -352,6 +354,8 @@ export class SimMain {
     let satellites;
     if (this.newSatellitesConfig) {
       this.simSatellites.setSatellitesConfig(this.newSatellitesConfig);
+      this.simSatellites.setOrbitalElements(this.newSatellitesConfig);
+      this.simDeployment.setOrbitalElements(this.simSatellites.orbitalElements, this.simSolarSystem.getSolarSystemData().planets);
       satellites = this.simSatellites.updateSatellitesPositions(simDate);
       this.satellitesCount = satellites.length;
       this.requestLinksUpdate = true;
@@ -410,7 +414,8 @@ export class SimMain {
     loop();
   }
 
-  longTermRun(dates) {
+  // Assuming this is within a class context
+  async longTermRun(dates) {
     const data = [];
     const calctimeMs = 20000;
 
@@ -426,73 +431,90 @@ export class SimMain {
 
     let networkData; // Declare networkData outside the loop
 
-    // Loop through each date, stepping by 'stepDays'
-    while (currentDate <= endDate) {
-      const simDate = new Date(currentDate); // Clone the current date
-      console.log(simDate.toUTCString());
+    return new Promise((resolve, reject) => {
+      const step = () => {
+        if (currentDate > endDate) {
+          // After the loop, handle the final data
+          if (networkData) {
+            const finalCosts = this.calculateCosts(networkData.maxFlowGbps);
+            delete finalCosts.costPerMbps; // Remove 'costPerMbps' as per refactoring
 
-      // Update positions of planets and satellites for the current simulation date
-      const planets = this.simSolarSystem.updatePlanetsPositions(simDate);
-      const satellites = this.simSatellites.updateSatellitesPositions(simDate);
+            // Summarize the collected data
+            const dataSummary = this.summarizeLongTermData(data);
+            this.updateLoop();
 
-      // Get possible links based on current positions
-      let perf = performance.now();
-      const possibleLinks = this.simNetwork.getPossibleLinks(planets, satellites, this.simLinkBudget);
-      // console.log(`Possible links: ${Math.round(performance.now() - perf)} ms`);
+            // Resolve the promise with the result
+            resolve({ dates, calctimeMs, costs: finalCosts, dataSummary });
+          } else {
+            // Handle the case where networkData is undefined
+            console.error("No networkData was generated during the simulation.");
+            const dataSummary = this.summarizeLongTermData(data);
+            this.updateLoop();
+            resolve({ dates, calctimeMs, costs: {}, dataSummary });
+          }
+          return; // Terminate the simulation
+        }
 
-      // Retrieve network data
-      perf = performance.now();
-      networkData = this.simNetwork.getNetworkData(planets, satellites, possibleLinks, calctimeMs);
-      // console.log(`Flow: ${Math.round(performance.now() - perf)} ms`);
+        // Process the current simulation step
+        const simDate = new Date(currentDate); // Clone the current date
+        console.log(simDate.toUTCString());
 
-      this.removeLinks();
-      this.simDisplay.updatePositions(planets, satellites);
-      this.simDisplay.updatePossibleLinks(possibleLinks);
-      this.simDisplay.updateActiveLinks(networkData.links);
-      this.simDisplay.animate();
+        try {
+          // Update positions of planets and satellites for the current simulation date
+          const planets = this.simSolarSystem.updatePlanetsPositions(simDate);
+          const satellites = this.simSatellites.updateSatellitesPositions(simDate);
 
-      // Calculate latency data
-      const latencyData = this.simNetwork.calculateLatencies(networkData);
+          // Get possible links based on current positions
+          const possibleLinks = this.simNetwork.getPossibleLinks(planets, satellites, this.simLinkBudget);
 
-      // Calculate costs based on network data
-      const costs = this.calculateCosts(networkData.maxFlowGbps);
+          // Retrieve network data
+          networkData = this.simNetwork.getNetworkData(planets, satellites, possibleLinks, calctimeMs);
 
-      // Extract relevant metrics
-      const maxFlowGbps = networkData.error ? null : networkData.maxFlowGbps;
-      const bestLatencyMinutes = latencyData.bestLatency !== null ? rnd(latencyData.bestLatency / 60, 1) : null;
-      const avgLatencyMinutes = latencyData.averageLatency !== null ? rnd(latencyData.averageLatency / 60, 1) : null;
-      const possibleLinksCount = possibleLinks.length;
+          // Update the display
+          this.removeLinks();
+          this.simDisplay.updatePositions(planets, satellites);
+          this.simDisplay.updatePossibleLinks(possibleLinks);
+          this.simDisplay.updateActiveLinks(networkData.links);
+          this.simDisplay.animate();
 
-      // Push the collected data into the 'data' array
-      data.push({
-        simDate: simDate.toISOString(), // Format date to ISO string
-        possibleLinksCount,
-        maxFlowGbps,
-        bestLatencyMinutes,
-        avgLatencyMinutes,
-        costPerMbps: costs.costPerMbps,
-      });
+          // Calculate latency data
+          const latencyData = this.simNetwork.calculateLatencies(networkData);
 
-      // Increment the current date by 'stepDays'
-      currentDate.setDate(currentDate.getDate() + dates.stepDays);
-    }
+          // Calculate costs based on network data
+          const costs = this.calculateCosts(networkData.maxFlowGbps);
 
-    // After the loop, networkData holds the last iteration's data
-    if (networkData) {
-      const finalCosts = this.calculateCosts(networkData.maxFlowGbps);
-      delete finalCosts.costPerMbps; // Remove 'costPerMbps' as per refactoring
+          // Extract relevant metrics
+          const maxFlowGbps = networkData.error ? null : networkData.maxFlowGbps;
+          const bestLatencyMinutes = latencyData.bestLatency !== null ? rnd(latencyData.bestLatency / 60, 1) : null;
+          const avgLatencyMinutes = latencyData.averageLatency !== null ? rnd(latencyData.averageLatency / 60, 1) : null;
+          const possibleLinksCount = possibleLinks.length;
 
-      // Summarize the collected data
-      const dataSummary = this.summarizeLongTermData(data);
-      this.updateLoop();
-      return { dates, calctimeMs, costs: finalCosts, dataSummary };
-    } else {
-      // Handle the case where networkData is undefined
-      console.error("No networkData was generated during the simulation.");
-      const dataSummary = this.summarizeLongTermData(data);
-      this.updateLoop();
-      return { dates, calctimeMs, costs: {}, dataSummary };
-    }
+          // Push the collected data into the 'data' array
+          data.push({
+            simDate: simDate.toISOString(), // Format date to ISO string
+            possibleLinksCount,
+            maxFlowGbps,
+            bestLatencyMinutes,
+            avgLatencyMinutes,
+            costPerMbps: costs.costPerMbps,
+          });
+
+          // Increment the current date by 'stepDays'
+          currentDate.setDate(currentDate.getDate() + dates.stepDays);
+        } catch (error) {
+          // Handle any unexpected errors during the simulation step
+          console.error("Error during simulation step:", error);
+          reject(error);
+          return;
+        }
+
+        // Schedule the next simulation step
+        requestAnimationFrame(step);
+      };
+
+      // Start the simulation
+      requestAnimationFrame(step);
+    });
   }
 
   /**

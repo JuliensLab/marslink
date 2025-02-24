@@ -5,10 +5,10 @@
 //   }
 
 //   closestApproachDate(date) {
-//     // calculates the date of the closest approach from this date to the future
-//     // calculate position of Earth and Mars over the next 2 years and figure out the closest approach
+//     // calculates the date of the opposition from this date to the future
+//     // calculate position of Earth and Mars over the next 2 years and figure out the opposition
 //     this.solarSystem
-//     return; // return the date of the closest approach
+//     return; // return the date of the opposition
 //   }
 
 //   deltaVRequired(date, closestApproachDate){

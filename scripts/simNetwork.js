@@ -444,9 +444,10 @@ export class SimNetwork {
       });
     }
   }
+
   marsEarthRings(rings, positions, linkCounts, finalLinks) {
     const binSizeAU = 0.3;
-    const maxConnectionsPerPlanetarySatellite = 2; // Maximum of 2 links per satellite in planetary rings
+    const maxConnectionsPerPlanetarySatellite = 3; // Maximum of 2 links per satellite in planetary rings
 
     // Identify Mars and Earth rings and add planets to their respective rings
     const earthMarsRings = ["ring_earth", "ring_mars"].filter((ringName) => rings[ringName]);
@@ -608,9 +609,13 @@ export class SimNetwork {
         return; // Skip if 'fromId' has reached its max links
       }
 
-      // Check if 'toId' has reached its maximum links as per simLinkBudget
+      // Check if 'toId' has reached its maximum links as per simLinkBudget // marsEarthRings
       if (linkCounts[toId] >= this.simLinkBudget.maxLinksPerSatellite) {
         return; // Skip if 'toId' has reached its max links
+      }
+      // Check if 'toId' has reached its maximum links as per simLinkBudget // marsEarthRings
+      if (linkCounts[fromId] >= this.simLinkBudget.maxLinksPerSatellite) {
+        return; // Skip if 'fromId' has reached its max links
       }
 
       // Assign the link

@@ -1,493 +1,501 @@
-// simDisplay.js
+/***********************************************
+ * simDisplay.js
+ *
+ * 2D (canvas-based) display of the solar system,
+ * with pan and zoom (mouse & touch).
+ ***********************************************/
 
-import * as THREE from "three";
-import { OrbitControls } from "three/addons/controls/OrbitControls.js?v=2.4";
-import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js?v=2.4";
-import { RenderPass } from "three/addons/postprocessing/RenderPass.js?v=2.4";
-import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js?v=2.4";
 import { SimSolarSystem } from "./simSolarSystem.js?v=2.4";
 import { createCarModel } from "./modelCar.js?v=2.4";
 
 /**
  * Converts astronomical units (AU) to 3D units using a scale factor.
+ * Retained here for compatibility with the existing code,
+ * though in this 2D version, it just returns the same value.
  *
  * @param {number} au - Distance in astronomical units.
- * @returns {number} Distance in 3D units
+ * @returns {number} Distance in "3D units" (in practice, the same number here).
  */
-export const sunScaleFactor = 30;
-export const planetScaleFactor = 300;
-
 export function auTo3D(au) {
   return au;
 }
 
+/**
+ * Converts kilometers to astronomical units (AU).
+ *
+ * @param {number} km - Distance in kilometers.
+ * @returns {number} Distance in AU.
+ */
 export function kmToAu(km) {
   return km / 149597871;
 }
 
 /**
- * Converts kilometers to 3D units using the same scale factor.
+ * Converts kilometers to "3D units" (AU in this case).
  *
  * @param {number} km - Distance in kilometers.
- * @returns {number} Distance in 3D units.
+ * @returns {number} Distance in "3D units" (AU).
  */
 export function kmTo3D(km) {
   return kmToAu(km);
 }
 
 /**
- * SimDisplay class handles the 3D rendering of planets, satellites, and links using Three.js.
- * It provides functionalities to update the positions of these objects dynamically.
+ * Scaling factors (these remain for consistency,
+ * though 2D display might not rely on them exactly
+ * in the same way).
  */
+export const sunScaleFactor = 50000;
+export const planetScaleFactor = 1000000;
+
 export class SimDisplay {
   /**
-   * Creates an instance of SimDisplay.
+   * Creates an instance of SimDisplay (2D).
    *
-   * @param {HTMLElement} container - The DOM element to which the renderer will be appended.
+   * @param {HTMLElement} container - The DOM element to which the canvas will be appended.
    *                                   Defaults to document.body if not provided.
    */
   constructor(container = document.body) {
-    // === Styles ===
     this.styles = {
       links: {
-        inactive: { color: 0xbbbbbb, opacity: 0.1 },
-        active: { colormax: 0xff3300, colormin: 0x0033ff, opacity: 0.8, gbpsmax: 1, gbpsmin: 0.1 },
+        inactive: { color: 0xff0000, opacity: 0.1 },
+        active: {
+          colormax: 0xff0000,
+          colormin: 0x7799ff,
+          opacity: 0.8,
+          gbpsmax: 1,
+          gbpsmin: 0.1,
+        },
       },
     };
 
-    // === Scene Setup ===
-    this.scene = new THREE.Scene();
+    // === Create Canvas for 2D rendering ===
+    this.canvas = document.createElement("canvas");
+    this.canvas.width = window.innerWidth;
+    this.canvas.height = window.innerHeight;
+    container.appendChild(this.canvas);
 
-    // === Camera Setup ===
-    const fov = 75;
-    const aspect = window.innerWidth / window.innerHeight;
-    const near = 0.01;
-    const far = 1000;
-    this.camera = new THREE.PerspectiveCamera(fov, aspect, near, far);
-
-    // Set the camera position to 45 degrees from the top
-    const distance = 2; // Adjust this distance as needed
-    const angle = Math.PI / 4; // 45 degrees in radians
-
-    // Calculate x, y, z based on the angle
-    this.camera.position.x = distance * Math.cos(angle);
-    this.camera.position.y = distance * Math.sin(angle);
-    this.camera.position.z = distance * Math.sin(angle);
-
-    // Point the camera towards the origin (0, 0, 0)
-    this.camera.lookAt(0, 0, 0);
-
-    // === Renderer Setup ===
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-    this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.renderer.shadowMap.enabled = true; // Enable shadows
-    container.appendChild(this.renderer.domElement);
-
-    // === Controls Setup ===
-    this.controls = new OrbitControls(this.camera, this.renderer.domElement);
-    this.controls.enableDamping = true; // Smooth controls
-    this.controls.dampingFactor = 0.05;
-    this.controls.enablePan = true;
-    this.controls.minDistance = 0.05; // Minimum zoom distance
-    this.controls.maxDistance = 50; // Maximum zoom distance
-
-    // === Texture Loader ===
-    this.textureLoader = new THREE.TextureLoader();
+    // Get 2D drawing context
+    this.ctx = this.canvas.getContext("2d");
 
     // === Solar System Data ===
     this.simSolarSystem = new SimSolarSystem();
     this.solarSystemData = this.simSolarSystem.getSolarSystemData();
 
-    // === Object Containers ===
-    this.planets = {}; // Store planet meshes
-    this.satellitesGroup = new THREE.Group();
-    this.scene.add(this.satellitesGroup);
-    this.linksGroup = new THREE.Group();
-    this.scene.add(this.linksGroup);
-
-    // Initialize links arrays
+    // Maintain references for usage
+    this.planets = {};
     this.possibleLinks = [];
     this.activeLinks = [];
+    this.planetPositions = {};
+    this.satellitePositions = [];
+    this.satellites = [];
 
-    // === Load Scene Elements ===
-    this.loadScene();
+    // --- NEW: Store pan and zoom state ---
+    this.panX = 0;
+    this.panY = 0;
+    this.zoom = 1;
+
+    // --- NEW: Mouse and touch state for dragging ---
+    this.isDragging = false;
+    this.isTouchDragging = false;
+    this.lastX = 0;
+    this.lastY = 0;
+    // For pinch-zoom (optional):
+    this.touchDistance = 0; // tracks distance between 2 fingers
 
     // === Resize Listener ===
     window.addEventListener("resize", this.onWindowResize.bind(this), false);
 
-    // === Bind Animate Method ===
+    // --- NEW: Setup mouse / touch event listeners ---
+    this.setupInteractionEvents();
+
+    // === Begin Animation Loop ===
     this.animate = this.animate.bind(this);
-
-    // === Animation Loop ===
-    this.animate();
+    requestAnimationFrame(this.animate);
   }
 
   /**
-   * Loads the scene elements including background, lights, sun, and planets.
+   * --- NEW: Setup mouse and touch event listeners for pan & zoom. ---
    */
-  loadScene() {
-    // === Starry Background ===
-    const starTexture = this.textureLoader.load(this.solarSystemData.background.texturePath);
-    const starsGeometry = new THREE.SphereGeometry(500, 64, 64);
-    const starsMaterial = new THREE.MeshBasicMaterial({
-      map: starTexture,
-      side: THREE.BackSide,
-      color: 0x444444, // Darker color to reduce brightness
-    });
-    const starField = new THREE.Mesh(starsGeometry, starsMaterial);
-    this.scene.add(starField);
+  setupInteractionEvents() {
+    // Prevent default gestures on the canvas for mobile (esp. pinch/zoom).
+    this.canvas.style.touchAction = "none";
 
-    // === Sun ===
-    const sunData = this.solarSystemData.sun;
-    const sunTexture = this.textureLoader.load(sunData.texturePath);
-    const sunGeometry = new THREE.SphereGeometry(kmTo3D(sunData.diameterKm / 2) * sunScaleFactor, 64, 64);
-    const sunMaterial = new THREE.MeshBasicMaterial({ map: sunTexture, color: 0xffffff });
-    const sunMesh = new THREE.Mesh(sunGeometry, sunMaterial);
-    sunMesh.position.set(0, 0, 0);
-    sunMesh.castShadow = false;
-    sunMesh.receiveShadow = false;
-    this.scene.add(sunMesh);
-    this.sunMesh = sunMesh; // Store reference for updates if needed
-
-    // === Sun as Light Source ===
-    const sunlightIntensity = 2;
-    const sunlightDistance = 100;
-    const sunlight = new THREE.PointLight(0xffffff, sunlightIntensity, sunlightDistance);
-    sunlight.position.set(0, 0, 0);
-    sunlight.castShadow = true;
-    sunlight.shadow.mapSize.width = 1024;
-    sunlight.shadow.mapSize.height = 1024;
-    sunlight.shadow.camera.near = 0.5;
-    sunlight.shadow.camera.far = 1500;
-    this.scene.add(sunlight);
-
-    // === Ambient Light ===
-    const ambientLight = new THREE.AmbientLight(0xbbbbbb); // Dim ambient light
-    this.scene.add(ambientLight);
-
-    // === Set Up Composer and Bloom Pass ===
-    this.composer = new EffectComposer(this.renderer);
-    this.composer.addPass(new RenderPass(this.scene, this.camera));
-
-    this.bloomPass = new UnrealBloomPass(
-      new THREE.Vector2(window.innerWidth, window.innerHeight),
-      0.5, // strength
-      0.4, // radius
-      0.85 // threshold
-    );
-    this.composer.addPass(this.bloomPass);
-
-    // === Initialize Links LineSegments ===
-    // MODIFY MATERIAL TO ENABLE VERTEX COLORS
-    this.linksMaterial = new THREE.LineBasicMaterial({
-      vertexColors: true, // Enable vertex colors
-      transparent: true,
-      opacity: 1.0, // Full opacity; control transparency via color if needed
+    // Mouse down
+    this.canvas.addEventListener("mousedown", (e) => {
+      // Only start dragging if Ctrl is pressed (per requirement)
+      // if (e.ctrlKey) {
+      this.isDragging = true;
+      this.lastX = e.clientX;
+      this.lastY = e.clientY;
+      // }
     });
 
-    this.linksGeometry = new THREE.BufferGeometry();
-    this.linksLineSegments = new THREE.LineSegments(this.linksGeometry, this.linksMaterial);
-    this.linksLineSegments.frustumCulled = false; // Optional
-    this.scene.add(this.linksLineSegments);
-
-    // === Load Planets ===
-    this.loadPlanets();
-  }
-
-  /**
-   * Loads planet meshes into the scene using the solar system data.
-   */
-  loadPlanets() {
-    // Load Planets
-    for (const planetData of this.solarSystemData.planets) {
-      if (planetData.shape === "sphere") {
-        // Create a sphere for spherical planets
-        const geometry = new THREE.SphereGeometry(kmTo3D(planetData.diameterKm / 2) * planetScaleFactor, 32, 32);
-        const texture = this.textureLoader.load(planetData.texturePath);
-        const material = new THREE.MeshPhongMaterial({
-          map: texture,
-          shininess: 2,
-          specular: new THREE.Color(0x111111),
-        });
-        const planetMesh = new THREE.Mesh(geometry, material);
-        planetMesh.castShadow = true;
-        planetMesh.receiveShadow = true;
-        planetMesh.params = planetData; // Store parameters if needed
-        this.scene.add(planetMesh);
-        this.planets[planetData.name] = planetMesh;
-      } else if (planetData.shape === "car") {
-        // Use the helper function to create the car model
-        createCarModel(THREE, planetData, this.scene, this.planets, planetScaleFactor);
+    // Mouse move
+    this.canvas.addEventListener("mousemove", (e) => {
+      if (this.isDragging) {
+        const dx = e.clientX - this.lastX;
+        const dy = e.clientY - this.lastY;
+        this.panX += dx;
+        this.panY += dy;
+        this.lastX = e.clientX;
+        this.lastY = e.clientY;
       }
-    }
+    });
+
+    // Mouse up
+    this.canvas.addEventListener("mouseup", () => {
+      this.isDragging = false;
+    });
+
+    // Mouse wheel for zoom
+    // Use { passive: false } so we can prevent default scroll.
+    // Mouse wheel for zoom where the mouse is pointing
+    this.canvas.addEventListener(
+      "wheel",
+      (e) => {
+        e.preventDefault();
+
+        // 1) Get mouse position in canvas coords
+        const mouseX = e.clientX;
+        const mouseY = e.clientY;
+
+        // Save old zoom so we can compute ratio
+        const oldZoom = this.zoom;
+        const zoomFactor = 1.05;
+
+        // 2) Zoom in if scrolling up, out if scrolling down
+        if (e.deltaY < 0) {
+          this.zoom *= zoomFactor;
+        } else {
+          this.zoom /= zoomFactor;
+        }
+        // (Optional) clamp zoom
+        // this.zoom = Math.max(0.05, Math.min(this.zoom, 50));
+
+        // 3) Convert the mouse position to "world" coordinates before the zoom change
+        //
+        //    Remember your drawing transform is:
+        //      canvasX = (width/2 + panX) - worldX * (baseScaleAUtoPX * zoom)
+        //      canvasY = (height/2 + panY) + worldY * (baseScaleAUtoPX * zoom)
+        //
+        //    So we invert that to get:
+        //      worldX = (centerX - canvasX) / (baseScaleAUtoPX * zoom)
+        //      worldY = (canvasY - centerY) / (baseScaleAUtoPX * zoom)
+        //
+        const { width, height } = this.canvas;
+
+        const baseScaleAUtoPX = 300; // or whatever base scale you use
+        const oldCenterX = width / 2 + this.panX;
+        const oldCenterY = height / 2 + this.panY;
+
+        const worldX = (oldCenterX - mouseX) / (baseScaleAUtoPX * oldZoom);
+        const worldY = (mouseY - oldCenterY) / (baseScaleAUtoPX * oldZoom);
+
+        // 4) After changing the zoom, compute new panX/panY so that
+        //    "worldX, worldY" still appears under the mouseX, mouseY.
+        //
+        //    We want:
+        //       mouseX = newCenterX - worldX * (baseScaleAUtoPX * newZoom)
+        //       mouseY = newCenterY + worldY * (baseScaleAUtoPX * newZoom)
+        //
+        //    newCenterX = (width/2 + this.panX)
+        //    newCenterY = (height/2 + this.panY)
+        //
+        const newZoom = this.zoom;
+        const newScaleAUtoPX = baseScaleAUtoPX * newZoom;
+
+        // Solve for panX so that the canvasX stays the same for worldX.
+        //   mouseX = (width/2 + panX) - worldX * newScaleAUtoPX
+        // => panX   = mouseX + worldX * newScaleAUtoPX - width/2
+        this.panX = mouseX + worldX * newScaleAUtoPX - width / 2;
+
+        // Solve for panY so that the canvasY stays the same for worldY.
+        //   mouseY = (height/2 + panY) + worldY * newScaleAUtoPX
+        // => panY   = mouseY - worldY * newScaleAUtoPX - height/2
+        this.panY = mouseY - worldY * newScaleAUtoPX - height / 2;
+      },
+      { passive: false }
+    );
+
+    // Touch start
+    this.canvas.addEventListener("touchstart", (e) => {
+      // If single touch => drag
+      if (e.touches.length === 1) {
+        this.isTouchDragging = true;
+        this.lastX = e.touches[0].clientX;
+        this.lastY = e.touches[0].clientY;
+      }
+      // If two touches => pinch-zoom
+      else if (e.touches.length === 2) {
+        this.isTouchDragging = false;
+        this.touchDistance = this.getTouchDistance(e.touches);
+      }
+    });
+
+    // Touch move
+    this.canvas.addEventListener("touchmove", (e) => {
+      if (e.touches.length === 1 && this.isTouchDragging) {
+        const dx = e.touches[0].clientX - this.lastX;
+        const dy = e.touches[0].clientY - this.lastY;
+        this.panX += dx;
+        this.panY += dy;
+        this.lastX = e.touches[0].clientX;
+        this.lastY = e.touches[0].clientY;
+      } else if (e.touches.length === 2) {
+        // pinch-zoom
+        const newDist = this.getTouchDistance(e.touches);
+        const zoomFactor = newDist / this.touchDistance;
+        this.zoom *= zoomFactor;
+        // optionally clamp zoom
+        // this.zoom = Math.max(0.05, Math.min(this.zoom, 50));
+
+        this.touchDistance = newDist;
+      }
+      e.preventDefault();
+    });
+
+    // Touch end
+    this.canvas.addEventListener("touchend", (e) => {
+      if (e.touches.length === 0) {
+        this.isTouchDragging = false;
+      }
+      // If 1 finger lifts but 1 remains, you might want to reset pinch state
+      if (e.touches.length < 2) {
+        this.touchDistance = 0;
+      }
+    });
   }
 
   /**
-   * Sets up satellites using instanced meshes for efficiency.
-   * Cleans up any previous instanced objects if needed.
-   *
+   * --- NEW: Utility to get distance between two touch points (for pinch-zoom). ---
+   */
+  getTouchDistance(touches) {
+    if (touches.length < 2) return 0;
+    const dx = touches[0].clientX - touches[1].clientX;
+    const dy = touches[0].clientY - touches[1].clientY;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+
+  /**
+   * Sets up satellites in an internal array for 2D rendering.
    * @param {Array} satellites - Array of satellite objects with properties:
-   *                             { color } (only color is used here).
+   *                             { color, position, name }.
    */
   setSatellites(satellites) {
-    // Cleanup existing satellites group
-    this.clearGroup(this.satellitesGroup);
-
-    if (satellites.length === 0) return;
-
-    const scale = 0.002;
-    // Satellite geometry: Cylinder (adjust dimensions as needed)
-    const geometry = new THREE.CylinderGeometry(
-      scale, // Radius (top and bottom)
-      scale,
-      scale * 2, // Height
-      6 // Number of segments (hexagonal cylinder)
-    );
-
-    // Satellite material: Supports per-instance colors
-    const material = new THREE.MeshPhongMaterial({
-      color: 0xffffff, // Default white color
-      shininess: 10, // Adds a subtle shine to the satellites
-      specular: new THREE.Color(0x333333), // Specular reflection color
-      vertexColors: true, // Enable per-instance coloring
-      emissive: new THREE.Color(0x444444), // Add an emissive color
-      emissiveIntensity: 0.5, // Adjust emissive intensity as needed
-      transparent: false, // No transparency for now
-      opacity: 1.0, // Fully opaque
-    });
-
-    // Create Instanced Mesh: Shared geometry and material for all satellites
-    const instancedMesh = new THREE.InstancedMesh(geometry, material, satellites.length);
-    instancedMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage); // Optimized for frequent updates
-    instancedMesh.castShadow = false; // Satellites do not cast shadows
-    instancedMesh.receiveShadow = true; // Satellites receive shadows
-
-    // Set instance color and initialize transformations
-    const dummy = new THREE.Object3D(); // Temporary object for matrix transformations
-    satellites.forEach((satellite, index) => {
-      // Set a grey color for all instances
-      const color = new THREE.Color(0.9, 0.9, 0.9);
-      instancedMesh.setColorAt(index, color);
-
-      // Initial position (to be updated in updateData)
-      const position = satellite.position;
-      dummy.position.set(
-        auTo3D(position.x),
-        auTo3D(position.z), // Swap y and z axes if needed
-        -auTo3D(position.y)
-      ); // Default position
-      dummy.updateMatrix();
-      instancedMesh.setMatrixAt(index, dummy.matrix); // Save initial transformation matrix
-    });
-
-    // Add the instanced mesh to the scene
-    this.satellitesGroup.add(instancedMesh);
-    this.satelliteMesh = instancedMesh; // Save reference for later updates
+    this.satellites = satellites;
   }
 
   /**
-   * Updates the 3D scene with new planets positions, satellites, and links data.
-   *
-   * @param {Object} planetsPositions - An object mapping planet names to positions { x, y, z }.
-   * @param {Array} satellitesPositions - Array of satellite position objects [{ x, y, z }, ...].
-   * @param {Array} links - Array of link objects with properties:
-   *                        { fromId: string, toId: string, gbpsFlowActual: number, ... }.
+   * Updates the positions of planets and satellites (in 2D memory).
+   * @param {Object} planets - An object mapping planet names to objects like { name, position }.
+   * @param {Array} satellites - Array of satellite objects [{ name, position }, ...].
    */
   updatePositions(planets, satellites) {
-    // === Update Planet Positions ===
-    this.planetPositions = {};
+    // Store planet positions
     for (let planet of Object.values(planets)) {
-      const position = planet.position;
-      const name = planet.name;
-      const mesh = this.planets[name];
-      if (mesh) {
-        mesh.position.set(
-          auTo3D(position.x),
-          auTo3D(position.z), // Swap y and z axes if needed
-          -auTo3D(position.y)
-        );
-        // Store position
-        this.planetPositions[name] = {
-          x: mesh.position.x,
-          y: mesh.position.y,
-          z: mesh.position.z,
-        };
-        // Update rotation if provided
-        if (position.rotation) {
-          mesh.rotation.set(position.rotation.x || 0, position.rotation.y || 0, position.rotation.z || 0);
-        } else {
-          // Reset rotation if not provided
-          mesh.rotation.set(0, 0, 0);
-        }
-      } else {
-        if (name != "Tesla") console.warn(`Mesh for planet "${name}" not found.`);
-      }
+      this.planetPositions[planet.name] = planet.position;
     }
 
-    // === Update Satellite Positions ===
+    // Store satellite positions
     this.satellitePositions = {};
-    if (this.satelliteMesh && satellites.length > 0) {
-      const dummy = new THREE.Object3D();
-      satellites.forEach((satellite, index) => {
-        const position = satellite.position;
-        dummy.position.set(
-          auTo3D(position.x),
-          auTo3D(position.z), // Swap y and z axes if needed
-          -auTo3D(position.y)
-        );
-        // Update rotation if provided
-        if (position.rotation) {
-          dummy.rotation.set(position.rotation.x || 0, position.rotation.y || 0, position.rotation.z || 0);
-        } else {
-          // Reset rotation if not provided
-          dummy.rotation.set(0, 0, 0);
-        }
-        dummy.updateMatrix();
-        this.satelliteMesh.setMatrixAt(index, dummy.matrix); // Update matrix
-
-        // Store position
-        this.satellitePositions[satellite.name] = {
-          x: dummy.position.x,
-          y: dummy.position.y,
-          z: dummy.position.z,
-        };
-      });
-      this.satelliteMesh.instanceMatrix.needsUpdate = true; // Notify Three.js of the update
+    for (let satellite of satellites) {
+      this.satellitePositions[satellite.name] = satellite.position;
     }
 
-    // === Update Links Positions ===
+    // Update links so they know where to draw
     this.updateLinksPositions();
   }
 
+  /**
+   * Updates the list of all possible links (inactive + active).
+   * @param {Array} links - Array of link objects.
+   */
   updatePossibleLinks(links) {
     this.possibleLinks = links;
   }
 
+  /**
+   * Updates the list of active links.
+   * @param {Array} links - Array of link objects.
+   */
   updateActiveLinks(links) {
     this.activeLinks = links;
   }
 
+  /**
+   * Updates link positions - in 2D, this simply triggers re-render
+   * with the new data stored in `possibleLinks` and `activeLinks`.
+   */
   updateLinksPositions() {
-    const activeLinkSet = new Set(this.activeLinks.map((link) => link.fromId + "_" + link.toId));
+    // Nothing special needed here; data is read each draw cycle.
+  }
 
-    // Filter out active links from possible links
+  /**
+   * Handles window resize events to adjust the canvas size.
+   */
+  onWindowResize() {
+    this.canvas.width = window.innerWidth;
+    this.canvas.height = window.innerHeight;
+  }
+
+  /**
+   * Clears all objects from a given group (not used in 2D).
+   * This is retained for API compatibility with the 3D version.
+   * @param {Object} group - Unused in 2D.
+   */
+  clearGroup(group) {
+    // Not applicable in 2D canvas, but kept for compatibility.
+  }
+
+  /**
+   * The animation loop for continuously rendering the 2D scene.
+   */
+  animate() {
+    // Clear the canvas
+    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+
+    // Draw the solar system scene in 2D
+    this.drawSolarSystem();
+
+    // Request the next frame
+    requestAnimationFrame(this.animate);
+  }
+
+  /**
+   * Draw the solar system (sun, planets, satellites, links) in 2D,
+   * top-down view, applying the current pan & zoom transforms.
+   */
+  drawSolarSystem() {
+    const { width, height } = this.canvas;
+
+    // Instead of using the direct center, we allow panning:
+    const centerX = width / 2 + this.panX;
+    const centerY = height / 2 + this.panY;
+
+    // We'll scale the AU->pixels with the current zoom factor
+    const baseScaleAUtoPX = 300; // base scale for 1 AU -> 300px
+    const scaleAUtoPX = baseScaleAUtoPX * this.zoom;
+
+    // === Draw background (simple fill) ===
+    this.ctx.save();
+    this.ctx.fillStyle = "#FFFFFF";
+    this.ctx.fillRect(0, 0, width, height);
+    this.ctx.restore();
+
+    // === Draw Sun ===
+    const sunData = this.solarSystemData.sun;
+    const sunRadiusAU = kmTo3D(sunData.diameterKm / 2) * sunScaleFactor;
+    const sunDisplayRadius = sunRadiusAU * 0.1 * this.zoom;
+    this.ctx.save();
+    this.ctx.fillStyle = "#DDDD00";
+    this.ctx.beginPath();
+    this.ctx.arc(centerX, centerY, sunDisplayRadius, 0, 2 * Math.PI);
+    this.ctx.fill();
+    this.ctx.restore();
+
+    // === Draw Planets ===
+    for (let planetData of this.solarSystemData.planets) {
+      if (planetData.name === "Tesla") continue;
+      const pos = this.planetPositions[planetData.name];
+      if (!pos) continue;
+
+      // Convert from AU to canvas coords
+      const planetX = centerX - auTo3D(pos.x) * scaleAUtoPX;
+      const planetY = centerY + auTo3D(pos.y) * scaleAUtoPX;
+
+      // Planet radius
+      const planetRadiusAU = kmTo3D(planetData.diameterKm / 2) * planetScaleFactor;
+      const planetDisplayRadius = planetRadiusAU * 0.1 * this.zoom;
+
+      // Draw
+      this.ctx.save();
+      this.ctx.fillStyle = "#000000";
+      this.ctx.beginPath();
+      this.ctx.arc(planetX, planetY, planetDisplayRadius, 0, 2 * Math.PI);
+      this.ctx.fill();
+      this.ctx.restore();
+    }
+
+    // === Draw Satellites (example) ===
+    if (false) {
+      const satSize = 8;
+      for (let satellite of this.satellites) {
+        const pos = this.satellitePositions[satellite.name];
+        if (!pos) continue;
+
+        const satX = centerX - auTo3D(pos.x) * scaleAUtoPX;
+        const satY = centerY + auTo3D(pos.y) * scaleAUtoPX;
+        // small square
+        this.ctx.save();
+        this.ctx.fillStyle = "gray";
+        this.ctx.fillRect(satX - satSize / 2, satY - satSize / 2, satSize, satSize);
+        this.ctx.restore();
+      }
+    }
+
+    // === Draw Links ===
+    const activeLinkSet = new Set(this.activeLinks.map((link) => link.fromId + "_" + link.toId));
     const inactiveLinks = this.possibleLinks.filter(
       (link) => !activeLinkSet.has(link.fromId + "_" + link.toId) && !activeLinkSet.has(link.toId + "_" + link.fromId)
     );
-    // Combine all links
     const allLinks = [...this.activeLinks, ...inactiveLinks];
 
-    const numLinks = allLinks.length;
-    const positions = new Float32Array(numLinks * 2 * 3);
-    const colors = new Float32Array(numLinks * 2 * 3);
-
-    // Calculate min and max flow for color mapping (for active links only)
+    // Compute min/max flows for color interpolation
     const flows = this.activeLinks.map((link) => link.gbpsFlowActual);
-    const maxFlow = Math.max(...flows);
-    const minFlow = Math.min(...flows);
+    const maxFlow = flows.length > 0 ? Math.max(...flows) : 1;
+    const minFlow = flows.length > 0 ? Math.min(...flows) : 0;
 
-    // const maxFlow = this.styles.links.active.gbpsmax;
-    // const minFlow = this.styles.links.active.gbpsmin;
-    // console.log(maxFlow, minFlow);
+    const interpolateColor = (t) => {
+      const colMin = {
+        r: (this.styles.links.active.colormin >> 16) & 0xff,
+        g: (this.styles.links.active.colormin >> 8) & 0xff,
+        b: this.styles.links.active.colormin & 0xff,
+      };
+      const colMax = {
+        r: (this.styles.links.active.colormax >> 16) & 0xff,
+        g: (this.styles.links.active.colormax >> 8) & 0xff,
+        b: this.styles.links.active.colormax & 0xff,
+      };
+      const r = colMin.r + (colMax.r - colMin.r) * t;
+      const g = colMin.g + (colMax.g - colMin.g) * t;
+      const b = colMin.b + (colMax.b - colMin.b) * t;
+      return `rgb(${r}, ${g}, ${b})`;
+    };
 
-    for (let i = 0; i < numLinks; i++) {
-      const link = allLinks[i];
+    for (let link of allLinks) {
       const isActive = activeLinkSet.has(link.fromId + "_" + link.toId);
 
-      // Get 'from' and 'to' positions
-      const fromPosition = this.planetPositions[link.fromId] || this.satellitePositions[link.fromId];
-      const toPosition = this.planetPositions[link.toId] || this.satellitePositions[link.toId];
-
-      if (!fromPosition || !toPosition) {
+      const fromPos = this.planetPositions[link.fromId] || this.satellitePositions[link.fromId];
+      const toPos = this.planetPositions[link.toId] || this.satellitePositions[link.toId];
+      if (!fromPos || !toPos) {
         console.warn(`Cannot find positions for link between "${link.fromId}" and "${link.toId}"`);
         continue;
       }
 
-      // Set positions
-      positions[i * 6] = fromPosition.x;
-      positions[i * 6 + 1] = fromPosition.y;
-      positions[i * 6 + 2] = fromPosition.z;
+      const fromX = centerX - auTo3D(fromPos.x) * scaleAUtoPX;
+      const fromY = centerY + auTo3D(fromPos.y) * scaleAUtoPX;
+      const toX = centerX - auTo3D(toPos.x) * scaleAUtoPX;
+      const toY = centerY + auTo3D(toPos.y) * scaleAUtoPX;
 
-      positions[i * 6 + 3] = toPosition.x;
-      positions[i * 6 + 4] = toPosition.y;
-      positions[i * 6 + 5] = toPosition.z;
-
-      // Set colors
-      let color = new THREE.Color();
+      // Stroke color
+      let strokeColor = "#777777"; // inactive
       if (isActive) {
-        // Active link: interpolate color based on flow
         let t = 0;
         if (maxFlow > minFlow) {
           t = (link.gbpsFlowActual - minFlow) / (maxFlow - minFlow);
         }
-        t = isNaN(t) ? 0 : t;
-
-        color.lerpColors(new THREE.Color(this.styles.links.active.colormin), new THREE.Color(this.styles.links.active.colormax), t);
-      } else {
-        // Inactive link: use inactive color
-        color = new THREE.Color(this.styles.links.inactive.color);
+        strokeColor = interpolateColor(isNaN(t) ? 0 : t);
       }
 
-      // Set color for both vertices
-      colors[i * 6] = color.r;
-      colors[i * 6 + 1] = color.g;
-      colors[i * 6 + 2] = color.b;
-
-      colors[i * 6 + 3] = color.r;
-      colors[i * 6 + 4] = color.g;
-      colors[i * 6 + 5] = color.b;
-    }
-
-    // Update the geometry
-    this.linksGeometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-    this.linksGeometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
-    this.linksGeometry.attributes.position.needsUpdate = true;
-    this.linksGeometry.attributes.color.needsUpdate = true;
-    this.linksGeometry.computeBoundingSphere();
-  }
-
-  /**
-   * Handles window resize events to adjust camera, renderer, and post-processing effects.
-   */
-  onWindowResize() {
-    this.camera.aspect = window.innerWidth / window.innerHeight;
-    this.camera.updateProjectionMatrix();
-
-    this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.composer.setSize(window.innerWidth, window.innerHeight);
-    this.bloomPass.setSize(window.innerWidth, window.innerHeight);
-  }
-
-  /**
-   * Animation loop that renders the scene and updates controls.
-   * Positions are updated via updateData(), so we only need to handle rendering here.
-   */
-  animate() {
-    requestAnimationFrame(this.animate);
-
-    this.controls.update(); // Update orbit controls
-
-    // === Render Scene with Composer ===
-    this.composer.render();
-  }
-
-  /**
-   * Clears all objects from a given group.
-   *
-   * @param {THREE.Group} group - The group to clear.
-   */
-  clearGroup(group) {
-    while (group.children.length > 0) {
-      const obj = group.children[0];
-      if (obj.geometry) obj.geometry.dispose();
-      if (obj.material) {
-        if (Array.isArray(obj.material)) {
-          obj.material.forEach((mat) => mat.dispose());
-        } else {
-          obj.material.dispose();
-        }
-      }
-      group.remove(obj);
+      this.ctx.save();
+      this.ctx.strokeStyle = strokeColor;
+      this.ctx.lineWidth = isActive ? 2 : 1;
+      this.ctx.beginPath();
+      this.ctx.moveTo(fromX, fromY);
+      this.ctx.lineTo(toX, toY);
+      this.ctx.stroke();
+      this.ctx.restore();
     }
   }
 }

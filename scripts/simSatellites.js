@@ -5,6 +5,7 @@ import { helioCoords } from "./simOrbits.js?v=2.4";
 export class SimSatellites {
   constructor() {
     this.satellites = [];
+    this.orbitalElements = [];
   }
 
   setSatellitesConfig(satellitesConfig) {
@@ -13,6 +14,14 @@ export class SimSatellites {
     for (let config of satellitesConfig) newSatellites.push(...this.generateSatellites(config));
     this.satellites = newSatellites; //.slice(0, 2000);
     // console.log(`${this.satellites.length} SATELLITES`);
+  }
+
+  setOrbitalElements(satellitesConfig) {
+    this.orbitalElements = [];
+    const newOrbitalElements = [];
+    for (let config of satellitesConfig) newOrbitalElements.push(this.generateOrbitalElements(config));
+    this.orbitalElements = newOrbitalElements;
+    console.log(this.orbitalElements);
   }
 
   updateSatellitesPositions(simDaysSinceStart) {
@@ -95,6 +104,42 @@ export class SimSatellites {
     return satellites;
   }
 
+  generateOrbitalElements(config) {
+    const { satCount, satDistanceSun, ringName, ringType, sideExtensionDeg, eccentricity, argPeri, earthMarsInclinationPct } = config;
+    if (satCount == 0) return null;
+    let orbitalElements = {};
+    if (ringType == "Circular") {
+      const a = satDistanceSun;
+      const n = this.meanMotion(a);
+      const long = 0;
+      orbitalElements = {
+        ringName,
+        satCount,
+        ...this.getOrbitaElements(ringType, a, n, eccentricity, argPeri, earthMarsInclinationPct, long),
+      };
+    } else if (ringType == "Eccentric") {
+      const a = satDistanceSun;
+      const n = this.meanMotion(a);
+      const long = 0;
+      orbitalElements = {
+        ringName,
+        satCount,
+        ...this.getOrbitaElements(ringType, a, n, eccentricity, argPeri, earthMarsInclinationPct, long),
+      };
+    } else {
+      const { a, n } = this.getParams_a_n(ringType);
+      const satCountOneSide = Math.ceil(satCount / 2);
+      const satCount2 = satCountOneSide * 2 - (sideExtensionDeg == 180 ? 1 : 0);
+      const long = 0;
+      orbitalElements = {
+        ringName,
+        satCount: satCount2,
+        ...this.getOrbitaElements(ringType, a, n, eccentricity, argPeri, earthMarsInclinationPct, long),
+      };
+    }
+    return orbitalElements;
+  }
+
   getParams_a_n(ringType) {
     let a, n;
     if (ringType == "Mars") {
@@ -119,6 +164,7 @@ export class SimSatellites {
       color: [255, 255, 255],
       long,
       ringName,
+      ringType,
       neighbors,
     };
     return satelliteData;

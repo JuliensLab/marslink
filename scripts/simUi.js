@@ -73,31 +73,24 @@ export class SimUi {
    */
   setupLongTermRunButton() {
     const startButton = document.getElementById("startLongTermRun");
-    const summaryContainer = document.getElementById("long-term-summary");
+    const summaryContainer = document.getElementById("long-term-summary-run-text");
+    const progressBar = document.getElementById("progress-bar-run"); // Ensure you have a progress bar in your HTML
+    const progressText = document.getElementById("progress-text-run"); // And a progress text element
 
-    if (startButton && summaryContainer) {
+    if (startButton && summaryContainer && progressBar && progressText) {
       startButton.addEventListener("click", async () => {
         // Disable the button to prevent multiple clicks
         startButton.disabled = true;
         startButton.textContent = "Running...";
-
-        // Optionally, you can display a loading indicator here
+        progressBar.style.width = "0%";
+        progressText.textContent = "Progress: 0%";
 
         try {
-          // Run the long-term simulation
-          // If longTermRun is synchronous and time-consuming, consider wrapping it in a Promise
-          const simulationResult = await new Promise((resolve, reject) => {
-            // Use setTimeout to allow the UI to update before running the simulation
-            setTimeout(() => {
-              try {
-                const dates = { from: "2025-01-01", to: "2026-01-01", stepDays: 30 };
-                const result = this.simMain.longTermRun(dates);
-                resolve(result);
-              } catch (error) {
-                reject(error);
-              }
-            }, 100); // Slight delay to allow UI updates
-          });
+          // Define the simulation dates
+          const dates = { from: "2025-01-01", to: "2026-01-01", stepDays: 30 };
+
+          // Run the long-term simulation and await its completion
+          const simulationResult = await this.simMain.longTermRun(dates);
 
           console.log("Long-Term Simulation Result:", simulationResult);
           this.saveToJson(simulationResult, "SimulationResult");
@@ -109,8 +102,7 @@ export class SimUi {
           }
 
           // Display the summary in the UI
-          let html = "";
-          html += "<h3>Long-Term Run Summary:</h3>";
+          let html = "<h3>Long-Term Run Summary:</h3>";
           html += `${simulationResult.dataSummary.dayCount} samples, every ${simulationResult.dates.stepDays} days`;
           html += "<br>";
           html += `from ${simulationResult.dates.from} to ${simulationResult.dates.to}`;
@@ -119,9 +111,9 @@ export class SimUi {
           html += "<br>";
           html += `Latency avg of best: ${rnd(simulationResult.dataSummary.bestLatencyMinutes.avg, 1)} minutes`;
           html += "<br>";
-          html += `Througput avg: ${rnd(simulationResult.dataSummary.maxFlowGbps.avg * 1000, 0)} mbps`;
+          html += `Throughput avg: ${rnd(simulationResult.dataSummary.maxFlowGbps.avg * 1000, 0)} mbps`;
           html += "<br>";
-          html += `Througput worst: ${rnd(simulationResult.dataSummary.maxFlowGbps.min * 1000, 0)} mbps`;
+          html += `Throughput worst: ${rnd(simulationResult.dataSummary.maxFlowGbps.min * 1000, 0)} mbps`;
 
           summaryContainer.innerHTML = html;
         } catch (error) {
@@ -139,68 +131,89 @@ export class SimUi {
   }
 
   /**
-   * Sets up the Start Long-Term Run button with its event listener.
+   * Sets up the Start Long-Term Scenarios Run button with its event listener.
    */
   setupLongTermScenariosRunButton() {
     const startButton = document.getElementById("startLongTermScenariosRun");
-    const summaryContainer = document.getElementById("long-term-summary");
+    const summaryContainer = document.getElementById("long-term-summary-run-text");
+    const progressBar = document.getElementById("progress-bar-run"); // Ensure you have a progress bar in your HTML
+    const progressText = document.getElementById("progress-text-run"); // And a progress text element
 
-    if (startButton && summaryContainer) {
+    if (startButton && summaryContainer && progressBar && progressText) {
       startButton.addEventListener("click", async () => {
         // Disable the button to prevent multiple clicks
         startButton.disabled = true;
         startButton.textContent = "Running...";
-
-        // Optionally, you can display a loading indicator here
+        progressBar.style.width = "0%";
+        progressText.textContent = "Progress: 0%";
 
         try {
-          // Run the long-term simulation
-          // If longTermRun is synchronous and time-consuming, consider wrapping it in a Promise
-          const simulationResult = await new Promise((resolve, reject) => {
-            // Use setTimeout to allow the UI to update before running the simulation
-            setTimeout(() => {
-              try {
-                const dates = { from: "2025-01-01", to: "2025-03-01", stepDays: 30 };
-                const circularRingsCountInputs = { from: 3, to: 4, step: 1 };
-                const circularRingsMbpsInputs = { from: 10, to: 300, step: 100 };
-                const satellitesConfig = this.getGroupsConfig([
-                  "capability",
-                  "simulation",
-                  "current_technology_performance",
-                  "technology_improvement",
-                  "ring_mars",
-                  "circular_rings",
-                  "eccentric_rings",
-                  "ring_earth",
-                ]);
-                const resultArray = [];
-                for (
-                  let circularRingsCount = circularRingsCountInputs.from;
-                  circularRingsCount <= circularRingsCountInputs.to;
-                  circularRingsCount += circularRingsCountInputs.step
-                ) {
-                  for (
-                    let circularRingsMbps = circularRingsMbpsInputs.from;
-                    circularRingsMbps <= circularRingsMbpsInputs.to;
-                    circularRingsMbps += circularRingsMbpsInputs.step
-                  ) {
-                    satellitesConfig["circular_rings.ringcount"] = circularRingsCount;
-                    satellitesConfig["circular_rings.requiredmbpsbetweensats"] = circularRingsMbps;
-                    this.simMain.setSatellitesConfig(satellitesConfig);
-                    const result = this.simMain.longTermRun(dates);
-                    resultArray.push(result);
-                  }
-                }
+          // Define the simulation dates
+          const dates = { from: "2025-01-01", to: "2030-01-01", stepDays: 30 };
 
-                resolve(resultArray);
-              } catch (error) {
-                reject(error);
-              }
-            }, 100); // Slight delay to allow UI updates
-          });
+          // Define the input ranges for scenarios
+          const circularRingsCountInputs = { from: 1, to: 6, step: 1 };
+          const circularRingsMbpsInputs = { from: 1, to: 310, step: 50 };
 
-          console.log("Long-Term Scenarios Simulation Result:", simulationResult);
-          this.saveToJson(simulationResult, "SimulationScenariosResult");
+          // Calculate total number of scenarios for progress tracking
+          const totalScenarios =
+            Math.ceil((circularRingsCountInputs.to - circularRingsCountInputs.from) / circularRingsCountInputs.step + 1) *
+            Math.ceil((circularRingsMbpsInputs.to - circularRingsMbpsInputs.from) / circularRingsMbpsInputs.step + 1);
+          let completedScenarios = 0;
+
+          // Initialize satellitesConfig
+          const satellitesConfig = this.getGroupsConfig([
+            "capability",
+            "simulation",
+            "current_technology_performance",
+            "technology_improvement",
+            "ring_mars",
+            "circular_rings",
+            "eccentric_rings",
+            "ring_earth",
+          ]);
+
+          const resultArray = [];
+
+          // Iterate over each combination of circularRingsCount and circularRingsMbps
+          for (
+            let circularRingsCount = circularRingsCountInputs.from;
+            circularRingsCount <= circularRingsCountInputs.to;
+            circularRingsCount += circularRingsCountInputs.step
+          ) {
+            for (
+              let circularRingsMbps = circularRingsMbpsInputs.from;
+              circularRingsMbps <= circularRingsMbpsInputs.to;
+              circularRingsMbps += circularRingsMbpsInputs.step
+            ) {
+              // Update satellitesConfig with current scenario parameters
+              satellitesConfig["circular_rings.ringcount"] = circularRingsCount;
+              satellitesConfig["circular_rings.requiredmbpsbetweensats"] = circularRingsMbps;
+
+              // Apply the new satellites configuration
+              this.simMain.setSatellitesConfig(satellitesConfig);
+
+              // Run the long-term simulation and await its completion
+              const result = await this.simMain.longTermRun(dates, (progress) => {
+                // Optionally, you can update scenario-specific progress here
+                // For simplicity, we're tracking overall scenario progress
+              });
+
+              result.satellitesConfig = JSON.parse(JSON.stringify(satellitesConfig));
+              // Push the result to the resultArray
+              resultArray.push(result);
+
+              // Update progress
+              completedScenarios++;
+              const overallProgress = completedScenarios / totalScenarios;
+              const percent = Math.round(overallProgress * 100);
+              progressBar.style.width = `${percent}%`;
+              progressText.textContent = `Progress: ${percent}%`;
+            }
+          }
+
+          console.log("Long-Term Scenarios Simulation Result:", resultArray);
+          this.saveToJson(resultArray, "SimulationScenariosResult");
 
           // Helper function to round numbers to a specified precision
           function rnd(number, precision) {
@@ -208,19 +221,31 @@ export class SimUi {
             return Math.round(number * factor) / factor;
           }
 
-          // Display the summary in the UI
-          let html = "";
-          html += "<h3>Scenarios Run Summary:</h3>";
-          html += `${simulationResult.length} scenarios`;
-          html += "<br>";
-          html += `${simulationResult[0].dataSummary.dayCount} samples, every ${simulationResult[0].dates.stepDays} days`;
-          html += "<br>";
-          html += `from ${simulationResult[0].dates.from} to ${simulationResult[0].dates.to}`;
-          html += "<br>";
+          // Generate a summary for all scenarios
+          let html = "<h3>Scenarios Run Summary:</h3>";
+          html += `<p>Total Scenarios: ${resultArray.length}</p>`;
+
+          // Optionally, iterate over each result and display individual summaries
+          resultArray.forEach((simulationResult, index) => {
+            html += `<h4>Scenario ${index + 1}:</h4>`;
+            html += `<p>Rings Count: ${simulationResult.dates.stepDays}</p>`; // Adjust as needed
+            html += `${simulationResult.dataSummary.dayCount} samples, every ${simulationResult.dates.stepDays} days`;
+            html += "<br>";
+            html += `From ${simulationResult.dates.from} to ${simulationResult.dates.to}`;
+            html += "<br>";
+            html += `Latency avg of avg: ${rnd(simulationResult.dataSummary.avgLatencyMinutes.avg, 1)} minutes`;
+            html += "<br>";
+            html += `Latency avg of best: ${rnd(simulationResult.dataSummary.bestLatencyMinutes.avg, 1)} minutes`;
+            html += "<br>";
+            html += `Throughput avg: ${rnd(simulationResult.dataSummary.maxFlowGbps.avg * 1000, 0)} mbps`;
+            html += "<br>";
+            html += `Throughput worst: ${rnd(simulationResult.dataSummary.maxFlowGbps.min * 1000, 0)} mbps`;
+            html += "<br><br>";
+          });
 
           summaryContainer.innerHTML = html;
         } catch (error) {
-          console.error("Error during long-term simulation:", error);
+          console.error("Error during long-term scenarios simulation:", error);
           summaryContainer.textContent = "An error occurred during the simulation.";
         } finally {
           // Re-enable the button after completion
@@ -229,7 +254,7 @@ export class SimUi {
         }
       });
     } else {
-      console.error("Start Scenarios Run button or summary container not found.");
+      console.error("Start Scenarios Run button, summary container, or progress elements not found.");
     }
   }
 
