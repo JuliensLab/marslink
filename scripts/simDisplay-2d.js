@@ -1,5 +1,5 @@
 /***********************************************
- * simDisplay.js
+ * simDisplay-2d.js
  *
  * 2D (canvas-based) display of the solar system,
  * with pan and zoom (mouse & touch).
@@ -114,6 +114,11 @@ export class SimDisplay {
     requestAnimationFrame(this.animate);
   }
 
+  dispose() {
+    if (this.canvas) {
+      this.canvas.remove(); // Remove the 2D canvas
+    }
+  }
   /**
    * --- NEW: Setup mouse and touch event listeners for pan & zoom. ---
    */

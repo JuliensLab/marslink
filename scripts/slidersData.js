@@ -2,6 +2,13 @@
 
 export const slidersData = {
   simulation: {
+    "display-type": {
+      type: "radio",
+      label: "Display Type",
+      options: ["2d", "3d"],
+      value: "3d", // Default to 3D
+      unit: "",
+    },
     "time-acceleration-slider": {
       label: "Time Acceleration",
       min: -Math.pow(2, 25),

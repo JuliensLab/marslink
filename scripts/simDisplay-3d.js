@@ -1,4 +1,4 @@
-// simDisplay.js
+// simDisplay-3d.js
 
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js?v=2.4";
@@ -47,6 +47,7 @@ export class SimDisplay {
    *                                   Defaults to document.body if not provided.
    */
   constructor(container = document.body) {
+    this.stopAnimation = false; // Flag to stop animation
     // === Styles ===
     this.styles = {
       links: {
@@ -463,12 +464,66 @@ export class SimDisplay {
    * Positions are updated via updateData(), so we only need to handle rendering here.
    */
   animate() {
-    requestAnimationFrame(this.animate);
-
-    this.controls.update(); // Update orbit controls
-
-    // === Render Scene with Composer ===
+    if (this.stopAnimation) return; // Stop if flagged
+    requestAnimationFrame(this.animate.bind(this));
+    this.controls.update();
     this.composer.render();
+  }
+
+  dispose() {
+    this.stopAnimation = true; // Prevent further animation frames
+
+    // Dispose of OrbitControls
+    if (this.controls) {
+      this.controls.dispose();
+    }
+
+    // Dispose of bloom pass (post-processing)
+    if (this.bloomPass) {
+      this.bloomPass.dispose();
+    }
+
+    // Dispose of composer passes
+    if (this.composer) {
+      for (let pass of this.composer.passes) {
+        if (pass.dispose) pass.dispose();
+      }
+    }
+
+    // Dispose of renderer and force context loss
+    if (this.renderer) {
+      this.renderer.dispose();
+      this.renderer.forceContextLoss(); // Optional, ensures context is fully released
+      this.renderer.domElement.remove(); // Remove DOM element
+    }
+
+    // Clear groups (e.g., satellites, links)
+    this.clearGroup(this.satellitesGroup);
+    this.clearGroup(this.linksGroup);
+
+    // Dispose of planet meshes
+    for (let planetMesh of Object.values(this.planets)) {
+      if (planetMesh.geometry) planetMesh.geometry.dispose();
+      if (planetMesh.material) {
+        if (Array.isArray(planetMesh.material)) {
+          planetMesh.material.forEach((mat) => mat.dispose());
+        } else {
+          planetMesh.material.dispose();
+        }
+      }
+    }
+
+    // Dispose of sun mesh
+    if (this.sunMesh) {
+      this.sunMesh.geometry.dispose();
+      this.sunMesh.material.dispose();
+    }
+
+    // Dispose of star field
+    if (this.starField) {
+      this.starField.geometry.dispose();
+      this.starField.material.dispose();
+    }
   }
 
   /**

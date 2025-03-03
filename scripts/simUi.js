@@ -1,29 +1,20 @@
 // simUi.js
-
 import { slidersData } from "./slidersData.js?v=2.4";
 
 export class SimUi {
   constructor(simMain) {
     this.simMain = simMain;
     this.slidersData = slidersData;
-    this.sliders = {}; // To store references to slider elements
+    this.sliders = {};
 
-    // Create sliders and set up event listeners
     this.createSliders();
-
-    // Initialize simMain with initial slider values
     this.initializeSimMain();
 
-    // Set up the Start Long-Term Run button
     this.setupLongTermRunButton();
     this.setupLongTermScenariosRunButton();
   }
 
-  /**
-   * Initializes simMain with the current slider values.
-   */
   initializeSimMain() {
-    // Set time acceleration factor
     const timeAccelerationSlider = this.slidersData.simulation["time-acceleration-slider"];
     const timeAccelerationValue = this.mapSliderValueToUserFacing(timeAccelerationSlider, timeAccelerationSlider.value);
     this.simMain.setTimeAccelerationFactor(timeAccelerationValue);
@@ -40,6 +31,17 @@ export class SimUi {
         "ring_earth",
       ])
     );
+    // Set the initial display type
+    const displayType = this.slidersData.simulation["display-type"].value;
+    this.simMain.setDisplayType(displayType);
+
+    // Add a report button (adjust container as per your UI structure)
+    const reportButton = document.createElement("button");
+    reportButton.textContent = "Generate Report";
+    reportButton.addEventListener("click", () => {
+      this.simMain.generateReport();
+    });
+    document.getElementById("generateReportDiv").appendChild(reportButton); // Or append to a specific container
   }
 
   saveToJson(object, fileName) {
@@ -314,30 +316,22 @@ export class SimUi {
   createSliders() {
     const slidersContainer = document.getElementById("sliders-container");
 
-    // Iterate through each section in slidersData
     for (const section in this.slidersData) {
-      // Handle other sections (simulation, costs, capability)
       const sectionHeader = document.createElement("h3");
       sectionHeader.className = "slider-section-header";
-      sectionHeader.textContent =
-        section
-          .replace(/_/g, " ") // Replace underscores with spaces
-          .charAt(0)
-          .toUpperCase() + section.replace(/_/g, " ").slice(1);
+      sectionHeader.textContent = section.replace(/_/g, " ").charAt(0).toUpperCase() + section.replace(/_/g, " ").slice(1);
       slidersContainer.appendChild(sectionHeader);
 
       const sectionContent = document.createElement("div");
       sectionContent.className = "slider-section-content";
       slidersContainer.appendChild(sectionContent);
 
-      // Initialize storage for section sliders
       this.sliders[section] = {};
 
       for (const sliderId in this.slidersData[section]) {
         const slider = this.slidersData[section][sliderId];
         const fullSliderId = `${section}.${sliderId}`;
 
-        // Determine min, max, and step
         let min = slider.min;
         let max = slider.max;
         let step = slider.step;
@@ -354,11 +348,14 @@ export class SimUi {
           step = 1;
         }
 
-        // Retrieve saved value from localStorage if available
         const savedValue = localStorage.getItem(fullSliderId);
-        let sliderValue = savedValue !== null ? parseFloat(savedValue) : slider.value;
+        let sliderValue =
+          savedValue !== null
+            ? slider.type === "select" || slider.type === "dropdown" || slider.type === "radio"
+              ? savedValue
+              : parseFloat(savedValue)
+            : slider.value;
 
-        // Create slider elements
         const sliderContainer = document.createElement("div");
         sliderContainer.className = "slider-container";
 
@@ -367,45 +364,106 @@ export class SimUi {
         label.className = "slider-label";
         label.textContent = slider.label;
 
-        const input = document.createElement("input");
-        input.type = "range";
-        input.id = fullSliderId;
-        input.className = "slider";
-        input.min = min;
-        input.max = max;
-        input.step = step;
-        input.value = sliderValue;
+        let input;
+        let displayValue;
 
-        const valueSpan = document.createElement("span");
-        valueSpan.id = `${fullSliderId}-value`;
+        if (slider.type === "select" || slider.type === "dropdown") {
+          input = document.createElement("select");
+          input.id = fullSliderId;
+          input.className = "slider";
+          for (const option of slider.options) {
+            const optionElem = document.createElement("option");
+            optionElem.value = option;
+            optionElem.textContent = option;
+            if (option === sliderValue) {
+              optionElem.selected = true;
+            }
+            input.appendChild(optionElem);
+          }
+          displayValue = sliderValue;
+        } else if (slider.type === "radio") {
+          const radioContainer = document.createElement("div");
+          radioContainer.className = "radio-container";
+          slider.options.forEach((option) => {
+            const radio = document.createElement("input");
+            radio.type = "radio";
+            radio.name = fullSliderId;
+            radio.value = option;
+            radio.id = `${fullSliderId}-${option}`;
+            if (option === sliderValue) {
+              radio.checked = true;
+            }
+            const radioLabel = document.createElement("label");
+            radioLabel.setAttribute("for", radio.id);
+            radioLabel.textContent = option;
+            radioContainer.appendChild(radio);
+            radioContainer.appendChild(radioLabel);
 
-        // Set initial value display
-        let displayValue = this.mapSliderValueToUserFacing(slider, sliderValue);
-        valueSpan.textContent = this.formatNumber(displayValue) + slider.unit;
+            radio.addEventListener("change", () => {
+              if (radio.checked) {
+                const newValue = radio.value;
+                // No valueSpan to update for "radio"
+                this.updateValues(fullSliderId, newValue);
+              }
+            });
+          });
+          input = radioContainer;
+          // Do not set displayValue for "radio"
+        } else {
+          input = document.createElement("input");
+          input.type = "range";
+          input.id = fullSliderId;
+          input.className = "slider";
+          input.min = min;
+          input.max = max;
+          input.step = step;
+          input.value = sliderValue;
+          displayValue = this.mapSliderValueToUserFacing(slider, sliderValue);
+        }
 
-        // Append elements
+        // Create valueSpan only if the slider type is not "radio"
+        let valueSpan;
+        if (slider.type !== "radio") {
+          valueSpan = document.createElement("span");
+          valueSpan.id = `${fullSliderId}-value`;
+          if (slider.type === "select" || slider.type === "dropdown") {
+            valueSpan.textContent = displayValue + slider.unit;
+          } else {
+            valueSpan.textContent = this.formatNumber(displayValue) + slider.unit;
+          }
+        }
+
+        // Append elements to the slider container
         sliderContainer.appendChild(label);
         sliderContainer.appendChild(input);
-        sliderContainer.appendChild(valueSpan);
+        if (slider.type !== "radio") {
+          sliderContainer.appendChild(valueSpan);
+        }
         sectionContent.appendChild(sliderContainer);
 
-        // Store slider reference
         this.sliders[section][sliderId] = input;
 
-        // Event listener for slider input changes
-        input.addEventListener("input", () => {
-          let newValue = parseFloat(input.value);
-          let displayValue = this.mapSliderValueToUserFacing(slider, newValue);
-          valueSpan.textContent = this.formatNumber(displayValue) + slider.unit;
-          this.updateValues(fullSliderId, newValue);
-        });
+        if (slider.type === "select" || slider.type === "dropdown") {
+          input.addEventListener("change", () => {
+            const newValue = input.value;
+            valueSpan.textContent = newValue + slider.unit;
+            this.updateValues(fullSliderId, newValue);
+          });
+        } else if (slider.type !== "radio") {
+          input.addEventListener("input", () => {
+            let newValue = parseFloat(input.value);
+            let displayValue = this.mapSliderValueToUserFacing(slider, newValue);
+            valueSpan.textContent = this.formatNumber(displayValue) + slider.unit;
+            this.updateValues(fullSliderId, newValue);
+          });
+        }
 
-        // Update slidersData with the initial value
-        slider.value = parseFloat(sliderValue);
+        slider.value =
+          slider.type === "select" || slider.type === "dropdown" || slider.type === "radio" ? sliderValue : parseFloat(sliderValue);
       }
     }
 
-    // Optional: Add event listeners to toggle sections
+    // Add section toggle event listeners
     const headers = document.querySelectorAll(".slider-section-header");
     headers.forEach((header) => {
       header.addEventListener("click", () => {
@@ -413,11 +471,9 @@ export class SimUi {
         if (content.classList.contains("active")) {
           content.classList.remove("active");
         } else {
-          // Close all other sections
           document.querySelectorAll(".slider-section-content.active").forEach((activeContent) => {
             activeContent.classList.remove("active");
           });
-          // Open the clicked section
           content.classList.add("active");
         }
       });
@@ -433,20 +489,21 @@ export class SimUi {
     // Save the new internal value to localStorage
     localStorage.setItem(sliderId, value);
 
-    // Handle other sliders not part of rings
     const [section, specificSliderId] = sliderId.split(".");
     if (this.slidersData[section] && this.slidersData[section][specificSliderId]) {
       const slider = this.slidersData[section][specificSliderId];
-      let newValue = parseFloat(value); // Internal value
+      let newValue = slider.type === "select" || slider.type === "dropdown" || slider.type === "radio" ? value : parseFloat(value);
 
-      // Map to user-facing value
-      newValue = this.mapSliderValueToUserFacing(slider, newValue);
-
-      // Update slidersData with the new user-facing value
+      if (!(slider.type === "select" || slider.type === "dropdown" || slider.type === "radio")) {
+        newValue = this.mapSliderValueToUserFacing(slider, newValue);
+      }
       slider.value = newValue;
 
       // Dispatch actions based on slider ID
       switch (sliderId) {
+        case "simulation.display-type":
+          this.simMain.setDisplayType(newValue);
+          break;
         case "simulation.time-acceleration-slider":
           this.simMain.setTimeAccelerationFactor(newValue);
           break;
@@ -496,7 +553,6 @@ export class SimUi {
           this.simMain.setCosts(this.getGroupsConfig(["costs"]));
           break;
 
-        // Add other cases as needed
         default:
           break;
       }

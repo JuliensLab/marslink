@@ -196,3 +196,50 @@ input[type="range"]::-moz-range-track {
 .long-term-button:hover {
   background-color: #45a049; /* Darker green on hover */
 }
+
+.radio-container {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.radio-container input[type="radio"] {
+  /* Remove default browser styling */
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  /* Size and shape */
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  /* Unselected state styling */
+  border: 2px solid #888; /* Medium grey border */
+  background-color: #222; /* Dark grey background */
+  /* Interaction */
+  cursor: pointer;
+  outline: none;
+}
+
+.radio-container input[type="radio"]:checked {
+  /* Selected state styling */
+  background-color: #888; /* Medium grey fill */
+  border-color: #aaa; /* Lighter grey border */
+}
+
+.radio-container input[type="radio"]:hover {
+  /* Hover effect for unselected state */
+  border-color: #aaa;
+}
+
+.radio-container input[type="radio"]:checked:hover {
+  /* Hover effect for selected state */
+  background-color: #999; /* Slightly lighter grey */
+}
+
+.radio-container label {
+  /* Label styling to match theme */
+  color: #ffffff9c; /* Semi-transparent white */
+  font-family: Arial, sans-serif;
+  font-size: 13px;
+  cursor: pointer;
+}

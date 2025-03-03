@@ -7,12 +7,14 @@ import { SimSatellites } from "./simSatellites.js?v=2.4";
 import { SimDeployment } from "./simDeployment.js?v=2.4";
 import { SimLinkBudget } from "./simLinkBudget.js?v=2.4";
 import { SimNetwork } from "./simNetwork.js?v=2.4";
-import { SimDisplay } from "./simDisplay.js?v=2.4";
+// Import both SimDisplay implementations with unique names
+import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=2.4";
+import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=2.4";
+import { generateReport } from "./reportGenerator.js?v=2.4";
 
 export class SimMain {
   constructor() {
     this.km_per_au = 149597871; // 1 AU in kilometers
-
     this.previousLinkUpdateSimDate = 0;
     this.newSatellitesConfig = null;
     this.requestLinksUpdate = false;
@@ -24,15 +26,39 @@ export class SimMain {
     this.simDeployment = new SimDeployment();
     this.simLinkBudget = new SimLinkBudget();
     this.simNetwork = new SimNetwork(this.simLinkBudget);
-    this.simDisplay = new SimDisplay();
+    // Do not instantiate simDisplay here; it will be set by setDisplayType
+    this.simDisplay = null;
 
-    this.ui = new SimUi(this);
+    this.ui = new SimUi(this); // This will call initializeSimMain, setting simDisplay
 
-    // Initialize the chart instance as null
     this.latencyChartInstance = null;
+    this.reportData = null; // Initialize reportData storage
 
-    // Start the simulation loop
     this.startSimulationLoop();
+  }
+
+  /**
+   * Sets the display type, creating the appropriate SimDisplay instance.
+   * Disposes of the previous instance if it exists.
+   * @param {string} type - "2d" or "3d"
+   */
+  setDisplayType(type) {
+    // Dispose of the current display if it has a dispose method
+    if (this.simDisplay && typeof this.simDisplay.dispose === "function") {
+      this.simDisplay.dispose();
+    }
+
+    // Create new display based on type
+    if (type === "2d") {
+      this.simDisplay = new SimDisplay2D();
+    } else if (type === "3d") {
+      this.simDisplay = new SimDisplay3D();
+    } else {
+      console.error("Invalid display type:", type);
+      return;
+    }
+
+    this.requestLinksUpdate = true;
   }
 
   /**
@@ -355,12 +381,17 @@ export class SimMain {
     if (this.newSatellitesConfig) {
       this.simSatellites.setSatellitesConfig(this.newSatellitesConfig);
       this.simSatellites.setOrbitalElements(this.newSatellitesConfig);
-      this.simDeployment.setOrbitalElements(this.simSatellites.orbitalElements, this.simSolarSystem.getSolarSystemData().planets);
+      this.reportData = this.simDeployment.setOrbitalElements(
+        this.simSatellites.orbitalElements,
+        this.simSolarSystem.getSolarSystemData().planets
+      );
       satellites = this.simSatellites.updateSatellitesPositions(simDate);
       this.satellitesCount = satellites.length;
       this.requestLinksUpdate = true;
       this.newSatellitesConfig = null;
-    } else satellites = this.simSatellites.updateSatellitesPositions(simDate);
+    } else {
+      satellites = this.simSatellites.updateSatellitesPositions(simDate);
+    }
 
     if (this.requestLinksUpdate || Math.abs(simDate - this.previousLinkUpdateSimDate) > 1000 * 60 * 60 * 24) {
       this.previousLinkUpdateSimDate = simDate;
@@ -383,13 +414,11 @@ export class SimMain {
         this.simDisplay.updateActiveLinks(networkData.links);
 
         if (this.ui) {
-          const binSize = 60 * 5; // Bin size in seconds (1 minute)
+          const binSize = 60 * 5;
           const latencyData = this.simNetwork.calculateLatencies(networkData, binSize);
 
           this.ui.updateInfoAreaCosts(this.getCostsHtml(this.calculateCosts(networkData.maxFlowGbps)));
-          // Pass latencyData to getInfoAreaHTML and makeLatencyChart
           this.ui.updateInfoAreaData(this.getInfoAreaHTML(networkData, latencyData));
-          // After updating the info area, create or update the latency chart
           this.makeLatencyChart(latencyData, binSize);
         }
       } else {
@@ -403,9 +432,6 @@ export class SimMain {
     }
   }
 
-  /**
-   * Starts the main simulation loop using requestAnimationFrame for optimal performance.
-   */
   startSimulationLoop() {
     const loop = () => {
       this.updateLoop();
@@ -569,8 +595,17 @@ export class SimMain {
 
     return summary;
   }
+  /**
+   * Generates an HTML report from the stored reportData and opens it in a new tab.
+   */
+  generateReport() {
+    if (!this.reportData) {
+      console.error("Report data not available. Run the simulation first.");
+      return;
+    }
+    generateReport(this.reportData);
+  }
 }
-
 // Initialize the simulation once the DOM is fully loaded
 document.addEventListener("DOMContentLoaded", () => {
   const simMain = new SimMain();
