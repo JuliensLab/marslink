@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mission Graph Visualization with Detailed Calculations and States</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+
+        #cy {
+            flex: 1;
+            background-color: #f0f0f0;
+        }
+
+        #info {
+            padding: 10px;
+            background-color: #fff;
+            border-top: 1px solid #ccc;
+            overflow-y: auto;
+            max-height: 250px;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="cy"></div>
+    <div id="info">
+        <h2>Mission Details</h2>
+        <p>Click on a node or edge to see detailed state and calculation information.</p>
+    </div>
+
+    <!-- Include Cytoscape.js from CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.19.0/cytoscape.min.js"></script>
+    <script>
+        // Vehicle Properties (in kg and m/s)
+        const vehicleProperties = {
+            booster: {
+                dryMass: 200000,
+                propellantCapacity: 3000000,
+                exhaustVelocity: 3300,
+                landingPropellant: 50000
+            },
+            starship: {
+                dryMass: 120000,
+                propellantCapacity: 1200000,
+                exhaustVelocity: 3700,
+                deorbitPropellant: 20000
+            },
+            satellite: {
+                dryMass: 1000,
+                exhaustVelocity: 2200,
+                totalMass: 1500 // Includes propellant for maneuvers
+            }
+        };
+
+        const earth = {
+            "name": "Earth",
+            "i": 0.00041,
+            "o": 349.2,
+            "p": 102.8517,
+            "a": 1.00002,
+            "n": 0.9855796,
+            "e": 0.0166967,
+            "l": 328.40353,
+            "diameterKm": 12756,
+            "massKg": 5.97e+24,
+            "orbitdays": 365.25,
+            "rotationHours": {
+                "y": 23.9
+            },
+            "Dele": 2450680.5,
+            "color": [
+                50,
+                80,
+                220
+            ],
+            "shape": "sphere",
+            "texturePath": "img/textures/2k_earth_daymap.jpg"
+        }
+
+        const orbitalElements = {
+            "ringName": "ring_circ_1",
+            "satCount": 373,
+            "outboundDeltaV_km_per_s": {
+                "deltaV1": 1.01,
+                "deltaV2": 1.207,
+                "deltaV_inclination": 0.978,
+                "totalDeltaV": 3.194
+            },
+            "inboundDeltaV_km_per_s": {
+                "deltaV1": 1.207,
+                "deltaV2": 1.01,
+                "deltaV_inclination": 0.89,
+                "totalDeltaV": 3.106
+            }
+        }
+
+        // Graph Data (Nodes and Edges) with Initial States
+        const graphData = {
+            nodes: [
+                { data: { id: 'start', label: 'All vehicles on Earth', state: { b1: { payload: 0, propellant: 3000000, emptyMass: 200000 }, s1: { payload: 135000, propellant: 1200000, emptyMass: 120000 }, b2: { payload: 0, propellant: 3000000, emptyMass: 200000 }, t1: { payload: 1193850, propellant: 1200000, emptyMass: 120000 }, b3: { payload: 0, propellant: 3000000, emptyMass: 200000 }, t2: { payload: 1193850, propellant: 1200000, emptyMass: 120000 } } } },
+                { data: { id: 'launch_b1_s1', label: 'Booster 1 and Starship 1 in flight', state: {} } },
+                { data: { id: 'sep_b1_s1', label: 'Booster 1 returning, Starship 1 to LEO', state: {} } },
+                { data: { id: 's1_in_leo', label: 'Starship 1 in LEO', state: {} } },
+                { data: { id: 'b1_landed', label: 'Booster 1 landed', state: { b1: { payload: 0, propellant: 50000, emptyMass: 200000 } } } },
+                { data: { id: 'launch_b2_t1', label: 'Booster 2 and Tanker 1 in flight', state: {} } },
+                { data: { id: 'sep_b2_t1', label: 'Booster 2 returning, Tanker 1 to LEO', state: {} } },
+                { data: { id: 't1_in_leo', label: 'Tanker 1 in LEO', state: {} } },
+                { data: { id: 'b2_landed', label: 'Booster 2 landed', state: { b2: { payload: 0, propellant: 50000, emptyMass: 200000 } } } },
+                { data: { id: 'launch_b3_t2', label: 'Booster 3 and Tanker 2 in flight', state: {} } },
+                { data: { id: 'sep_b3_t2', label: 'Booster 3 returning, Tanker 2 to LEO', state: {} } },
+                { data: { id: 't2_in_leo', label: 'Tanker 2 in LEO', state: {} } },
+                { data: { id: 'b3_landed', label: 'Booster 3 landed', state: { b3: { payload: 0, propellant: 50000, emptyMass: 200000 } } } },
+                { data: { id: 'refuel_1', label: 'Starship 1 partially refueled', state: {} } },
+                { data: { id: 't1_landed', label: 'Tanker 1 landed', state: { t1: { payload: 0, propellant: 20000, emptyMass: 120000 } } } },
+                { data: { id: 'refuel_2', label: 'Starship 1 fully refueled', state: {} } },
+                { data: { id: 't2_landed', label: 'Tanker 2 landed', state: { t2: { payload: 0, propellant: 20000, emptyMass: 120000 } } } },
+                { data: { id: 's1_transfer', label: 'Starship 1 in transfer orbit', state: {} } },
+                { data: { id: 'sats_deployed', label: 'Satellites deployed', state: {} } },
+                { data: { id: 's1_return_transfer', label: 'Starship 1 in return transfer orbit', state: {} } },
+                { data: { id: 's1_back_in_leo', label: 'Starship 1 back in LEO', state: {} } },
+                { data: { id: 's1_landed', label: 'Starship 1 landed', state: { s1: { payload: 0, propellant: 20000, emptyMass: 120000 } } } },
+                { data: { id: 'sats_circular', label: 'Satellites in circular orbit', state: {} } },
+                { data: { id: 'sats_final', label: 'Satellites in final orbit', state: { sats: { payload: '90 satellites', propellant: 0, emptyMass: 90000 } } } }
+            ],
+            edges: [
+                { data: { source: 'start', target: 'launch_b1_s1', label: 'Launch B1+S1', calculation: 'propellant for ascent', deltaV: 9500, vehicle: 'b1_s1' } },
+                { data: { source: 'launch_b1_s1', target: 'sep_b1_s1', label: 'B1/S1 Separation' } },
+                { data: { source: 'sep_b1_s1', target: 's1_in_leo', label: 'S1 to LEO', calculation: 'included in ascent' } },
+                { data: { source: 'sep_b1_s1', target: 'b1_landed', label: 'B1 Land', calculation: 'lump sum', propellant: 50000, vehicle: 'b1' } },
+                { data: { source: 'start', target: 'launch_b2_t1', label: 'Launch B2+T1', calculation: 'propellant for ascent', deltaV: 9500, vehicle: 'b2_t1' } },
+                { data: { source: 'launch_b2_t1', target: 'sep_b2_t1', label: 'B2/T1 Separation' } },
+                { data: { source: 'sep_b2_t1', target: 't1_in_leo', label: 'T1 to LEO', calculation: 'included in ascent' } },
+                { data: { source: 'sep_b2_t1', target: 'b2_landed', label: 'B2 Land', calculation: 'lump sum', propellant: 50000, vehicle: 'b2' } },
+                { data: { source: 'start', target: 'launch_b3_t2', label: 'Launch B3+T2', calculation: 'propellant for ascent', deltaV: 9500, vehicle: 'b3_t2' } },
+                { data: { source: 'launch_b3_t2', target: 'sep_b3_t2', label: 'B3/T2 Separation' } },
+                { data: { source: 'sep_b3_t2', target: 't2_in_leo', label: 'T2 to LEO', calculation: 'included in ascent' } },
+                { data: { source: 'sep_b3_t2', target: 'b3_landed', label: 'B3 Land', calculation: 'lump sum', propellant: 50000, vehicle: 'b3' } },
+                { data: { source: 's1_in_leo', target: 'refuel_1', label: 'Refuel from T1', calculation: 'propellant transfer', propellantTransferred: 119385, from: 't1', to: 's1' } },
+                { data: { source: 't1_in_leo', target: 'refuel_1', label: 'T1 Transfer' } },
+                { data: { source: 'refuel_1', target: 't1_landed', label: 'T1 Land', calculation: 'lump sum', propellant: 20000, vehicle: 't1' } },
+                { data: { source: 'refuel_1', target: 'refuel_2', label: 'Refuel from T2', calculation: 'propellant transfer', propellantTransferred: 119385, from: 't2', to: 's1' } },
+                { data: { source: 't2_in_leo', target: 'refuel_2', label: 'T2 Transfer' } },
+                { data: { source: 'refuel_2', target: 't2_landed', label: 'T2 Land', calculation: 'lump sum', propellant: 20000, vehicle: 't2' } },
+                { data: { source: 'refuel_2', target: 's1_transfer', label: 'S1 1st Hohmann', calculation: 'propellant for 1.01 km/s', deltaV: 1010, vehicle: 's1' } },
+                { data: { source: 's1_transfer', target: 'sats_deployed', label: 'Deploy Sats' } },
+                { data: { source: 'sats_deployed', target: 's1_return_transfer', label: 'S1 Return Burn 1', calculation: 'propellant for 1.01 km/s', deltaV: 1010, vehicle: 's1' } },
+                { data: { source: 's1_return_transfer', target: 's1_back_in_leo', label: 'S1 Return Burn 2', calculation: 'propellant for 1.207 km/s', deltaV: 1207, vehicle: 's1' } },
+                { data: { source: 's1_back_in_leo', target: 's1_landed', label: 'S1 Land', calculation: 'lump sum', propellant: 20000, vehicle: 's1' } },
+                { data: { source: 'sats_deployed', target: 'sats_circular', label: 'Sats 2nd Hohmann', calculation: 'propellant for 1.207 km/s', deltaV: 1207, vehicle: 'sats' } },
+                { data: { source: 'sats_circular', target: 'sats_final', label: 'Sats Inclination', calculation: 'propellant for 0.978 km/s', deltaV: 978, vehicle: 'sats' } }
+            ]
+        };
+
+
+
+        // Rocket Equation Functions
+        function calculateDeltaV(propellant, m0, ve) {
+            const mf = m0 - propellant;
+            return ve * Math.log(m0 / mf);
+        }
+
+        function calculatePropellant(deltaV, mf, ve) {
+            return mf * (Math.exp(deltaV / ve) - 1);
+        }
+
+        // Initialize Cytoscape Graph
+        const cy = cytoscape({
+            container: document.getElementById('cy'),
+            elements: [...graphData.nodes, ...graphData.edges],
+            style: [
+                {
+                    selector: 'node',
+                    style: {
+                        'background-color': '#666',
+                        'label': 'data(label)',
+                        'text-valign': 'center',
+                        'color': '#fff',
+                        'text-outline-width': 2,
+                        'text-outline-color': '#666',
+                        'width': 80,
+                        'height': 80
+                    }
+                },
+                {
+                    selector: 'edge',
+                    style: {
+                        'width': 3,
+                        'line-color': '#ccc',
+                        'target-arrow-color': '#ccc',
+                        'target-arrow-shape': 'triangle',
+                        'label': 'data(label)',
+                        'font-size': 12,
+                        'text-rotation': 'autorotate',
+                        'color': '#333'
+                    }
+                }
+            ],
+            layout: {
+                name: 'grid',
+                rows: 4,
+                cols: 5,
+                padding: 50,
+                fit: true,
+                animate: true
+            }
+        });
+
+        // Set fixed positions for specific nodes
+        cy.nodes().forEach(node => {
+            const id = node.id();
+            switch (id) {
+                case 'start':
+                    node.position({ x: 100, y: 400 });  // Start in the middle
+                    break;
+                // Starship launch sequence (main path)
+                case 'launch_b1_s1':
+                    node.position({ x: 300, y: 400 });
+                    break;
+                case 'sep_b1_s1':
+                    node.position({ x: 500, y: 400 });
+                    break;
+                case 's1_in_leo':
+                    node.position({ x: 700, y: 400 });
+                    break;
+                case 'b1_landed':
+                    node.position({ x: 500, y: 200 });  // Branch up for booster landing
+                    break;
+                // Tanker 1 sequence (parallel path)
+                case 'launch_b2_t1':
+                    node.position({ x: 300, y: 600 });  // Branch down for tanker
+                    break;
+                case 'sep_b2_t1':
+                    node.position({ x: 500, y: 600 });
+                    break;
+                case 't1_in_leo':
+                    node.position({ x: 700, y: 600 });
+                    break;
+                case 'b2_landed':
+                    node.position({ x: 500, y: 800 });  // Branch down for booster landing
+                    break;
+                // Tanker 2 sequence (parallel path)
+                case 'launch_b3_t2':
+                    node.position({ x: 300, y: 800 });  // Branch down for tanker
+                    break;
+                case 'sep_b3_t2':
+                    node.position({ x: 500, y: 800 });
+                    break;
+                case 't2_in_leo':
+                    node.position({ x: 700, y: 800 });
+                    break;
+                case 'b3_landed':
+                    node.position({ x: 500, y: 1000 });  // Branch down for booster landing
+                    break;
+                // Refueling operations (converging paths)
+                case 'refuel_1':
+                    node.position({ x: 900, y: 500 });  // First refuel
+                    break;
+                case 't1_landed':
+                    node.position({ x: 700, y: 700 });  // Tanker 1 landing
+                    break;
+                case 'refuel_2':
+                    node.position({ x: 1100, y: 500 });  // Second refuel
+                    break;
+                case 't2_landed':
+                    node.position({ x: 700, y: 900 });  // Tanker 2 landing
+                    break;
+                // Transfer and deployment (main path continues)
+                case 's1_transfer':
+                    node.position({ x: 1300, y: 500 });
+                    break;
+                case 'sats_deployed':
+                    node.position({ x: 1500, y: 500 });
+                    break;
+                case 's1_return_transfer':
+                    node.position({ x: 1700, y: 500 });
+                    break;
+                case 's1_back_in_leo':
+                    node.position({ x: 1900, y: 500 });
+                    break;
+                case 's1_landed':
+                    node.position({ x: 1900, y: 300 });  // Branch up for landing
+                    break;
+                // Satellite operations (branching down)
+                case 'sats_circular':
+                    node.position({ x: 1500, y: 700 });  // Branch down for satellite maneuvers
+                    break;
+                case 'sats_final':
+                    node.position({ x: 1500, y: 900 });  // Branch down for final orbit
+                    break;
+            }
+        });
+
+        // Add some padding to the viewport
+        cy.fit(cy.elements(), 50);
+
+        // Function to Calculate Requirements Backwards
+        function calculateMissionRequirements() {
+            const leafNodes = cy.nodes().filter(node => node.outgoers('edge').length === 0);
+            const processed = new Set();
+
+            function processNode(node) {
+                if (processed.has(node.id())) return;
+                processed.add(node.id());
+
+                const successors = node.outgoers('node');
+                successors.forEach(successor => processNode(successor));
+
+                const incomingEdges = node.incomers('edge');
+                incomingEdges.forEach(edge => {
+                    const sourceNode = edge.source();
+                    const targetState = node.data('state') || {};
+                    let sourceState = sourceNode.data('state') || {};
+
+                    if (edge.data('calculation') && edge.data('calculation') !== 'included in ascent') {
+                        const vehicle = edge.data('vehicle');
+                        let ve, propellant, deltaV, m0, mf;
+
+                        if (vehicle === 'b1' || vehicle === 'b2' || vehicle === 'b3') {
+                            ve = vehicleProperties.booster.exhaustVelocity;
+                        } else if (vehicle === 's1' || vehicle === 't1' || vehicle === 't2') {
+                            ve = vehicleProperties.starship.exhaustVelocity;
+                        } else if (vehicle === 'sats') {
+                            ve = vehicleProperties.satellite.exhaustVelocity;
+                        } else if (vehicle === 'b1_s1' || vehicle === 'b2_t1' || vehicle === 'b3_t2') {
+                            ve = vehicleProperties.booster.exhaustVelocity; // Simplified: booster burn only
+                        }
+
+                        if (edge.data('calculation') === 'lump sum') {
+                            propellant = edge.data('propellant');
+                            mf = targetState[vehicle].emptyMass + targetState[vehicle].propellant + (typeof targetState[vehicle].payload === 'number' ? targetState[vehicle].payload : 0);
+                            m0 = mf + propellant;
+                            deltaV = calculateDeltaV(propellant, m0, ve);
+                            edge.data('calcDetails', {
+                                input: `Propellant: ${propellant} kg (fixed lump sum)`,
+                                propellant: propellant,
+                                deltaV: deltaV / 1000 // km/s
+                            });
+                            sourceState[vehicle] = {
+                                payload: targetState[vehicle].payload,
+                                propellant: mf - targetState[vehicle].emptyMass - (typeof targetState[vehicle].payload === 'number' ? targetState[vehicle].payload : 0),
+                                emptyMass: targetState[vehicle].emptyMass
+                            };
+                        } else if (edge.data('calculation').includes('propellant for')) {
+                            deltaV = edge.data('deltaV') * 1000; // m/s
+                            if (vehicle === 'sats') {
+                                mf = 90 * (targetState[vehicle].emptyMass + targetState[vehicle].propellant);
+                            } else {
+                                mf = targetState[vehicle].emptyMass + targetState[vehicle].propellant + (typeof targetState[vehicle].payload === 'number' ? targetState[vehicle].payload : 0);
+                            }
+                            propellant = calculatePropellant(deltaV, mf, ve);
+                            m0 = mf + propellant;
+                            edge.data('calcDetails', {
+                                input: `Delta-V: ${deltaV / 1000} km/s (from ${node.data('label')})`,
+                                propellant: propellant,
+                                deltaV: deltaV / 1000 // km/s
+                            });
+                            sourceState[vehicle] = {
+                                payload: targetState[vehicle].payload,
+                                propellant: vehicle === 'sats' ? (m0 / 90 - targetState[vehicle].emptyMass) : (mf - targetState[vehicle].emptyMass - (typeof targetState[vehicle].payload === 'number' ? targetState[vehicle].payload : 0)),
+                                emptyMass: targetState[vehicle].emptyMass
+                            };
+                        } else if (edge.data('calculation') === 'propellant transfer') {
+                            const fromVehicle = edge.data('from');
+                            const toVehicle = edge.data('to');
+                            propellant = edge.data('propellantTransferred');
+                            edge.data('calcDetails', {
+                                input: `Propellant: ${propellant} kg (transferred from ${fromVehicle} to ${toVehicle})`,
+                                propellant: propellant,
+                                deltaV: 0
+                            });
+                            sourceState[toVehicle] = {
+                                payload: targetState[toVehicle].payload,
+                                propellant: targetState[toVehicle].propellant - propellant,
+                                emptyMass: targetState[toVehicle].emptyMass
+                            };
+                            sourceState[fromVehicle] = {
+                                payload: targetState[fromVehicle].payload,
+                                propellant: targetState[fromVehicle].propellant + propellant,
+                                emptyMass: targetState[fromVehicle].emptyMass
+                            };
+                        } else if (edge.data('calculation') === 'propellant for ascent') {
+                            deltaV = edge.data('deltaV') * 1000; // m/s
+                            const stack = vehicle.split('_');
+                            const booster = stack[0];
+                            const starship = stack[1];
+                            mf = (targetState[booster].emptyMass + targetState[booster].propellant) + (targetState[starship].emptyMass + targetState[starship].propellant + targetState[starship].payload);
+                            propellant = calculatePropellant(deltaV, mf, ve);
+                            m0 = mf + propellant;
+                            edge.data('calcDetails', {
+                                input: `Delta-V: ${deltaV / 1000} km/s (from ${node.data('label')})`,
+                                propellant: propellant,
+                                deltaV: deltaV / 1000 // km/s
+                            });
+                            sourceState[booster] = {
+                                payload: 0,
+                                propellant: vehicleProperties.booster.propellantCapacity,
+                                emptyMass: vehicleProperties.booster.dryMass
+                            };
+                            sourceState[starship] = {
+                                payload: targetState[starship].payload,
+                                propellant: vehicleProperties.starship.propellantCapacity,
+                                emptyMass: vehicleProperties.starship.dryMass
+                            };
+                        }
+
+                        sourceNode.data('state', sourceState);
+                    } else if (edge.data('label') === 'Deploy Sats') {
+                        sourceState['s1'] = {
+                            payload: targetState['s1'].payload,
+                            propellant: targetState['s1'].propellant,
+                            emptyMass: targetState['s1'].emptyMass
+                        };
+                        sourceState['sats'] = {
+                            payload: '90 satellites',
+                            propellant: (90 * vehicleProperties.satellite.totalMass - 90 * vehicleProperties.satellite.dryMass),
+                            emptyMass: 90 * vehicleProperties.satellite.dryMass
+                        };
+                        sourceNode.data('state', sourceState);
+                    } else {
+                        // Copy state forward for non-calculation edges
+                        for (const [veh, state] of Object.entries(targetState)) {
+                            sourceState[veh] = { ...state };
+                        }
+                        sourceNode.data('state', sourceState);
+                    }
+                });
+            }
+
+            leafNodes.forEach(node => processNode(node));
+        }
+
+        // Perform Calculations
+        calculateMissionRequirements();
+
+        // Node Interactivity
+        cy.on('tap', 'node', function (evt) {
+            const node = evt.target;
+            const state = node.data('state') || {};
+            let stateInfo = '';
+            for (const [vehicle, details] of Object.entries(state)) {
+                stateInfo += `
+                    <p><strong>${vehicle}:</strong></p>
+                    <ul>
+                        <li>Payload: ${details.payload || 0}</li>
+                        <li>Propellant: ${details.propellant.toFixed(0)} kg</li>
+                        <li>Empty Mass: ${details.emptyMass.toFixed(0)} kg</li>
+                    </ul>
+                `;
+            }
+            document.getElementById('info').innerHTML = `
+                <h2>Node: ${node.data('label')}</h2>
+                <p><strong>ID:</strong> ${node.data('id')}</p>
+                <h3>State:</h3>
+                ${stateInfo || '<p>No state data available.</p>'}
+            `;
+        });
+
+        // Edge Interactivity
+        cy.on('tap', 'edge', function (evt) {
+            const edge = evt.target;
+            const calcDetails = edge.data('calcDetails') || {};
+            const vehicle = edge.data('vehicle') || 'N/A';
+            let details = '';
+            if (calcDetails.input) {
+                details = `
+                    <p><strong>Calculation Input:</strong> ${calcDetails.input}</p>
+                    <p><strong>Propellant:</strong> ${calcDetails.propellant.toFixed(0)} kg</p>
+                    <p><strong>Delta-V:</strong> ${calcDetails.deltaV.toFixed(3)} km/s</p>
+                `;
+            } else {
+                details = '<p>No calculation details available.</p>';
+            }
+            document.getElementById('info').innerHTML = `
+                <h2>Edge: ${edge.data('label')}</h2>
+                <p><strong>From:</strong> ${edge.source().data('label')}</p>
+                <p><strong>To:</strong> ${edge.target().data('label')}</p>
+                <p><strong>Vehicle:</strong> ${vehicle}</p>
+                ${details}
+            `;
+        });
+    </script>
+</body>
+
+</html>

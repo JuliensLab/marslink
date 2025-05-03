@@ -47,7 +47,7 @@ canvas {
   display: flex;
   align-items: center;
   text-decoration: none;
-  /* color: #ffffff; */
+  color: #ffffff;
   padding: 5px 5px;
   background-color: #000000;
   border-radius: 8px;
@@ -182,9 +182,9 @@ input[type="range"]::-moz-range-track {
   padding: 10px 0;
 }
 
-.long-term-button {
+.large-button {
   padding: 10px 20px;
-  background-color: #4caf50; /* Green background */
+  background-color: #505fb3;
   color: white;
   border: none;
   border-radius: 5px;
@@ -193,8 +193,8 @@ input[type="range"]::-moz-range-track {
   margin-top: 10px;
 }
 
-.long-term-button:hover {
-  background-color: #45a049; /* Darker green on hover */
+.large-button:hover {
+  background-color: rgb(42, 56, 136);
 }
 
 .radio-container {

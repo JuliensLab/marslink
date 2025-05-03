@@ -37,7 +37,8 @@ export class SimUi {
 
     // Add a report button (adjust container as per your UI structure)
     const reportButton = document.createElement("button");
-    reportButton.textContent = "Generate Report";
+    reportButton.textContent = "Deployment Report";
+    reportButton.classList = "large-button";
     reportButton.addEventListener("click", () => {
       this.simMain.generateReport();
     });

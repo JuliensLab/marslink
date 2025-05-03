@@ -5,6 +5,7 @@ import { SimTime } from "./simTime.js?v=2.4";
 import { SimSolarSystem } from "./simSolarSystem.js?v=2.4";
 import { SimSatellites } from "./simSatellites.js?v=2.4";
 import { SimDeployment } from "./simDeployment.js?v=2.4";
+import { SimMissionValidator } from "./simMissionValidator.js?v=2.4";
 import { SimLinkBudget } from "./simLinkBudget.js?v=2.4";
 import { SimNetwork } from "./simNetwork.js?v=2.4";
 // Import both SimDisplay implementations with unique names
@@ -23,7 +24,7 @@ export class SimMain {
     this.simTime = new SimTime();
     this.simSolarSystem = new SimSolarSystem();
     this.simSatellites = new SimSatellites();
-    this.simDeployment = new SimDeployment();
+    this.simDeployment = new SimDeployment(this.simSolarSystem.getSolarSystemData().planets);
     this.simLinkBudget = new SimLinkBudget();
     this.simNetwork = new SimNetwork(this.simLinkBudget);
     // Do not instantiate simDisplay here; it will be set by setDisplayType
@@ -32,7 +33,7 @@ export class SimMain {
     this.ui = new SimUi(this); // This will call initializeSimMain, setting simDisplay
 
     this.latencyChartInstance = null;
-    this.reportData = null; // Initialize reportData storage
+    this.missionProfiles = null; // Initialize reportData storage
 
     this.startSimulationLoop();
   }
@@ -180,13 +181,15 @@ export class SimMain {
   }
 
   setSatellitesConfig(uiConfig) {
+    // console.log(uiConfig);
     const satellitesConfig = [];
 
     this.simLinkBudget.setTechnologyConfig(uiConfig);
     satellitesConfig.push(...this.setCircularRingsConfig(uiConfig));
     satellitesConfig.push(...this.setEccentricRingsConfig(uiConfig));
-    satellitesConfig.push(...this.generateSatellitesConfig(uiConfig, "ring_mars"));
-    satellitesConfig.push(...this.generateSatellitesConfig(uiConfig, "ring_earth"));
+    if (uiConfig["ring_mars.side-extension-degrees-slider"]) satellitesConfig.push(...this.generateSatellitesConfig(uiConfig, "ring_mars"));
+    if (uiConfig["ring_earth.side-extension-degrees-slider"])
+      satellitesConfig.push(...this.generateSatellitesConfig(uiConfig, "ring_earth"));
 
     this.newSatellitesConfig = satellitesConfig;
   }
@@ -282,59 +285,158 @@ export class SimMain {
     this.costPerLaunch = costConfig["costs.launch-cost-slider"];
     this.costPerSatellite = costConfig["costs.satellite-cost-slider"];
     this.satsPerLaunch = costConfig["costs.sats-per-launch-slider"];
-    if (this.ui) this.ui.updateInfoAreaCosts(this.getCostsHtml(this.calculateCosts(this.maxFlowGbps)));
+    if (this.ui) this.ui.updateInfoAreaCosts(this.getCostsHtml(this.calculateCosts(this.maxFlowGbps, this.resultTrees)));
   }
 
-  calculateCosts(maxFlowGbps) {
+  calculateCosts(maxFlowGbps, resultTrees) {
     const satellitesCount = this.satellitesCount;
     if (satellitesCount) {
-      const launchCount = Math.ceil(satellitesCount / this.satsPerLaunch);
-      const launchCost = Math.round((launchCount * this.costPerLaunch) / 10) * 10;
-      const satellitesCost = Math.round((satellitesCount * this.costPerSatellite) / 10) * 10;
-      const totalCosts = launchCost + satellitesCost;
+      // Calculate total deployment launches (Starship launches)
+      let launchCount = 0;
+      resultTrees.forEach((orbitTree) => {
+        launchCount += orbitTree.deploymentFlights_count;
+      });
+      const starshipCount = launchCount;
+
+      // Recompute propellant usage per orbit, similar to generateReport
+      const orbits = {};
+      resultTrees.forEach((orbitTree) => {
+        orbits[orbitTree.ringName] = {
+          deploymentFlights_count: orbitTree.deploymentFlights_count,
+          satCountPerDeploymentFlight: orbitTree.satCountPerDeploymentFlight,
+          satCount: orbitTree.satCount,
+          propellant: {},
+        };
+        for (let data of Object.values(orbitTree.vehicles)) {
+          if (!Object.keys(orbits[orbitTree.ringName].propellant).includes(data.propellantType))
+            orbits[orbitTree.ringName].propellant[data.propellantType] = { selfPropulsion_kg: 0, tankerPropellant_kg: 0 };
+          orbits[orbitTree.ringName].propellant[data.propellantType].selfPropulsion_kg +=
+            (data.count ? data.count * data.propellantLoaded_kg : data.propellantLoaded_kg) * orbitTree.deploymentFlights_count;
+          orbits[orbitTree.ringName].propellant[data.propellantType].tankerPropellant_kg +=
+            (data.count ? data.count * data.tankerPropellant_kg : data.tankerPropellant_kg) * orbitTree.deploymentFlights_count;
+        }
+      });
+
+      // Calculate total tanker propellant mass
+      let total_tankerPropellant_kg = 0;
+      for (const orbitData of Object.values(orbits)) {
+        for (const propellantData of Object.values(orbitData.propellant)) {
+          total_tankerPropellant_kg += propellantData.tankerPropellant_kg;
+        }
+      }
+
+      // Assume each tanker launch delivers 100,000 kg of propellant (configurable in future)
+      const tankerCapacity_kg = 100000; // Assumption: 100 tons per tanker launch
+      const tankerCount = Math.ceil(total_tankerPropellant_kg / tankerCapacity_kg);
+
+      // Total liftoffs include both Starship (deployment) and tanker launches
+      const liftoffCount = starshipCount + tankerCount;
+
+      // Calculate total propellant mass by type (self + tanker) and their costs
+      const allPropellantTypes = [];
+      for (const orbitData of Object.values(orbits)) {
+        for (const propellantType of Object.keys(orbitData.propellant)) {
+          if (!allPropellantTypes.includes(propellantType)) allPropellantTypes.push(propellantType);
+        }
+      }
+
+      const totalPropellant_kg = {};
+      for (const propellantType of allPropellantTypes) {
+        totalPropellant_kg[propellantType] = 0;
+        for (const orbitData of Object.values(orbits)) {
+          if (orbitData.propellant[propellantType]) {
+            totalPropellant_kg[propellantType] +=
+              orbitData.propellant[propellantType].selfPropulsion_kg + orbitData.propellant[propellantType].tankerPropellant_kg;
+          }
+        }
+      }
+
+      // Define propellant costs per kg (assumed values; should be properties of the class)
+      const propellantCosts = this.propellantCosts || {
+        "CH4/O2": 0.3, // $0.3 per kg
+        Argon: 0.5, // $0.5 per kg
+      };
+
+      // Calculate total propellant cost and breakdown
+      let propellantCost = 0;
+      const propellantCostBreakdown = {};
+      for (const [propellantType, kg] of Object.entries(totalPropellant_kg)) {
+        const costPerKg = propellantCosts[propellantType] || 0;
+        const cost = kg * costPerKg; // Cost in dollars
+        propellantCostBreakdown[propellantType] = cost;
+        propellantCost += cost;
+        console.log(propellantType, kg, costPerKg, cost);
+      }
+
+      // Calculate costs (all in dollars)
+      const launchCost = liftoffCount * this.costPerLaunch * 1000000;
+      const satellitesCost = satellitesCount * this.costPerSatellite * 1000000;
+      console.log(liftoffCount, this.costPerLaunch, satellitesCount, this.costPerSatellite);
+      const totalCosts = launchCost + propellantCost + satellitesCost;
+      console.log(totalCosts, launchCost, propellantCost, satellitesCost);
+
+      // Calculate cost per Mbps if maxFlowGbps is provided
       let costPerMbps = Infinity;
       if (maxFlowGbps) costPerMbps = Math.round(totalCosts / (maxFlowGbps * 1000));
-      return { satellitesCount, launchCount, launchCost, satellitesCost, totalCosts, costPerMbps };
+
+      return {
+        satellitesCount,
+        launchCount: starshipCount,
+        tankerCount,
+        liftoffCount,
+        launchCost,
+        propellantCost,
+        satellitesCost,
+        totalCosts,
+        costPerMbps,
+        propellantCostBreakdown,
+      };
     }
   }
 
   getCostsHtml(costs) {
     let html = "";
-    html += `${this.satellitesCount} satellites`;
-
     if (costs) {
-      html = "";
-      // Helper function to format numbers into m, b, or t based on the determined scale
-      const formatCost = (value, scale) => {
-        if (scale === "t") {
-          return `${(value / 1_000_000).toFixed(1)}t`; // Trillions
-        } else if (scale === "b") {
-          return `${(value / 1_000).toFixed(1)}b`; // Billions
+      // Helper function to format costs in dollars to m, b, or t
+      const formatCost = (value) => {
+        if (value >= 1_000_000_000_000) {
+          return `${(value / 1_000_000_000_000).toFixed(1)}t`; // Trillions
+        } else if (value >= 1_000_000_000) {
+          return `${(value / 1_000_000_000).toFixed(1)}b`; // Billions
+        } else if (value >= 1_000_000) {
+          return `${(value / 1_000_000).toFixed(0)}m`; // Millions
+        } else if (value >= 1_000) {
+          return `${(value / 1_000).toFixed(0)}k`; // Thousands
         } else {
-          return `${value}m`; // Millions
+          return `${value.toLocaleString()}`; // Dollars
         }
       };
 
-      html += `${costs.satellitesCount} satellites ${costs.launchCount} launches`;
-
+      html += `${costs.satellitesCount} Sats ${costs.launchCount} Starships ${costs.tankerCount} Tankers`;
       html += `<br>`;
       html += `<br>`;
 
-      // Determine the scale (m, b, t) based on the highest value
-      let scale = "m";
-      if (costs.totalCosts >= 1_000_000 || costs.launchCost >= 1_000_000 || costs.satellitesCost >= 1_000_000) {
-        scale = "t"; // Trillions
-      } else if (costs.totalCosts >= 1_000 || costs.launchCost >= 1_000 || costs.satellitesCost >= 1_000) {
-        scale = "b"; // Billions
-      }
-
-      html += `Total cost $${formatCost(costs.totalCosts, scale)}`;
+      html += `Total cost $${formatCost(costs.totalCosts)}`;
       html += "<br>";
-      html += `&nbsp;&nbsp;Launch $${formatCost(costs.launchCost, scale)} + Sats $${formatCost(costs.satellitesCost, scale)}`;
+      html += `  Launch $${formatCost(costs.launchCost)} + Propellants $${formatCost(costs.propellantCost)} + Sats $${formatCost(
+        costs.satellitesCost
+      )}`;
+
+      // Add propellant costs breakdown
+      html += "<br>";
+      html += "  Propellants: ";
+      const propellantEntries = [];
+      for (const [propellantType, cost] of Object.entries(costs.propellantCostBreakdown)) {
+        propellantEntries.push(`${propellantType} $${formatCost(cost)}`);
+      }
+      html += propellantEntries.join(", ");
+
       if (costs.costPerMbps) {
         html += `<br>`;
-        html += `&nbsp;$${formatCost(costs.costPerMbps, "m")} / Mbps`;
+        html += ` $${costs.costPerMbps.toLocaleString()} / Mbps`;
       }
+    } else {
+      html += `${this.satellitesCount} satellites`;
     }
     return html;
   }
@@ -381,10 +483,9 @@ export class SimMain {
     if (this.newSatellitesConfig) {
       this.simSatellites.setSatellitesConfig(this.newSatellitesConfig);
       this.simSatellites.setOrbitalElements(this.newSatellitesConfig);
-      this.reportData = this.simDeployment.setOrbitalElements(
-        this.simSatellites.orbitalElements,
-        this.simSolarSystem.getSolarSystemData().planets
-      );
+      this.missionProfiles = this.simDeployment.getMissionProfile(this.simSatellites.orbitalElements);
+      this.resultTrees = new SimMissionValidator(this.missionProfiles);
+      // if (!new SimMissionValidator(this.missionProfiles)) throw new Error("Mission validation failed");
       satellites = this.simSatellites.updateSatellitesPositions(simDate);
       this.satellitesCount = satellites.length;
       this.requestLinksUpdate = true;
@@ -417,7 +518,7 @@ export class SimMain {
           const binSize = 60 * 5;
           const latencyData = this.simNetwork.calculateLatencies(networkData, binSize);
 
-          this.ui.updateInfoAreaCosts(this.getCostsHtml(this.calculateCosts(networkData.maxFlowGbps)));
+          this.ui.updateInfoAreaCosts(this.getCostsHtml(this.calculateCosts(networkData.maxFlowGbps, this.resultTrees)));
           this.ui.updateInfoAreaData(this.getInfoAreaHTML(networkData, latencyData));
           this.makeLatencyChart(latencyData, binSize);
         }
@@ -462,7 +563,7 @@ export class SimMain {
         if (currentDate > endDate) {
           // After the loop, handle the final data
           if (networkData) {
-            const finalCosts = this.calculateCosts(networkData.maxFlowGbps);
+            const finalCosts = this.calculateCosts(networkData.maxFlowGbps, this.resultTrees);
             delete finalCosts.costPerMbps; // Remove 'costPerMbps' as per refactoring
 
             // Summarize the collected data
@@ -507,7 +608,7 @@ export class SimMain {
           const latencyData = this.simNetwork.calculateLatencies(networkData);
 
           // Calculate costs based on network data
-          const costs = this.calculateCosts(networkData.maxFlowGbps);
+          const costs = this.calculateCosts(networkData.maxFlowGbps, this.resultTrees);
 
           // Extract relevant metrics
           const maxFlowGbps = networkData.error ? null : networkData.maxFlowGbps;
@@ -599,11 +700,11 @@ export class SimMain {
    * Generates an HTML report from the stored reportData and opens it in a new tab.
    */
   generateReport() {
-    if (!this.reportData) {
+    if (!this.missionProfiles) {
       console.error("Report data not available. Run the simulation first.");
       return;
     }
-    generateReport(this.reportData);
+    generateReport(this.missionProfiles, this.resultTrees);
   }
 }
 // Initialize the simulation once the DOM is fully loaded

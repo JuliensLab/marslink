@@ -21,7 +21,7 @@ export class SimSatellites {
     const newOrbitalElements = [];
     for (let config of satellitesConfig) newOrbitalElements.push(this.generateOrbitalElements(config));
     this.orbitalElements = newOrbitalElements;
-    console.log(this.orbitalElements);
+    // console.log(this.orbitalElements);
   }
 
   updateSatellitesPositions(simDaysSinceStart) {
@@ -170,7 +170,43 @@ export class SimSatellites {
     return satelliteData;
   }
 
+  calculateInclination(a, earthMarsInclinationPct) {
+    const a_min = 1.00002;
+    const a_max = 1.5236365;
+    const i_min = 0.00041;
+    const i_max = 1.84992;
+    let properInclination;
+
+    // Calculate properInclination based on a
+    if (a <= a_min) {
+      properInclination = i_min;
+    } else if (a >= a_max) {
+      properInclination = i_max;
+    } else {
+      properInclination = i_min + ((i_max - i_min) * (a - a_min)) / (a_max - a_min);
+    }
+
+    // Calculate inclination based on earthMarsInclinationPct
+    let inclination;
+    if (earthMarsInclinationPct <= 50) {
+      inclination = i_min + (properInclination - i_min) * (earthMarsInclinationPct / 50);
+    } else {
+      inclination = properInclination + (i_max - properInclination) * ((earthMarsInclinationPct - 50) / 50);
+    }
+
+    return inclination;
+  }
+
+  calculateApsides(a, e) {
+    const periapsis = a * (1 - e);
+    const apoapsis = a * (1 + e);
+    return { periapsis, apoapsis };
+  }
+  apsidesEarth = this.calculateApsides(1.00002, 0.0166967);
+
   getOrbitaElements(ringType, a, n, eccentricity, argPeri, earthMarsInclinationPct, long) {
+    const apsides = this.calculateApsides(a, eccentricity);
+    apsides.apo_pctEarth = apsides.apoapsis / this.apsidesEarth.apoapsis;
     if (ringType == "Mars")
       return {
         i: 1.84992,
@@ -180,6 +216,7 @@ export class SimSatellites {
         n: 0.5240613,
         e: 0.0934231,
         l: (262.42784 + long + 360) % 360,
+        apsides,
       };
     else if (ringType == "Earth")
       return {
@@ -190,26 +227,29 @@ export class SimSatellites {
         n: 0.9855796,
         e: 0.0166967,
         l: (328.40353 + long + 360) % 360,
+        apsides,
       };
     else if (ringType == "Circular")
       return {
-        i: (earthMarsInclinationPct / 100) * 1.84992,
+        i: this.calculateInclination(a, earthMarsInclinationPct),
         o: 49.5664, //RAAN
         p: 0, // arg perigee
         a: a,
         n: n,
         e: eccentricity,
         l: long,
+        apsides,
       };
     else if (ringType == "Eccentric")
       return {
-        i: (earthMarsInclinationPct / 100) * 1.84992,
+        i: this.calculateInclination(a, earthMarsInclinationPct),
         o: 49.5664, //RAAN
         p: argPeri, // arg perigee
         a: a,
         n: n,
         e: eccentricity,
         l: long,
+        apsides,
       };
   }
 

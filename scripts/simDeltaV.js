@@ -9,8 +9,8 @@ function calculateInclinationDeltaV(v, i1, i2) {
   return 2 * v * Math.sin(deltaI / 2); // Delta-V for inclination change (km/s)
 }
 
-export function calculateDeltaV_km_s(orbit1, orbit2) {
-  console.log(orbit1, orbit2);
+export function calculateHohmannDeltaV_km_s(orbit1, orbit2) {
+  // console.log(orbit1, orbit2);
   const start = orbit1;
   const target = orbit2;
 
@@ -50,12 +50,12 @@ export function calculateDeltaV_km_s(orbit1, orbit2) {
   // Total delta-V (Hohmann + inclination)
   const totalDeltaV = deltaV1 + deltaV2 + deltaV_inclination;
 
-  console.log(
-    `${orbit1.ringName ? orbit1.ringName : orbit1.name} to ${orbit2.ringName ? orbit2.ringName : orbit2.name}`,
-    deltaV1,
-    deltaV2,
-    deltaV_inclination
-  );
+  // console.log(
+  //   `${orbit1.ringName ? orbit1.ringName : orbit1.name} to ${orbit2.ringName ? orbit2.ringName : orbit2.name}`,
+  //   deltaV1,
+  //   deltaV2,
+  //   deltaV_inclination
+  // );
 
   return {
     deltaV1: Math.round(deltaV1 * 1000) / 1000, // First Hohmann burn (km/s)

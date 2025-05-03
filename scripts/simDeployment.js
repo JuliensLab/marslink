@@ -1,7 +1,6 @@
 // simDeployment.js
 
-// Import the delta-V calculation function
-import { calculateDeltaV_km_s } from "./simDeltaV.js?v=2.4";
+import { calculateHohmannDeltaV_km_s } from "./simDeltaV.js?v=2.4";
 
 // Define the Starship performance data, including booster data
 const starshipPerformance = {
@@ -73,65 +72,25 @@ export class SimDeployment {
    * Constructor for SimDeployment class
    * @param {string} variant - Starship variant ('flight3', 'starship2', or 'starship3')
    */
-  constructor(variant = "starship3") {
+  constructor(planets, variant = "starship3") {
+    // Find Earth from the planets array
+    this.earth = {};
+    for (const planet of planets) {
+      if (planet.name === "Earth") {
+        this.earth = planet;
+        break;
+      }
+    }
+    if (!this.earth.name) {
+      throw new Error("Earth not found in planets array.");
+    } else {
+    } //console.log("Earth", JSON.stringify(this.earth, null, 2));
+
     if (!starshipPerformance[variant]) {
       throw new Error(`Invalid Starship variant: ${variant}. Choose from 'flight3', 'starship2', or 'starship3'.`);
     }
     this.variant = variant;
     this.starship = starshipPerformance[variant];
-    this.orbitalElements = [];
-    this.deltaV_results = [];
-  }
-
-  /**
-   * Sets the orbital elements and calculates delta-V for each plane
-   * @param {Array} targetOrbitElementsArray - Array of orbital elements for each ring
-   * @param {Array} planets - Array of planet objects, including Earth
-   */
-  setOrbitalElements(targetOrbitElementsArray, planets) {
-    this.orbitalElements = targetOrbitElementsArray;
-    console.log("Orbital Elements Input:", JSON.stringify(targetOrbitElementsArray, null, 2));
-
-    // Find Earth from the planets array
-    let earth = {};
-    for (const planet of planets) {
-      if (planet.name === "Earth") {
-        earth = planet;
-        break;
-      }
-    }
-
-    if (!earth.name) {
-      throw new Error("Earth not found in planets array.");
-    }
-
-    const deltaV_results = [];
-    for (const targetOrbitElements of targetOrbitElementsArray) {
-      // Calculate outbound and inbound delta-V using the imported function
-      const outboundDeltaV_km_per_s = calculateDeltaV_km_s(earth, targetOrbitElements);
-      const inboundDeltaV_km_per_s = calculateDeltaV_km_s(targetOrbitElements, earth);
-
-      // Log the results for debugging
-      console.log(`Ring: ${targetOrbitElements.ringName}`);
-      console.log("  Outbound Delta-V:", outboundDeltaV_km_per_s);
-      console.log("  Inbound Delta-V:", inboundDeltaV_km_per_s);
-
-      // Store the results
-      deltaV_results.push({
-        ringName: targetOrbitElements.ringName,
-        ringType: targetOrbitElements.ringType,
-        satCount: targetOrbitElements.satCount,
-        outboundDeltaV_km_per_s: outboundDeltaV_km_per_s,
-        inboundDeltaV_km_per_s: inboundDeltaV_km_per_s,
-      });
-    }
-    this.deltaV_results = this.calculateDeployment(deltaV_results);
-    console.log("Final Results:", JSON.stringify(this.deltaV_results, null, 2));
-    return this.deltaV_results;
-  }
-
-  getDeltaVResults() {
-    return this.deltaV_results;
   }
 
   /**
@@ -167,352 +126,424 @@ export class SimDeployment {
     return Math.round(deltaV_km_per_s * 100) / 100; // Round to 2 decimal places
   }
 
-  /**
-   * Calculates the resources needed for all orbital planes
-   * @param {Array} deltaV_results - Array of delta-V results for each orbital plane
-   * @returns {Array} Array of results for each orbital plane
-   */
-  calculateDeployment(deltaV_results) {
-    const results = [];
-    for (const deltaV_result of deltaV_results) {
-      const { ringName, satCount, outboundDeltaV_km_per_s, inboundDeltaV_km_per_s } = deltaV_result;
-      const missionProfile = [];
+  // Vehicle Properties (in kg and m/s)
+  vehicleProperties = {
+    booster: {
+      dryMass_kg: 200000,
+      propellantCapacity_kg: 3000000,
+      deorbitLandingPropellant_kg: 50000,
+      isp_s: 350,
+      propellantType: "CH4/O2",
+    },
+    starship: {
+      dryMass_kg: 120000,
+      propellantCapacity_kg: 1200000,
+      deorbitLandingPropellant_kg: 20000,
+      maxPayloadCapacity_kg: 200000,
+      isp_s: 370,
+      propellantType: "CH4/O2",
+    },
+    tanker: {
+      dryMass_kg: 120000,
+      propellantCapacity_kg: 1200000,
+      tankerPropellantCapacity_kg: 200000,
+      deorbitLandingPropellant_kg: 20000,
+      isp_s: 370,
+      propellantType: "CH4/O2",
+    },
+    satellite: {
+      dryMass_kg: 1450,
+      solarPanelMass_EarthOrbit_kg: 50,
+      propellantCapacity_kg: 1500, // Includes propellant for maneuvers
+      isp_s: 2500,
+      propellantType: "Argon",
+    },
+  };
 
-      const outboundDeltaV1 = deltaV_result.ringType == "Eccentric" ? outboundDeltaV_km_per_s.deltaV2 : outboundDeltaV_km_per_s.deltaV1;
-      const outboundDeltaV2 = deltaV_result.ringType == "Eccentric" ? outboundDeltaV_km_per_s.deltaV1 : outboundDeltaV_km_per_s.deltaV2;
+  addVehicle(vehicles, vehicleId, vehicleProperties, additionalMass_kg = 0) {
+    vehicles[vehicleId] = {
+      ...vehicleProperties,
+      propellantLoaded_kg: 0,
+      tankerPropellant_kg: 0,
+      maneuvers: [],
+    };
+    vehicles[vehicleId].dryMass_kg += additionalMass_kg;
+    vehicles[vehicleId].dryMass_kg = Math.round(vehicles[vehicleId].dryMass_kg);
+  }
 
-      // Calculate satellite prop and total mass
-      const inclinationPropellantMass_kg = this.calculateManeuverPropellant(
-        satellites.dryMass_kg, // m_dry_sat_kg = 1500 kg
-        outboundDeltaV_km_per_s.deltaV_inclination,
-        satellites.IspVacuum_s // I_sp_sat_s = 1800 s / electric propulsion
-      );
-      const _2ndHohmannPropellantMass_kg = this.calculateManeuverPropellant(
-        satellites.dryMass_kg + inclinationPropellantMass_kg, // m_dry_sat_kg = 1500 kg
-        outboundDeltaV2,
-        satellites.IspVacuum_s // I_sp_sat_s = 1800 s / electric propulsion
-      );
+  getEndMass_kg(vehicles, vehicleId) {
+    const endMass_kg = vehicles[vehicleId].maneuvers.length
+      ? vehicles[vehicleId].maneuvers[vehicles[vehicleId].maneuvers.length - 1].startMass_kg
+      : vehicles[vehicleId].dryMass_kg;
+    return endMass_kg;
+  }
 
-      const m_prop_sat_kg = inclinationPropellantMass_kg + _2ndHohmannPropellantMass_kg;
+  getUsedPropellantMass_kg(vehicles, vehicleId) {
+    const usedPropellantMass_kg = vehicles[vehicleId].maneuvers.reduce((acc, maneuver) => acc + (maneuver.usedPropellantMass_kg || 0), 0);
+    return usedPropellantMass_kg;
+  }
 
-      const m_total_sat_kg = satellites.dryMass_kg + m_prop_sat_kg;
-      const satellite_deltaV_available_km_per_s = this.calculateDeltaV_km_per_s(
-        satellites.dryMass_kg,
-        m_prop_sat_kg,
-        satellites.IspVacuum_s
-      );
+  addManeuverByPropellantRequired(vehicles, vehicleId, label, usedPropellantMass_kg) {
+    const endMass_kg = this.getEndMass_kg(vehicles, vehicleId);
+    const deltaV_km_per_s = this.calculateDeltaV_km_per_s(endMass_kg, usedPropellantMass_kg, vehicles[vehicleId].isp_s);
+    vehicles[vehicleId].startMass_kg = endMass_kg + usedPropellantMass_kg;
+    vehicles[vehicleId].maneuvers.push({
+      type: "maneuver (propellant required)",
+      label,
+      deltaV_km_per_s,
+      usedPropellantMass_kg,
+      startMass_kg: endMass_kg + usedPropellantMass_kg,
+      endMass_kg,
+    });
+    vehicles[vehicleId].propellantLoaded_kg += usedPropellantMass_kg;
+  }
 
-      missionProfile.push({
-        type: "maneuver",
-        vehicle: "Satellite",
-        payload: null,
-        label: "Inclination change",
-        deltaV_km_per_s: outboundDeltaV_km_per_s.deltaV_inclination,
-        prop_kg: inclinationPropellantMass_kg,
-        start_mass_kg: satellites.dryMass_kg + inclinationPropellantMass_kg,
-        isp_s: satellites.IspVacuum_s,
-      });
+  addManeuverByDeltaVRequired(vehicles, vehicleId, label, deltaV_km_per_s) {
+    const endMass_kg = this.getEndMass_kg(vehicles, vehicleId);
+    const usedPropellantMass_kg = this.calculateManeuverPropellant(
+      endMass_kg, // m_dry_sat_kg = 1500 kg
+      deltaV_km_per_s,
+      vehicles[vehicleId].isp_s // I_sp_sat_s = 1800 s / electric propulsion
+    );
 
-      missionProfile.push({
-        type: "maneuver",
-        vehicle: "Satellite",
-        payload: null,
-        label: "2nd Hohmann maneuver",
-        deltaV_km_per_s: outboundDeltaV2,
-        prop_kg: _2ndHohmannPropellantMass_kg,
-        start_mass_kg: satellites.dryMass_kg + inclinationPropellantMass_kg + _2ndHohmannPropellantMass_kg,
-        isp_s: satellites.IspVacuum_s,
-      });
+    const startMass_kg = endMass_kg + usedPropellantMass_kg;
+    vehicles[vehicleId].maneuvers.push({
+      type: "maneuver (delta-V required)",
+      label,
+      deltaV_km_per_s,
+      usedPropellantMass_kg,
+      startMass_kg,
+      endMass_kg,
+    });
+    vehicles[vehicleId].propellantLoaded_kg += usedPropellantMass_kg;
+    if (vehicles[vehicleId].propellantLoaded_kg > vehicles[vehicleId].propellantCapacity_kg)
+      return vehicles[vehicleId].propellantLoaded_kg / vehicles[vehicleId].propellantCapacity_kg; //to the caller with info that the propellant capacity is less than the propellant required for the maneuver
+    // throw new Error(
+    //   `Propellant capacity is less than the propellant required for ${label}: ${vehicles[vehicleId].propellantLoaded_kg} > ${vehicles[vehicleId].propellantCapacity_kg}`
+    // );
+    return null;
+  }
 
-      // Calculate how many satellites fit based on mass
-      if (m_total_sat_kg <= 0) throw new Error("Satellite total mass must be positive.");
-      const satellitesPerDeploymentFlight_maxCount = Math.floor(this.starship.starship.payloadCapacity_kg / m_total_sat_kg);
-      const totalDeploymentFlights_count = Math.ceil(satCount / satellitesPerDeploymentFlight_maxCount);
-      const satellitesPerDeploymentFlight_count = Math.ceil(satCount / totalDeploymentFlights_count);
-
-      // Calculate actual payload mass
-      const m_payload_mass_kg = satellitesPerDeploymentFlight_count * m_total_sat_kg;
-
-      // Calculate return propellant to return from delta-V 1 with no satellites on board
-      const I_sp_starship_s = this.starship.engines.IspVacuum_s; // Use vacuum Isp for in-space maneuvers
-      const I_sp_booster_s = (this.starship.engines.IspVacuum_s + this.starship.engines.IspSeaLevel_s) / 2; // Use vacuum Isp for in-space maneuvers
-      const m_prop_return_kg = this.calculateManeuverPropellant(
-        this.starship.starship.dryMass_kg + this.starship.starship.deorbitLandingBurnPropellant_kg,
-        outboundDeltaV1,
-        I_sp_starship_s
-      );
-
-      missionProfile.push({
-        type: "maneuver",
-        vehicle: "Starship",
-        payload: null,
-        label: "Deorbit and landing burn",
-        deltaV_km_per_s: outboundDeltaV1,
-        prop_kg: m_prop_return_kg,
-        start_mass_kg: this.starship.starship.dryMass_kg + this.starship.starship.deorbitLandingBurnPropellant_kg + m_prop_return_kg,
-        isp_s: this.starship.engines.IspVacuum_s,
-      });
-
-      missionProfile.push({
-        type: "non-maneuver",
-        label: "Satellite deployment",
-      });
-
-      // Calculate delta-V 1 for Starship with satellites onboard
-      const m_prop_outbound_kg = this.calculateManeuverPropellant(
-        this.starship.starship.dryMass_kg + m_payload_mass_kg + m_prop_return_kg + this.starship.starship.deorbitLandingBurnPropellant_kg,
-        outboundDeltaV1,
-        I_sp_starship_s
-      );
-
-      missionProfile.push({
-        type: "maneuver",
-        vehicle: "Starship (payload)",
-        payload: "Satellites",
-        label: "1st Hohmann maneuver",
-        deltaV_km_per_s: outboundDeltaV1,
-        prop_kg: m_prop_outbound_kg,
-        start_mass_kg:
-          this.starship.starship.dryMass_kg +
-          m_payload_mass_kg +
-          m_prop_return_kg +
-          this.starship.starship.deorbitLandingBurnPropellant_kg +
-          m_prop_outbound_kg,
-        isp_s: this.starship.engines.IspVacuum_s,
-      });
-
-      // Calculate how much fuel is needed for starship to bring its max payload capacity to delta-V 1 and return and land
-      const m_prop_total_kg = m_prop_outbound_kg + m_prop_return_kg + this.starship.starship.deorbitLandingBurnPropellant_kg;
-      if (m_prop_total_kg > this.starship.starship.propellantLoad_kg)
-        throw new Error("Starship doesn't have enough propellant capacity to perform 1st Hohmann burn and return to land");
-
-      const starship_postLEO_payload_deltaV_available_km_per_s = this.calculateDeltaV_km_per_s(
-        this.starship.starship.dryMass_kg + m_payload_mass_kg + m_prop_return_kg + this.starship.starship.deorbitLandingBurnPropellant_kg,
-        m_prop_outbound_kg,
-        I_sp_starship_s
+  addPropellantTransfer(vehicles, targetVehicleId, label, sourceVehicleId, tankerPropellant_kg) {
+    if (tankerPropellant_kg > vehicles[sourceVehicleId].tankerPropellantCapacity_kg)
+      throw new Error(
+        `Tanker propellant capacity is less than the propellant required for ${label}: ${tankerPropellant_kg} > ${vehicles[sourceVehicleId].tankerPropellantCapacity_kg}`
       );
 
-      const starship_postLEO_postPayload_deltaV_available_km_per_s = this.calculateDeltaV_km_per_s(
-        this.starship.starship.dryMass_kg,
-        m_prop_return_kg + this.starship.starship.deorbitLandingBurnPropellant_kg,
-        I_sp_starship_s
-      );
+    // target vehicle
+    const target_endMass_kg = this.getEndMass_kg(vehicles, targetVehicleId);
+    const target_startMass_kg = target_endMass_kg - tankerPropellant_kg;
+    vehicles[targetVehicleId].maneuvers.push({
+      type: "propellant transfer (receive)",
+      label: `${label} from ${sourceVehicleId}`,
+      propellantSourceId: sourceVehicleId,
+      startMass_kg: target_startMass_kg,
+      endMass_kg: target_endMass_kg,
+      usedPropellantMass_kg: -tankerPropellant_kg,
+    });
+    vehicles[targetVehicleId].propellantLoaded_kg -= tankerPropellant_kg;
 
-      // Calculate required number of tanker launches for 1 deployment flight
-      const tankerLaunchesPerDeploymentFlight_count = Math.ceil(m_prop_total_kg / this.starship.starship.payloadCapacity_kg);
-      const tankerPayloadFuelRequired_kg = m_prop_total_kg / tankerLaunchesPerDeploymentFlight_count;
-      // this could be optimized to avoid bringing excess fuel, where not all tankers bring full fuel
+    // source vehicle
+    const source_endMass_kg = this.getEndMass_kg(vehicles, sourceVehicleId);
+    const source_startMass_kg = source_endMass_kg + tankerPropellant_kg;
+    vehicles[sourceVehicleId].maneuvers.push({
+      type: "propellant transfer (send)",
+      label: `${label} to ${targetVehicleId}`,
+      propellantTargetId: targetVehicleId,
+      startMass_kg: source_startMass_kg,
+      endMass_kg: source_endMass_kg,
+      tankerPropellantOffload_kg: tankerPropellant_kg,
+    });
+    vehicles[sourceVehicleId].tankerPropellant_kg += tankerPropellant_kg + 100;
+  }
 
-      // Calculate second stage to LEO for Starship with tanker fuel on board
-      const tanker_starship_total_mass_kg =
-        this.starship.starship.dryMass_kg +
-        this.starship.starship.propellantLoad_kg +
-        tankerPayloadFuelRequired_kg +
-        this.starship.starship.deorbitLandingBurnPropellant_kg;
-
-      const deltaV_2nd_stage_tanker_km_per_s = this.calculateDeltaV_km_per_s(
-        tanker_starship_total_mass_kg - this.starship.starship.propellantLoad_kg,
-        this.starship.starship.propellantLoad_kg,
-        I_sp_starship_s
-      );
-
-      missionProfile.push({
-        type: "non-maneuver",
-        label: "In-orbit propellant transfer",
-      });
-
-      // no calculation for tanker as it is obvious that it needs its entire propellant load, as it won't achieve 9.5km/s delta-V with it.
-
-      missionProfile.push({
-        type: "maneuver",
-        vehicle: "Starship (tanker)",
-        payload: "Propellant",
-        label: "2nd stage to LEO",
-        deltaV_km_per_s: deltaV_2nd_stage_tanker_km_per_s,
-        prop_kg: this.starship.starship.propellantLoad_kg,
-        start_mass_kg: tanker_starship_total_mass_kg,
-        isp_s: I_sp_starship_s,
-      });
-
-      const required_booster_tanker_deltaV_km_per_s = launchToLEO_deltaV_km_per_s - deltaV_2nd_stage_tanker_km_per_s;
-      if (required_booster_tanker_deltaV_km_per_s > 0) {
-        // tanker booster required
-        const m_prop_1st_stage_tanker_propellantLoad_kg = this.calculateManeuverPropellant(
-          this.starship.booster.dryMass_kg + tanker_starship_total_mass_kg,
-          required_booster_tanker_deltaV_km_per_s,
-          I_sp_booster_s
-        );
-        if (
-          m_prop_1st_stage_tanker_propellantLoad_kg >
-          this.starship.booster.propellantLoad_kg - this.starship.booster.deorbitLandingBurnPropellant_kg
-        )
-          throw new Error("Starship booster doesn't have enough propellant capacity to perform 1st stage burn");
-
-        missionProfile.push({
-          type: "maneuver",
-          vehicle: "Booster",
-          payload: null,
-          label: "Deorbit and landing burn",
-          deltaV_km_per_s: null,
-          prop_kg: this.starship.booster.deorbitLandingBurnPropellant_kg,
-          start_mass_kg:
-            this.starship.booster.dryMass_kg + this.starship.booster.propellantLoad_kg - m_prop_1st_stage_tanker_propellantLoad_kg,
-
-          isp_s: null,
-        });
-        missionProfile.push({
-          type: "maneuver",
-          vehicle: "Booster",
-          payload: "Starship (tanker)",
-          label: "1st stage to MECO",
-          deltaV_km_per_s: required_booster_tanker_deltaV_km_per_s,
-          prop_kg: m_prop_1st_stage_tanker_propellantLoad_kg,
-          start_mass_kg: this.starship.booster.dryMass_kg + m_prop_1st_stage_tanker_propellantLoad_kg + tanker_starship_total_mass_kg,
-
-          isp_s: I_sp_booster_s,
-        });
-      }
-
-      const deltaV_2nd_stage_payload_km_per_s = this.calculateDeltaV_km_per_s(
-        this.starship.starship.dryMass_kg + m_payload_mass_kg,
-        this.starship.starship.propellantLoad_kg,
-        this.starship.engines.IspVacuum_s
-      );
-
-      missionProfile.push({
-        type: "maneuver",
-        vehicle: "Starship (payload)",
-        payload: "Satellites",
-        label: "2nd stage to LEO",
-        deltaV_km_per_s: deltaV_2nd_stage_payload_km_per_s,
-        prop_kg: this.starship.starship.propellantLoad_kg,
-        start_mass_kg: this.starship.starship.dryMass_kg + m_payload_mass_kg + this.starship.starship.propellantLoad_kg,
-        isp_s: this.starship.engines.IspVacuum_s,
-      });
-
-      const required_booster_payload_deltaV_km_per_s = launchToLEO_deltaV_km_per_s - deltaV_2nd_stage_payload_km_per_s;
-      if (required_booster_payload_deltaV_km_per_s > 0) {
-        // payload booster required
-        const m_prop_1st_stage_payload_propellantLoad_kg = this.calculateManeuverPropellant(
-          this.starship.booster.dryMass_kg +
-            this.starship.starship.dryMass_kg +
-            m_payload_mass_kg +
-            this.starship.starship.propellantLoad_kg,
-          required_booster_payload_deltaV_km_per_s,
-          I_sp_booster_s
-        );
-
-        missionProfile.push({
-          type: "maneuver",
-          vehicle: "Booster",
-          payload: null,
-          label: "Deorbit and landing burn",
-          deltaV_km_per_s: null,
-          prop_kg: this.starship.booster.deorbitLandingBurnPropellant_kg,
-          start_mass_kg: this.starship.starship.dryMass_kg + m_payload_mass_kg,
-          isp_s: null,
-        });
-
-        missionProfile.push({
-          type: "maneuver",
-          vehicle: "Booster",
-          payload: "Starship (payload)",
-          label: "1st stage to MECO",
-          deltaV_km_per_s: deltaV_2nd_stage_payload_km_per_s,
-          prop_kg: m_prop_1st_stage_payload_propellantLoad_kg,
-          start_mass_kg: this.starship.starship.dryMass_kg + m_payload_mass_kg + m_prop_1st_stage_payload_propellantLoad_kg,
-          isp_s: I_sp_booster_s,
-        });
-      }
-
-      // Calculate total propellant per launch (including booster)
-      const totalPropellantPerIndividualLaunch_kg = this.starship.booster.propellantLoad_kg + this.starship.starship.propellantLoad_kg;
-
-      // Propellant per deployment flight
-      const totalPropellantPerDeploymentFlight_kg = totalPropellantPerIndividualLaunch_kg * (1 + tankerLaunchesPerDeploymentFlight_count);
-
-      // Calculate total launches needed for the orbital plane
-      if (satellitesPerDeploymentFlight_count <= 0) throw new Error("Satellites per launch must be positive.");
-      const totalIndividualFlights_count = (1 + tankerLaunchesPerDeploymentFlight_count) * totalDeploymentFlights_count;
-
-      // Total fuel
-      const totalPropellant_kg = totalPropellantPerDeploymentFlight_kg * totalDeploymentFlights_count;
-
-      // Store results
-      const result = {
-        ringName,
-        satCount,
-        satellites: {
-          totalMass_kg: m_total_sat_kg,
-          propMass_kg: m_prop_sat_kg,
-          dryMass_kg: satellites.dryMass_kg,
-          IspVacuum_s: satellites.IspVacuum_s,
-          satellite_deltaV_available_km_per_s,
-        },
-        starship: {
-          payloadMass_kg: m_payload_mass_kg,
-          outboundPropellant_kg: m_prop_outbound_kg,
-          returnPropellant_kg: m_prop_return_kg,
-          landingPropellant_kg: this.starship.starship.deorbitLandingBurnPropellant_kg,
-          starship_postLEO_payload_deltaV_available_km_per_s,
-          starship_postLEO_postPayload_deltaV_available_km_per_s,
-        },
-        deployment: {
-          totalDeploymentFlights_count,
-          satellitesPerDeploymentFlight_count,
-          tankerLaunchesPerDeploymentFlight_count,
-          totalIndividualFlights_count,
-          rocketPropellant: {
-            perIndividualLaunch_tons: Math.round(totalPropellantPerIndividualLaunch_kg / 1000),
-            perDeploymentFlight_tons: Math.round(totalPropellantPerDeploymentFlight_kg / 1000),
-            total_tons: Math.round(totalPropellant_kg / 1000),
-          },
-          satellitePropellant: {
-            perLaunch_tons: Math.round((satellitesPerDeploymentFlight_count * m_prop_sat_kg) / 1000),
-            total_tons: Math.round((satCount * m_prop_sat_kg) / 1000),
-          },
-        },
-        orbits: {
-          outboundDeltaV_km_per_s,
-          inboundDeltaV_km_per_s,
-        },
-        missionProfile,
-      };
-      results.push(result);
-      console.log(result);
+  addPayloadDeployment(vehicles, vehicleId, payloadId, totalPayloadCount, label, maxSatCountPerDeploymentFlight_fromLoop = Infinity) {
+    const individualPayloadMass_kg = vehicles[payloadId].maneuvers.length
+      ? vehicles[payloadId].maneuvers[vehicles[payloadId].maneuvers.length - 1].startMass_kg
+      : vehicles[payloadId].dryMass_kg;
+    const maxPayloadCountPerDeploymentFlight =
+      totalPayloadCount == 1
+        ? 1
+        : Math.min(
+            maxSatCountPerDeploymentFlight_fromLoop,
+            Math.floor(vehicles[vehicleId].maxPayloadCapacity_kg / individualPayloadMass_kg)
+          );
+    let payloadCountPerDeploymentFlight = totalPayloadCount;
+    let totalDeploymentFlights_count = 1;
+    if (totalPayloadCount > maxPayloadCountPerDeploymentFlight) {
+      totalDeploymentFlights_count = Math.ceil(totalPayloadCount / maxPayloadCountPerDeploymentFlight);
+      payloadCountPerDeploymentFlight = Math.ceil(totalPayloadCount / totalDeploymentFlights_count);
     }
 
-    // Calculate total rocket propellant
-    const totalRocketProp_tons = results.reduce((sum, ring) => {
-      return sum + ring.deployment.rocketPropellant.total_tons;
-    }, 0);
+    const payloadMass_kg = individualPayloadMass_kg * payloadCountPerDeploymentFlight;
+    const endMass_kg = vehicles[vehicleId].maneuvers.length
+      ? vehicles[vehicleId].maneuvers[vehicles[vehicleId].maneuvers.length - 1].startMass_kg
+      : vehicles[vehicleId].dryMass_kg;
+    const startMass_kg = endMass_kg + payloadMass_kg;
+    vehicles[vehicleId].maneuvers.push({
+      type: "payload deployment (carrier)",
+      label,
+      payloadId,
+      payloadCountPerDeploymentFlight,
+      individualPayloadMass_kg,
+      payloadMass_kg,
+      startMass_kg,
+      endMass_kg,
+    });
+    vehicles[payloadId].maneuvers.push({
+      type: "payload deployment (payload)",
+      label: payloadCountPerDeploymentFlight > 1 ? `${label} x${payloadCountPerDeploymentFlight}` : label,
+      vehicleId,
+      startMass_kg: individualPayloadMass_kg,
+      endMass_kg: individualPayloadMass_kg,
+    });
+    return { payloadCountPerDeploymentFlight, totalDeploymentFlights_count };
+  }
 
-    // Calculate total satellite propellant
-    const totalSatelliteProp_tons = results.reduce((sum, ring) => {
-      return sum + ring.deployment.satellitePropellant.total_tons;
-    }, 0);
+  addSurfaceLiftoffToLEO(vehicles, vehicleId) {
+    const endMass_kg = this.getEndMass_kg(vehicles, vehicleId);
+    const propellantRequired_kg = Math.ceil(
+      this.calculateManeuverPropellant(endMass_kg, launchToLEO_deltaV_km_per_s, vehicles[vehicleId].isp_s)
+    );
+    // get vehicle propellant already used in future maneuvers
+    const usedPropellantMass_kg = Math.ceil(this.getUsedPropellantMass_kg(vehicles, vehicleId));
+    const maxPropellantForThisManeuver_kg = vehicles[vehicleId].propellantCapacity_kg - usedPropellantMass_kg;
+    // console.log("vehicle", vehicleId, JSON.stringify(vehicles[vehicleId], null, 2));
+    // console.log("usedPropellantMass_kg", usedPropellantMass_kg);
+    // console.log("vehicles[vehicleId].propellantCapacity_kg", vehicles[vehicleId].propellantCapacity_kg);
+    // console.log("maxPropellantForThisManeuver_kg", maxPropellantForThisManeuver_kg);
+    // console.log("propellantRequired_kg", propellantRequired_kg);
+    if (propellantRequired_kg > maxPropellantForThisManeuver_kg) {
+      // booster flight required, just use the propellant capacity of the vehicle
+      const secondStage_usedPropellant_kg = maxPropellantForThisManeuver_kg;
+      const secondStage_DeltaV_km_per_s = this.calculateDeltaV_km_per_s(
+        endMass_kg,
+        secondStage_usedPropellant_kg,
+        vehicles[vehicleId].isp_s
+      );
+      vehicles[vehicleId].maneuvers.push({
+        type: "second stage acceleration to LEO",
+        label: "Second stage acceleration to LEO",
+        deltaV_km_per_s: secondStage_DeltaV_km_per_s,
+        usedPropellantMass_kg: secondStage_usedPropellant_kg,
+        startMass_kg: endMass_kg + secondStage_usedPropellant_kg,
+        endMass_kg: endMass_kg,
+      });
+      vehicles[vehicleId].propellantLoaded_kg += secondStage_usedPropellant_kg;
 
-    const totalDeploymentFlights_count = results.reduce((sum, ring) => {
-      return sum + ring.deployment.totalDeploymentFlights_count;
-    }, 0);
+      // add booster flight
+      const boosterId = `Booster-${vehicleId}`;
+      this.addVehicle(vehicles, boosterId, this.vehicleProperties.booster);
+      const firstStage_endMass_kg = this.getEndMass_kg(vehicles, boosterId);
+      const firstStage_deltaV_required_km_per_s = launchToLEO_deltaV_km_per_s - secondStage_DeltaV_km_per_s;
+      const firstStage_propellantRequired_kg = this.calculateManeuverPropellant(
+        firstStage_endMass_kg,
+        firstStage_deltaV_required_km_per_s,
+        vehicles[boosterId].isp_s
+      );
+      const firstStage_startMass_kg = firstStage_endMass_kg + firstStage_propellantRequired_kg;
 
-    const totalIndividualFlights_count = results.reduce((sum, ring) => {
-      return sum + ring.deployment.totalIndividualFlights_count;
-    }, 0);
+      vehicles[boosterId].maneuvers.push({
+        type: "deorbit and landing burn",
+        label: "Deorbit and landing burn",
+        usedPropellantMass_kg: vehicles[boosterId].deorbitLandingPropellant_kg,
+        startMass_kg: firstStage_endMass_kg,
+        endMass_kg: firstStage_endMass_kg - vehicles[boosterId].deorbitLandingPropellant_kg,
+      });
+      vehicles[boosterId].propellantLoaded_kg += vehicles[boosterId].deorbitLandingPropellant_kg;
+      this.addPayloadDeployment(vehicles, boosterId, vehicleId, 1, "Separation");
+      vehicles[boosterId].maneuvers.push({
+        type: "first stage liftoff",
+        label: "First stage liftoff",
+        deltaV_km_per_s: firstStage_deltaV_required_km_per_s,
+        usedPropellantMass_kg: firstStage_propellantRequired_kg,
+        startMass_kg: firstStage_startMass_kg,
+        endMass_kg: firstStage_endMass_kg,
+      });
+      vehicles[boosterId].propellantLoaded_kg += firstStage_propellantRequired_kg;
+    } else {
+      vehicles[vehicleId].maneuvers.push({
+        type: "single stage liftoff to LEO",
+        label: "Single stage liftoff to LEO",
+        deltaV_km_per_s: launchToLEO_deltaV_km_per_s,
+        usedPropellantMass_kg: propellantRequired_kg,
+        startMass_kg: endMass_kg + propellantRequired_kg,
+        endMass_kg: endMass_kg,
+      });
+      vehicles[vehicleId].propellantLoaded_kg += propellantRequired_kg;
+    }
+  }
 
-    const satellites_count = results.reduce((sum, ring) => {
-      return sum + ring.satCount;
-    }, 0);
+  /**
+   * Gets the mission profile for a given target orbit
+   * @param {Array} targetOrbitElementsArray - Array of orbital elements for each ring
+   * @returns {Object} Mission profile for the given target orbit
+   */
+  getMissionProfile(targetOrbitElementsArray) {
+    const results_by_orbit = [];
+    for (const targetOrbitElements of targetOrbitElementsArray) {
+      let counter = 0;
+      let maxSatCountPerDeploymentFlight_fromLoop = Infinity;
+      let missionProfile;
+      do {
+        if (counter++ > 10) throw new Error("Too many iterations");
+        missionProfile = this.getMissionProfileOneOrbit(targetOrbitElements, maxSatCountPerDeploymentFlight_fromLoop);
+        if (missionProfile.error) {
+          // console.log(
+          //   "Error: ",
+          //   missionProfile.excess,
+          //   "with ",
+          //   missionProfile.satCountPerDeploymentFlight,
+          //   "now using ",
+          //   missionProfile.satCountPerDeploymentFlight - 1,
+          //   "satellites per deployment flight"
+          // );
+          maxSatCountPerDeploymentFlight_fromLoop = missionProfile.satCountPerDeploymentFlight - 1;
+        } else {
+          // console.log("OK, using ", missionProfile.result.satCountPerDeploymentFlight);
+        }
+        if (maxSatCountPerDeploymentFlight_fromLoop <= 0) {
+          throw new Error("Max satellites per deployment flight is less than 1");
+        }
+      } while (missionProfile.error);
+      const result = {
+        ringName: targetOrbitElements.ringName,
+        satCount: targetOrbitElements.satCount,
+        deploymentFlights_count: missionProfile.result.deploymentFlights_count,
+        satCountPerDeploymentFlight: missionProfile.result.satCountPerDeploymentFlight,
+        vehicles: missionProfile.result.vehicles,
+        orbits: missionProfile.result.orbits,
+      };
+      results_by_orbit.push(result);
+      // console.log(result);
+    }
+    return { byOrbit: results_by_orbit };
+  }
 
-    return {
-      totals: {
-        totalRocketProp_tons,
-        totalSatelliteProp_tons,
-        totalDeploymentFlights_count,
-        totalIndividualFlights_count,
-        satellites_count,
+  /**
+   * Sets the orbital elements and calculates delta-V for each plane
+   * @param {Array} targetOrbitElementsArray - Array of orbital elements for each ring
+   * @param {Array} planets - Array of planet objects, including Earth
+   */
+  getMissionProfileOneOrbit(targetOrbitElements, maxSatCountPerDeploymentFlight_fromLoop) {
+    // Calculate outbound delta-V using the imported function
+    const outboundDeltaV_km_per_s = calculateHohmannDeltaV_km_s(this.earth, targetOrbitElements);
+
+    const outboundDeltaV1 = targetOrbitElements.ringName.startsWith("ring_ecce")
+      ? outboundDeltaV_km_per_s.deltaV2
+      : outboundDeltaV_km_per_s.deltaV1;
+    const outboundDeltaV2 = targetOrbitElements.ringName.startsWith("ring_ecce")
+      ? outboundDeltaV_km_per_s.deltaV1
+      : outboundDeltaV_km_per_s.deltaV2;
+
+    const vehicles = {};
+
+    const solarPanelMass_kg =
+      this.vehicleProperties.satellite.solarPanelMass_EarthOrbit_kg * Math.pow(targetOrbitElements.apsides.apo_pctEarth, 2);
+    this.addVehicle(vehicles, "Satellites", this.vehicleProperties.satellite, solarPanelMass_kg);
+    this.addManeuverByDeltaVRequired(vehicles, "Satellites", "Inclination change", outboundDeltaV_km_per_s.deltaV_inclination);
+    this.addManeuverByDeltaVRequired(vehicles, "Satellites", "2nd Hohmann maneuver", outboundDeltaV2);
+    this.addVehicle(vehicles, "Starship", this.vehicleProperties.starship);
+    this.addManeuverByPropellantRequired(
+      vehicles,
+      "Starship",
+      "Deorbit and landing burn",
+      this.vehicleProperties.starship.deorbitLandingPropellant_kg
+    );
+    this.addManeuverByDeltaVRequired(vehicles, "Starship", "1st Hohmann maneuver (return)", outboundDeltaV1);
+    const { payloadCountPerDeploymentFlight, totalDeploymentFlights_count } = this.addPayloadDeployment(
+      vehicles,
+      "Starship",
+      "Satellites",
+      targetOrbitElements.satCount,
+      "Deploy satellites",
+      maxSatCountPerDeploymentFlight_fromLoop
+    );
+    vehicles.Satellites.count = payloadCountPerDeploymentFlight;
+    const outboundHohmannResult = this.addManeuverByDeltaVRequired(
+      vehicles,
+      "Starship",
+      "1st Hohmann maneuver (outbound)",
+      outboundDeltaV1
+    );
+    if (outboundHohmannResult != null) {
+      return {
+        error: true,
+        step: "1st Hohmann maneuver (outbound)",
+        excess: outboundHohmannResult,
+        satCountPerDeploymentFlight: payloadCountPerDeploymentFlight,
+      };
+    }
+
+    // compute number of tanker launches required
+    const totalStarshipPropellantRequired_kg = this.getUsedPropellantMass_kg(vehicles, "Starship");
+    // console.log("totalStarshipPropellantRequired_kg", totalStarshipPropellantRequired_kg);
+    const tankerLaunchesPerDeploymentFlight_count = Math.ceil(
+      totalStarshipPropellantRequired_kg / this.vehicleProperties.tanker.tankerPropellantCapacity_kg
+    );
+    // console.log("tankerLaunchesPerDeploymentFlight_count", tankerLaunchesPerDeploymentFlight_count);
+    const tankerPropellantRequired_kg = totalStarshipPropellantRequired_kg / tankerLaunchesPerDeploymentFlight_count;
+    // console.log("tankerLaunchesPerDeploymentFlight_count", tankerLaunchesPerDeploymentFlight_count);
+    for (let i = tankerLaunchesPerDeploymentFlight_count - 1; i >= 0; i--) {
+      this.addVehicle(vehicles, `Tanker${i}`, this.vehicleProperties.tanker);
+      this.addManeuverByPropellantRequired(
+        vehicles,
+        `Tanker${i}`,
+        "Deorbit and landing burn",
+        this.vehicleProperties.tanker.deorbitLandingPropellant_kg
+      );
+      this.addPropellantTransfer(vehicles, "Starship", `In-orbit propellant transfer`, `Tanker${i}`, tankerPropellantRequired_kg);
+    }
+    this.addSurfaceLiftoffToLEO(vehicles, "Starship");
+    for (let i = 0; i < tankerLaunchesPerDeploymentFlight_count; i++) this.addSurfaceLiftoffToLEO(vehicles, `Tanker${i}`);
+
+    // for each vehicle, invert the order of the maneuvers
+    for (const vehicleId in vehicles) {
+      vehicles[vehicleId].maneuvers.reverse();
+    }
+
+    const result = {
+      deploymentFlights_count: totalDeploymentFlights_count,
+      satCountPerDeploymentFlight: payloadCountPerDeploymentFlight,
+      vehicles,
+      orbits: {
+        targetOrbitElements,
+        deltaV_km_per_s: outboundDeltaV_km_per_s,
       },
-      byOrbit: results,
     };
+    return { error: false, result };
+  }
+
+  convertToGraph(missionProfiles) {
+    const nodes = {};
+    const edges = {};
+    const firstOrbit = missionProfiles.byOrbit[0];
+
+    // Add nodes for each vehicle
+    for (const [vehicleId, vehicle] of Object.entries(firstOrbit.vehicles)) {
+      nodes[vehicleId] = {
+        id: vehicleId,
+        label: vehicleId,
+        group: vehicleId.startsWith("Tanker") ? "tanker" : vehicleId.toLowerCase(),
+        title: `Dry Mass: ${vehicle.dryMass_kg} kg\nPropellant Capacity: ${vehicle.propellantCapacity_kg} kg`,
+      };
+    }
+
+    // Add edges for each maneuver
+    for (const [vehicleId, vehicle] of Object.entries(firstOrbit.vehicles)) {
+      for (const maneuver of vehicle.maneuvers) {
+        const edgeId = `${vehicleId}-${maneuver.label}`;
+        edges[edgeId] = {
+          id: edgeId,
+          from: vehicleId,
+          to: maneuver.type.includes("payload") ? maneuver.payloadId || maneuver.vehicleId : vehicleId,
+          label: maneuver.label,
+          title: `Delta-V: ${maneuver.deltaV_km_per_s || 0} km/s\nPropellant: ${maneuver.usedPropellantMass_kg || 0} kg`,
+          arrows: "to",
+        };
+      }
+    }
+
+    return { nodes, edges };
   }
 }
