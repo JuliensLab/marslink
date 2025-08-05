@@ -89,8 +89,9 @@ export class SimMain {
       const ringType = "Circular";
       let satDistanceSunAu = Math.min(distInnerAu, distOuterAu) + distanceAuBetweenRings * ringId;
       // if (ringCount == 3) satDistanceSunAu = (distInnerAu + distOuterAu) / 2;
-      const circumferenceAu = 2 * Math.PI * satDistanceSunAu;
-      const satCount = Math.ceil(circumferenceAu / distanceAuBetweenSats);
+      // const circumferenceAu = 2 * Math.PI * satDistanceSunAu;
+      // const satCount = Math.ceil(circumferenceAu / distanceAuBetweenSats);
+      const satCount = Math.ceil(Math.PI / Math.asin(distanceAuBetweenSats / (2 * Math.min(distInnerAu, distOuterAu))));
 
       // Push the satellite configuration for this ring
       satellitesConfig.push({
@@ -122,8 +123,9 @@ export class SimMain {
     for (let ringId = 0; ringId < ringCount; ringId++) {
       // Determine ring type
       const ringType = "Eccentric";
-      const circumferenceAu = 2 * Math.PI * distAverageAu;
-      const satCount = Math.ceil(circumferenceAu / distanceAuBetweenSats);
+      // const circumferenceAu = 2 * Math.PI * distAverageAu;
+      // const satCount = Math.ceil(circumferenceAu / distanceAuBetweenSats);
+      const satCount = Math.ceil(Math.PI / Math.asin(distanceAuBetweenSats / (2 * distAverageAu)));
       const argPeri = (argPeriStart + (ringId * 360) / ringCount) % 360;
 
       // Push the satellite configuration for this ring

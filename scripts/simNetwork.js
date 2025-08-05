@@ -88,11 +88,11 @@ export class SimNetwork {
 
     this.intraRing(rings, positions, linkCounts, finalLinks);
 
+    this.marsEarthRings(rings, positions, linkCounts, finalLinks);
+
     this.interCircularRings(rings, positions, linkCounts, finalLinks);
 
     this.interEccentricRings(rings, positions, linkCounts, finalLinks);
-
-    this.marsEarthRings(rings, positions, linkCounts, finalLinks);
 
     this.connectEccentricAndCircularRings(rings, positions, linkCounts, finalLinks);
 
@@ -338,7 +338,7 @@ export class SimNetwork {
     const sortedCircularRings = circularRingNames.slice().sort((a, b) => {
       const aDistance = rings[a][0].a; // 'a' is the distance from the sun in AU
       const bDistance = rings[b][0].a;
-      return bDistance - aDistance; // Descending order: furthest first
+      return aDistance - bDistance; // Ascending order: nearest first
     });
 
     // Initialize a Set for existing links for O(1) lookup
@@ -614,7 +614,7 @@ export class SimNetwork {
         return; // Skip if 'toId' has reached its max links
       }
       // Check if 'toId' has reached its maximum links as per simLinkBudget // marsEarthRings
-      if (linkCounts[fromId] >= this.simLinkBudget.maxLinksPerSatellite) {
+      if (linkCounts[fromId] >= this.simLinkBudget.maxLinksPerSatellite - 1) {
         return; // Skip if 'fromId' has reached its max links
       }
 
