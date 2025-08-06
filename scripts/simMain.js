@@ -29,6 +29,7 @@ export class SimMain {
     this.simNetwork = new SimNetwork(this.simLinkBudget);
     // Do not instantiate simDisplay here; it will be set by setDisplayType
     this.simDisplay = null;
+    this.linksColors = null;
 
     this.ui = new SimUi(this); // This will call initializeSimMain, setting simDisplay
 
@@ -58,8 +59,14 @@ export class SimMain {
       console.error("Invalid display type:", type);
       return;
     }
+    this.simDisplay.setLinksColors(this.linksColors);
 
     this.requestLinksUpdate = true;
+  }
+
+  setLinksColors(type) {
+    this.linksColors = type;
+    if (this.simDisplay) this.simDisplay.setLinksColors(type);
   }
 
   /**
@@ -77,8 +84,10 @@ export class SimMain {
     if (ringCount == 0) return [];
     ringCount += 2;
     const mbpsBetweenSats = uiConfig["circular_rings.requiredmbpsbetweensats"];
+    if (mbpsBetweenSats == 0) return [];
     const distOuterAu = uiConfig["circular_rings.distance-sun-slider-outer-au"];
     const distInnerAu = uiConfig["circular_rings.distance-sun-slider-inner-au"];
+    const inringIntraringBiasPct = uiConfig["circular_rings.inring-intraring-bias-pct"];
     const earthMarsInclinationPct = uiConfig["circular_rings.earth-mars-orbit-inclination-pct"];
     const distanceKmBetweenSats = this.simLinkBudget.calculateKm(mbpsBetweenSats / 1000);
     const distanceAuBetweenSats = distanceKmBetweenSats / this.km_per_au;
@@ -91,7 +100,9 @@ export class SimMain {
       // if (ringCount == 3) satDistanceSunAu = (distInnerAu + distOuterAu) / 2;
       // const circumferenceAu = 2 * Math.PI * satDistanceSunAu;
       // const satCount = Math.ceil(circumferenceAu / distanceAuBetweenSats);
-      const satCount = Math.ceil(Math.PI / Math.asin(distanceAuBetweenSats / (2 * Math.min(distInnerAu, distOuterAu))));
+      let satDistanceSunAuBias =
+        Math.min(distInnerAu, distOuterAu) + distanceAuBetweenRings * ringId * ((100 - inringIntraringBiasPct) / 100);
+      const satCount = Math.ceil(Math.PI / Math.asin(distanceAuBetweenSats / (2 * satDistanceSunAuBias)));
 
       // Push the satellite configuration for this ring
       satellitesConfig.push({
@@ -111,8 +122,8 @@ export class SimMain {
 
   setEccentricRingsConfig(uiConfig) {
     const ringCount = uiConfig["eccentric_rings.ringcount"];
-    if (ringCount == 0) return [];
     const mbpsBetweenSats = uiConfig["eccentric_rings.requiredmbpsbetweensats"];
+    if (ringCount == 0 || mbpsBetweenSats == 0) return [];
     const distAverageAu = uiConfig["eccentric_rings.distance-sun-average-au"];
     const eccentricity = uiConfig["eccentric_rings.eccentricity"];
     const argPeriStart = uiConfig["eccentric_rings.argument-of-perihelion"];
@@ -154,17 +165,42 @@ export class SimMain {
     // Fetch values from slidersData (already updated)
     const mbpsBetweenSats = uiConfig[ringName + ".requiredmbpsbetweensats"];
     const sideExtensionDeg = uiConfig[ringName + ".side-extension-degrees-slider"];
+    if (mbpsBetweenSats == 0 || sideExtensionDeg == 0) return satellitesConfig;
 
     // Determine ring type
     let ringType = ringName == "ring_mars" ? "Mars" : "Earth";
-    const { a, n } = this.simSatellites.getParams_a_n(ringType);
-    const distAverageAu = a;
 
-    const distanceKmBetweenSats = this.simLinkBudget.calculateKm(mbpsBetweenSats / 1000);
-    const distanceAuBetweenSats = distanceKmBetweenSats / this.km_per_au;
-    const circumferenceAu = 2 * Math.PI * distAverageAu;
-    const actualCircumferenceAu = (circumferenceAu * sideExtensionDeg * 2) / 360;
-    const satCount = Math.ceil(actualCircumferenceAu / distanceAuBetweenSats);
+    let satCount = 0;
+    if (
+      ringName == "ring_earth" &&
+      uiConfig["ring_earth.match-circular-rings"] == "yes" &&
+      uiConfig["circular_rings.requiredmbpsbetweensats"] > 0 &&
+      uiConfig["circular_rings.ringcount"] > 0
+    ) {
+      let ringCount = uiConfig["circular_rings.ringcount"];
+      ringCount += 2;
+      const mbpsBetweenSats = uiConfig["circular_rings.requiredmbpsbetweensats"];
+      const distOuterAu = uiConfig["circular_rings.distance-sun-slider-outer-au"];
+      const distInnerAu = uiConfig["circular_rings.distance-sun-slider-inner-au"];
+      const inringIntraringBiasPct = uiConfig["circular_rings.inring-intraring-bias-pct"];
+      const distanceKmBetweenSats = this.simLinkBudget.calculateKm(mbpsBetweenSats / 1000);
+      const distanceAuBetweenSats = distanceKmBetweenSats / this.km_per_au;
+      const distanceAuBetweenRings = Math.abs(distOuterAu - distInnerAu) / (ringCount - 1);
+      const ringId = 1;
+      let satDistanceSunAuBias =
+        Math.min(distInnerAu, distOuterAu) + distanceAuBetweenRings * ringId * ((100 - inringIntraringBiasPct) / 100);
+
+      satCount = Math.ceil(Math.PI / Math.asin(distanceAuBetweenSats / (2 * satDistanceSunAuBias)));
+      satCount;
+    } else {
+      const { a, n } = this.simSatellites.getParams_a_n(ringType);
+      const distAverageAu = a;
+      const distanceKmBetweenSats = this.simLinkBudget.calculateKm(mbpsBetweenSats / 1000);
+      const distanceAuBetweenSats = distanceKmBetweenSats / this.km_per_au;
+      const circumferenceAu = 2 * Math.PI * distAverageAu;
+      const actualCircumferenceAu = (circumferenceAu * sideExtensionDeg * 2) / 360;
+      satCount = Math.ceil(actualCircumferenceAu / distanceAuBetweenSats);
+    }
 
     // Push the satellite configuration for this ring
     satellitesConfig.push({

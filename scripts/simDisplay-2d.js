@@ -291,6 +291,11 @@ export class SimDisplay {
     this.satellites = satellites;
   }
 
+  setLinksColors(type) {
+    // Set the links material based on the type
+    this.linksColorsType = type;
+  }
+
   /**
    * Updates the positions of planets and satellites (in 2D memory).
    * @param {Object} planets - An object mapping planet names to objects like { name, position }.
@@ -447,9 +452,13 @@ export class SimDisplay {
     const allLinks = [...this.activeLinks, ...inactiveLinks];
 
     // Compute min/max flows for color interpolation
-    const flows = this.activeLinks.map((link) => link.gbpsFlowActual);
+    let flows = [];
+    if (this.linksColorsType === "actual") flows = this.activeLinks.map((link) => link.gbpsFlowActual);
+    else if (this.linksColorsType === "capacity") flows = allLinks.map((link) => link.gbpsCapacity);
     const maxFlow = flows.length > 0 ? Math.max(...flows) : 1;
     const minFlow = flows.length > 0 ? Math.min(...flows) : 0;
+
+    console.log("Max flow:", maxFlow, "Min flow:", minFlow);
 
     const interpolateColor = (t) => {
       const colMin = {
@@ -485,17 +494,21 @@ export class SimDisplay {
 
       // Stroke color
       let strokeColor = "#777777"; // inactive
-      if (isActive) {
+
+      // Set colors
+      if ((this.linksColorsType === "actual" && isActive) || this.linksColorsType === "capacity") {
+        // Active link: interpolate color based on flow
         let t = 0;
+        let valFlow = this.linksColorsType === "actual" ? link.gbpsFlowActual : link.gbpsCapacity;
         if (maxFlow > minFlow) {
-          t = (link.gbpsFlowActual - minFlow) / (maxFlow - minFlow);
+          t = (valFlow - minFlow) / (maxFlow - minFlow);
         }
         strokeColor = interpolateColor(isNaN(t) ? 0 : t);
       }
 
       this.ctx.save();
       this.ctx.strokeStyle = strokeColor;
-      this.ctx.lineWidth = isActive ? 2 : 1;
+      this.ctx.lineWidth = (this.linksColorsType === "actual" && isActive) || this.linksColorsType === "capacity" ? 2 : 1;
       this.ctx.beginPath();
       this.ctx.moveTo(fromX, fromY);
       this.ctx.lineTo(toX, toY);

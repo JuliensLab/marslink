@@ -9,6 +9,13 @@ export const slidersData = {
       value: "3d", // Default to 3D
       unit: "",
     },
+    "links-colors": {
+      type: "radio",
+      label: "Display Flow",
+      options: ["actual", "capacity", "none"],
+      value: "actual", // Default to 3D
+      unit: "",
+    },
     "time-acceleration-slider": {
       label: "Time Acceleration",
       min: -Math.pow(2, 25),
@@ -161,6 +168,13 @@ export const slidersData = {
     },
   },
   ring_earth: {
+    "match-circular-rings": {
+      type: "radio",
+      label: "Match Circular Rings",
+      options: ["yes", "no"],
+      value: "yes",
+      unit: "",
+    },
     "side-extension-degrees-slider": {
       label: "Side extension",
       min: 0,
@@ -242,6 +256,16 @@ export const slidersData = {
       value: 1.0,
       step: 0.01,
       unit: " AU",
+      scale: "linear",
+      updateLongTermScore: true,
+    },
+    "inring-intraring-bias-pct": {
+      label: "Inring vs Intra-ring Bias",
+      min: 0,
+      max: 100,
+      value: 50,
+      step: 1,
+      unit: " %",
       scale: "linear",
       updateLongTermScore: true,
     },

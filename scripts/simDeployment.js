@@ -382,6 +382,10 @@ export class SimDeployment {
   getMissionProfile(targetOrbitElementsArray) {
     const results_by_orbit = [];
     for (const targetOrbitElements of targetOrbitElementsArray) {
+      if (targetOrbitElements == null) {
+        console.log("targetOrbitElements is null, skipping");
+        continue;
+      }
       let counter = 0;
       let maxSatCountPerDeploymentFlight_fromLoop = Infinity;
       let missionProfile;

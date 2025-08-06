@@ -51,8 +51,15 @@ export class SimDisplay {
     // === Styles ===
     this.styles = {
       links: {
-        inactive: { color: 0xbbbbbb, opacity: 0.1 },
-        active: { colormax: 0xff3300, colormin: 0x0033ff, opacity: 0.8, gbpsmax: 1, gbpsmin: 0.1 },
+        inactive: { color: 0xbbbbbb, opacity: 0.05 },
+        active: {
+          color_0: 0x0033ff,
+          color_fixed: 0xff3300,
+          color_max: 0xff9900,
+          opacity: 0.8,
+          gbpsmax: 1,
+          gbpsmin: 0.1,
+        },
       },
     };
 
@@ -223,6 +230,11 @@ export class SimDisplay {
     }
   }
 
+  setLinksColors(type) {
+    // Set the links material based on the type
+    this.linksColorsType = type;
+  }
+
   /**
    * Sets up satellites using instanced meshes for efficiency.
    * Cleans up any previous instanced objects if needed.
@@ -383,13 +395,16 @@ export class SimDisplay {
     const colors = new Float32Array(numLinks * 2 * 3);
 
     // Calculate min and max flow for color mapping (for active links only)
-    const flows = this.activeLinks.map((link) => link.gbpsFlowActual);
+    let flows = [];
+    if (this.linksColorsType === "actual") flows = this.activeLinks.map((link) => link.gbpsFlowActual);
+    else if (this.linksColorsType === "capacity") flows = allLinks.map((link) => link.gbpsCapacity);
+
     const maxFlow = Math.max(...flows);
     const minFlow = Math.min(...flows);
 
     // const maxFlow = this.styles.links.active.gbpsmax;
     // const minFlow = this.styles.links.active.gbpsmin;
-    // console.log(maxFlow, minFlow);
+    // console.log(this.linksColorsType, maxFlow, minFlow);
 
     for (let i = 0; i < numLinks; i++) {
       const link = allLinks[i];
@@ -414,19 +429,36 @@ export class SimDisplay {
       positions[i * 6 + 5] = toPosition.z;
 
       // Set colors
-      let color = new THREE.Color();
-      if (isActive) {
+      let color = new THREE.Color(this.styles.links.inactive.color);
+      if ((this.linksColorsType === "actual" && isActive) || this.linksColorsType === "capacity") {
         // Active link: interpolate color based on flow
         let t = 0;
+        let valFlow = this.linksColorsType === "actual" ? link.gbpsFlowActual : link.gbpsCapacity;
         if (maxFlow > minFlow) {
-          t = (link.gbpsFlowActual - minFlow) / (maxFlow - minFlow);
+          t = (valFlow - minFlow) / (maxFlow - minFlow);
         }
         t = isNaN(t) ? 0 : t;
 
-        color.lerpColors(new THREE.Color(this.styles.links.active.colormin), new THREE.Color(this.styles.links.active.colormax), t);
-      } else {
-        // Inactive link: use inactive color
-        color = new THREE.Color(this.styles.links.inactive.color);
+        // Map t (0-1) to the range of values (0 to max)
+        let value = t * (maxFlow - minFlow) + minFlow;
+
+        // Define color stops and their corresponding values
+        const colorStops = [
+          { value: 0, color: new THREE.Color(this.styles.links.active.color_0) },
+          { value: 0.02, color: new THREE.Color(this.styles.links.active.color_fixed) },
+          { value: maxFlow, color: new THREE.Color(this.styles.links.active.color_max) },
+        ];
+
+        // Find the appropriate color segment
+        for (let i = 0; i < colorStops.length - 1; i++) {
+          if (value >= colorStops[i].value && value <= colorStops[i + 1].value) {
+            // Calculate interpolation factor within this segment
+            let segmentT = (value - colorStops[i].value) / (colorStops[i + 1].value - colorStops[i].value);
+            segmentT = isNaN(segmentT) ? 0 : segmentT;
+            color.lerpColors(colorStops[i].color, colorStops[i + 1].color, segmentT);
+            break;
+          }
+        }
       }
 
       // Set color for both vertices

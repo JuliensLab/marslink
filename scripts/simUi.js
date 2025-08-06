@@ -32,6 +32,8 @@ export class SimUi {
       ])
     );
     // Set the initial display type
+    const linksColors = this.slidersData.simulation["links-colors"].value;
+    this.simMain.setLinksColors(linksColors);
     const displayType = this.slidersData.simulation["display-type"].value;
     this.simMain.setDisplayType(displayType);
 
@@ -505,6 +507,9 @@ export class SimUi {
         case "simulation.display-type":
           this.simMain.setDisplayType(newValue);
           break;
+        case "simulation.links-colors":
+          this.simMain.setLinksColors(newValue);
+          break;
         case "simulation.time-acceleration-slider":
           this.simMain.setTimeAccelerationFactor(newValue);
           break;
@@ -525,6 +530,7 @@ export class SimUi {
         case "circular_rings.requiredmbpsbetweensats":
         case "circular_rings.distance-sun-slider-outer-au":
         case "circular_rings.distance-sun-slider-inner-au":
+        case "circular_rings.inring-intraring-bias-pct":
         case "circular_rings.earth-mars-orbit-inclination-pct":
         case "eccentric_rings.ringcount":
         case "eccentric_rings.requiredmbpsbetweensats":
@@ -532,6 +538,7 @@ export class SimUi {
         case "eccentric_rings.eccentricity":
         case "eccentric_rings.argument-of-perihelion":
         case "eccentric_rings.earth-mars-orbit-inclination-pct":
+        case "ring_earth.match-circular-rings":
         case "ring_earth.side-extension-degrees-slider":
         case "ring_earth.requiredmbpsbetweensats":
           this.simMain.setSatellitesConfig(
@@ -565,14 +572,25 @@ export class SimUi {
     for (const categoryKey of categoryKeys) {
       const group = this.slidersData[categoryKey];
       for (const [sliderKey, sliderData] of Object.entries(group)) {
-        config[`${categoryKey}.${sliderKey}`] = this.sliders[categoryKey][sliderKey]
-          ? parseFloat(this.sliders[categoryKey][sliderKey].value)
-          : sliderData.value;
+        // Safely access the value, defaulting to sliderData.value if undefined
+        const value =
+          this.sliders?.[categoryKey]?.[sliderKey]?.value !== undefined ? this.sliders[categoryKey][sliderKey].value : sliderData.value;
+
+        // Check the type from slidersData to determine how to handle the value
+        if (sliderData.type === "radio" || typeof sliderData.value === "string") {
+          // Keep strings as strings
+          config[`${categoryKey}.${sliderKey}`] = value;
+        } else if (typeof sliderData.value === "boolean") {
+          // Keep booleans as booleans
+          config[`${categoryKey}.${sliderKey}`] = value;
+        } else {
+          // Parse numbers as float
+          config[`${categoryKey}.${sliderKey}`] = parseFloat(value);
+        }
       }
     }
     return config;
   }
-
   updateSimTime(simTime) {
     const utcTime = this.formatSimTimeToUTC(simTime);
     document.getElementById("simTime").innerHTML = utcTime;
