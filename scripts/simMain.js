@@ -164,7 +164,7 @@ export class SimMain {
 
     // Fetch values from slidersData (already updated)
     const mbpsBetweenSats = uiConfig[ringName + ".requiredmbpsbetweensats"];
-    const sideExtensionDeg = uiConfig[ringName + ".side-extension-degrees-slider"];
+    let sideExtensionDeg = uiConfig[ringName + ".side-extension-degrees-slider"];
     if (mbpsBetweenSats == 0 || sideExtensionDeg == 0) return satellitesConfig;
 
     // Determine ring type
@@ -191,7 +191,7 @@ export class SimMain {
         Math.min(distInnerAu, distOuterAu) + distanceAuBetweenRings * ringId * ((100 - inringIntraringBiasPct) / 100);
 
       satCount = Math.ceil(Math.PI / Math.asin(distanceAuBetweenSats / (2 * satDistanceSunAuBias)));
-      satCount;
+      sideExtensionDeg = 180;
     } else {
       const { a, n } = this.simSatellites.getParams_a_n(ringType);
       const distAverageAu = a;
@@ -536,7 +536,7 @@ export class SimMain {
       this.previousLinkUpdateSimDate = simDate;
 
       let perf = performance.now();
-      const possibleLinks = this.simNetwork.getPossibleLinks(planets, satellites, this.simLinkBudget);
+      const possibleLinks = this.simNetwork.getPossibleLinks(planets, satellites);
       console.log(`Possible links: ${Math.round(performance.now() - perf)} ms`);
 
       this.removeLinks();
@@ -630,7 +630,7 @@ export class SimMain {
           const satellites = this.simSatellites.updateSatellitesPositions(simDate);
 
           // Get possible links based on current positions
-          const possibleLinks = this.simNetwork.getPossibleLinks(planets, satellites, this.simLinkBudget);
+          const possibleLinks = this.simNetwork.getPossibleLinks(planets, satellites);
 
           // Retrieve network data
           networkData = this.simNetwork.getNetworkData(planets, satellites, possibleLinks, calctimeMs);

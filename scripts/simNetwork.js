@@ -47,8 +47,7 @@ export class SimNetwork {
     return Math.sqrt(Math.pow(position.x, 2) + Math.pow(position.y, 2) + Math.pow(position.z, 2));
   };
 
-  getPossibleLinks(planets, satellites, simLinkBudget) {
-    const maxLinksPerSatellite = simLinkBudget.getMaxLinksPerSatellite();
+  getPossibleLinks(planets, satellites) {
     // Group satellites by ringName
     const rings = {}; // { ringName: [satellite1, satellite2, ...] }
 
