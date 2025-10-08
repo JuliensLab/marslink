@@ -1,5 +1,5 @@
 // simUi.js
-import { slidersData } from "./slidersData.js?v=4.0";
+import { slidersData } from "./slidersData.js?v=4.1";
 
 export class SimUi {
   constructor(simMain) {
@@ -264,11 +264,11 @@ export class SimUi {
             }
           }
 
-          console.log("Full Run Simulation Result:", resultArray);
           const data = { config: baseConfig, results: resultArray };
 
           // Store data in localStorage for the results page
           localStorage.setItem("marslinkFullRunResults", JSON.stringify(data));
+          console.log("Full Run Simulation Result:", data);
 
           // Open the results webpage
           window.open("results/fullrun/index.html");

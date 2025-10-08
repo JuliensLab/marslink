@@ -1,17 +1,17 @@
 // simMain.js
 
-import { SimUi } from "./simUi.js?v=4.0";
-import { SimTime } from "./simTime.js?v=4.0";
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.0";
-import { SimSatellites } from "./simSatellites.js?v=4.0";
-import { SimDeployment } from "./simDeployment.js?v=4.0";
-import { SimMissionValidator } from "./simMissionValidator.js?v=4.0";
-import { SimLinkBudget } from "./simLinkBudget.js?v=4.0";
-import { SimNetwork } from "./simNetwork.js?v=4.0";
+import { SimUi } from "./simUi.js?v=4.1";
+import { SimTime } from "./simTime.js?v=4.1";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.1";
+import { SimSatellites } from "./simSatellites.js?v=4.1";
+import { SimDeployment } from "./simDeployment.js?v=4.1";
+import { SimMissionValidator } from "./simMissionValidator.js?v=4.1";
+import { SimLinkBudget } from "./simLinkBudget.js?v=4.1";
+import { SimNetwork } from "./simNetwork.js?v=4.1";
 // Import both SimDisplay implementations with unique names
-import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=4.0";
-import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=4.0";
-import { generateReport } from "./reportGenerator.js?v=4.0";
+import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=4.1";
+import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=4.1";
+import { generateReport } from "./reportGenerator.js?v=4.1";
 
 export class SimMain {
   constructor() {

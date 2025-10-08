@@ -1,6 +1,6 @@
 // reportGenerator.js
 
-import { printTree } from "./simMissionValidator.js?v=4.0";
+import { printTree } from "./simMissionValidator.js?v=4.1";
 
 // Helper function to get vehicle icon
 function getIcon(vehicle) {

@@ -1,6 +1,6 @@
 // simSatellites.js
 
-import { helioCoords } from "./simOrbits.js?v=4.0";
+import { helioCoords } from "./simOrbits.js?v=4.1";
 
 export class SimSatellites {
   constructor(simLinkBudget) {
@@ -89,119 +89,60 @@ export class SimSatellites {
       const satCountOneSide = Math.ceil(satCount / 2);
       const longIncrement = sideExtensionDeg / satCountOneSide;
 
-      // change to take the worst distance (orbit point with longest distance from sun) instead of average. This needs to calculate the straight line distance, not the circular distance.
-      const satCountIfFullRing = Math.round(360 / longIncrement);
-      const inringAvgDistKm = gradientOneSideStartMbps ? (2 * Math.PI * this.convertAUtoKM(a)) / satCountIfFullRing : null;
-      const inringAvgMbps = gradientOneSideStartMbps ? this.calculateGbps(inringAvgDistKm) * 1000 : null;
-      // if (gradientOneSideStartMbps) console.log("inringAvgDistKm", inringAvgDistKm, "inringAvgMbps", inringAvgMbps);
-      let perInterringLinkMbps = gradientOneSideStartMbps ? gradientOneSideStartMbps / (satCountIfFullRing / 2) : null;
-      let requiredThroughputMbps = gradientOneSideStartMbps;
+      if (gradientOneSideStartMbps) {
+        // change to take the worst distance (orbit point with longest distance from sun) instead of average. This needs to calculate the straight line distance, not the circular distance.
+        const satCountIfFullRing = Math.round(360 / longIncrement);
+        const orbitCircumferenceKm = 2 * Math.PI * this.convertAUtoKM(a);
+        const inringAvgDistKm = gradientOneSideStartMbps ? orbitCircumferenceKm / satCountIfFullRing : null;
+        const inringAvgMbps = gradientOneSideStartMbps ? this.calculateGbps(inringAvgDistKm) * 1000 : null;
+        // if (gradientOneSideStartMbps) console.log("inringAvgDistKm", inringAvgDistKm, "inringAvgMbps", inringAvgMbps);
+        let perInterringLinkMbps = gradientOneSideStartMbps ? gradientOneSideStartMbps / (satCountIfFullRing / 2) : null;
+        let requiredThroughputMbps = gradientOneSideStartMbps;
 
-      // console.log(
-      //   ringType,
-      //   "satCountOneSide",
-      //   satCountOneSide,
-      //   "satCountIfFullRing",
-      //   satCountIfFullRing,
-      //   "sideExtensionDeg",
-      //   sideExtensionDeg,
-      //   "longIncrement",
-      //   longIncrement,
-      //   "inringAvgDistKm",
-      //   inringAvgDistKm,
-      //   "inringAvgMbps",
-      //   inringAvgMbps,
-      //   "requiredThroughputMbps",
-      //   requiredThroughputMbps
-      // );
-
-      let satId = 0;
-      for (let i = 0; i < satCountOneSide; i++) {
-        // positive side
-
-        if (gradientOneSideStartMbps && inringAvgMbps < requiredThroughputMbps) {
-          // insert sats
-          // how many sats are needed to add for gradient
-          const minimumDistKm = this.calculateKm(requiredThroughputMbps / 1000);
-          const segmentCount = Math.ceil(inringAvgDistKm / minimumDistKm);
-          const satInsertCount = segmentCount - 1;
-          const newDistanceKm = inringAvgDistKm / satInsertCount;
-          const obtainedMbps = this.calculateGbps(newDistanceKm) * 1000;
-
-          for (let j = 0; j < satInsertCount; j++) {
-            const long = i * longIncrement + ((j + 1) * longIncrement) / segmentCount;
-            const name = `${ringName}-${satId}`;
-            const neighbors = [];
-            if (satId == 0) neighbors.push(`${ringType}`);
-            if (satId > 0) neighbors.push(`${ringName}-${satId - 1}`);
-            if (i < satCountOneSide - 1) neighbors.push(`${ringName}-${satId + 1}`);
-
-            satellites.push(
-              this.generateSatellite(
-                ringName,
-                ringType,
-                a,
-                n,
-                eccentricity,
-                argPeri,
-                earthMarsInclinationPct,
-                long,
-                orbitdays,
-                name,
-                neighbors
-              )
-            );
-
-            if (!(sideExtensionDeg == 180 && i == satCountOneSide - 1)) {
-              // negative side with same longitude
-              const name = `${ringName}--${satId}`;
-              const neighbors = [];
-              if (satId == 0) neighbors.push(`${ringType}`);
-              if (satId > 0) neighbors.push(`${ringName}--${satId - 1}`);
-              if (i < satCountOneSide - 1) neighbors.push(`${ringName}--${satId + 1}`);
-              if (sideExtensionDeg == 180 && i == satCountOneSide - 2) neighbors.push(`${ringName}-${satId + 1}`);
-              satellites.push(
-                this.generateSatellite(
-                  ringName,
-                  ringType,
-                  a,
-                  n,
-                  eccentricity,
-                  argPeri,
-                  earthMarsInclinationPct,
-                  -long,
-                  orbitdays,
-                  name,
-                  neighbors
-                )
-              );
-            }
-
-            satId++;
-          }
-
-          // decrease required throughput by the amount of one interring link.
-          requiredThroughputMbps -= perInterringLinkMbps;
-        }
-
-        const long = (i + 1) * longIncrement;
-        const name = `${ringName}-${satId}`;
-        const neighbors = [];
-        if (satId == 0) neighbors.push(`${ringType}`);
-        if (satId > 0) neighbors.push(`${ringName}-${satId - 1}`);
-        if (i < satCountOneSide - 1) neighbors.push(`${ringName}-${satId + 1}`);
-        satellites.push(
-          this.generateSatellite(ringName, ringType, a, n, eccentricity, argPeri, earthMarsInclinationPct, long, orbitdays, name, neighbors)
+        console.log(
+          ringType,
+          "satCountOneSide",
+          satCountOneSide,
+          "satCountIfFullRing",
+          satCountIfFullRing,
+          "orbitCircumferenceKm",
+          orbitCircumferenceKm,
+          "sideExtensionDeg",
+          sideExtensionDeg,
+          "longIncrement",
+          longIncrement,
+          "gradientOneSideStartMbps",
+          gradientOneSideStartMbps,
+          "inringAvgDistKm",
+          inringAvgDistKm,
+          "inringAvgMbps",
+          inringAvgMbps,
+          "requiredThroughputMbps",
+          requiredThroughputMbps
         );
 
-        if (!(sideExtensionDeg == 180 && i == satCountOneSide - 1)) {
-          // negative side with same longitude
-          const name = `${ringName}--${satId}`;
-          const neighbors = [];
-          if (satId == 0) neighbors.push(`${ringType}`);
-          if (satId > 0) neighbors.push(`${ringName}--${satId - 1}`);
-          if (i < satCountOneSide - 1) neighbors.push(`${ringName}--${satId + 1}`);
-          if (sideExtensionDeg == 180 && i == satCountOneSide - 2) neighbors.push(`${ringName}-${satId + 1}`);
+        let satId = 0;
+        let longiDeg = 0;
+        while (longiDeg < sideExtensionDeg - longIncrement) {
+          console.log("longiDeg", longiDeg, "sideExtensionDeg", sideExtensionDeg);
+          // calculate next distance
+          const nextDistKm = this.calculateKm(requiredThroughputMbps / 1000);
+          // convert to degrees
+          const longIncrementGradient = (360 * nextDistKm) / orbitCircumferenceKm;
+          const selectedIncrement = Math.min(longIncrementGradient, longIncrement);
+          longiDeg += selectedIncrement;
+
+          console.log(
+            "nextDistKm",
+            nextDistKm,
+            "longIncrementGradient",
+            longIncrementGradient,
+            "selectedIncrement",
+            selectedIncrement,
+            "longiDeg",
+            longiDeg
+          );
+
           satellites.push(
             this.generateSatellite(
               ringName,
@@ -211,16 +152,183 @@ export class SimSatellites {
               eccentricity,
               argPeri,
               earthMarsInclinationPct,
-              -long,
+              longiDeg,
+              orbitdays,
+              `${ringName}-${satId}`,
+              [satId == 0 ? `${ringType}` : `${ringName}-${satId - 1}`, `${ringName}-${satId + 1}`]
+            )
+          );
+          satellites.push(
+            this.generateSatellite(
+              ringName,
+              ringType,
+              a,
+              n,
+              eccentricity,
+              argPeri,
+              earthMarsInclinationPct,
+              -longiDeg,
+              orbitdays,
+              `${ringName}--${satId}`,
+              [satId == 0 ? `${ringType}` : `${ringName}--${satId - 1}`, `${ringName}--${satId + 1}`]
+            )
+          );
+
+          // decrease required throughput by the amount of one interring link.
+          requiredThroughputMbps -= perInterringLinkMbps;
+          satId++;
+          if (longIncrementGradient > longIncrement) break;
+        }
+
+        while (longiDeg < sideExtensionDeg - longIncrement) {
+          console.log("longiDeg", longiDeg, "sideExtensionDeg", sideExtensionDeg);
+          const selectedIncrement = longIncrement;
+          longiDeg += selectedIncrement;
+
+          console.log("selectedIncrement", selectedIncrement, "longiDeg", longiDeg);
+
+          satellites.push(
+            this.generateSatellite(
+              ringName,
+              ringType,
+              a,
+              n,
+              eccentricity,
+              argPeri,
+              earthMarsInclinationPct,
+              longiDeg,
+              orbitdays,
+              `${ringName}-${satId}`,
+              [`${ringName}-${satId - 1}`, `${ringName}-${satId + 1}`]
+            )
+          );
+          satellites.push(
+            this.generateSatellite(
+              ringName,
+              ringType,
+              a,
+              n,
+              eccentricity,
+              argPeri,
+              earthMarsInclinationPct,
+              -longiDeg,
+              orbitdays,
+              `${ringName}--${satId}`,
+              [`${ringName}--${satId - 1}`, `${ringName}--${satId + 1}`]
+            )
+          );
+
+          // decrease required throughput by the amount of one interring link.
+          requiredThroughputMbps -= perInterringLinkMbps;
+          satId++;
+        }
+
+        longiDeg += longIncrement;
+
+        // final sat of the chain
+        if (sideExtensionDeg == 180) {
+          const long = 180;
+
+          satellites.push(
+            this.generateSatellite(
+              ringName,
+              ringType,
+              a,
+              n,
+              eccentricity,
+              argPeri,
+              earthMarsInclinationPct,
+              long,
+              orbitdays,
+              `${ringName}-${satId}`,
+              [`${ringName}-${satId - 1}`, `${ringName}--${satId - 1}`]
+            )
+          );
+        } else {
+          satellites.push(
+            this.generateSatellite(
+              ringName,
+              ringType,
+              a,
+              n,
+              eccentricity,
+              argPeri,
+              earthMarsInclinationPct,
+              longiDeg,
+              orbitdays,
+              `${ringName}-${satId}`,
+              [`${ringName}-${satId - 1}`]
+            )
+          );
+          satellites.push(
+            this.generateSatellite(
+              ringName,
+              ringType,
+              a,
+              n,
+              eccentricity,
+              argPeri,
+              earthMarsInclinationPct,
+              -longiDeg,
+              orbitdays,
+              `${ringName}--${satId}`,
+              [`${ringName}--${satId - 1}`]
+            )
+          );
+        }
+      } else {
+        let satId = 0;
+        for (let i = 0; i < satCountOneSide; i++) {
+          // positive side
+          const long = (i + 1) * longIncrement;
+          const name = `${ringName}-${satId}`;
+          const neighbors = [];
+          if (satId == 0) neighbors.push(`${ringType}`);
+          if (satId > 0) neighbors.push(`${ringName}-${satId - 1}`);
+          if (i < satCountOneSide - 1) neighbors.push(`${ringName}-${satId + 1}`);
+          satellites.push(
+            this.generateSatellite(
+              ringName,
+              ringType,
+              a,
+              n,
+              eccentricity,
+              argPeri,
+              earthMarsInclinationPct,
+              long,
               orbitdays,
               name,
               neighbors
             )
           );
+          if (!(sideExtensionDeg == 180 && i == satCountOneSide - 1)) {
+            // negative side with same longitude
+            const name = `${ringName}--${satId}`;
+            const neighbors = [];
+            if (satId == 0) neighbors.push(`${ringType}`);
+            if (satId > 0) neighbors.push(`${ringName}--${satId - 1}`);
+            if (i < satCountOneSide - 1) neighbors.push(`${ringName}--${satId + 1}`);
+            if (sideExtensionDeg == 180 && i == satCountOneSide - 2) neighbors.push(`${ringName}-${satId + 1}`);
+            satellites.push(
+              this.generateSatellite(
+                ringName,
+                ringType,
+                a,
+                n,
+                eccentricity,
+                argPeri,
+                earthMarsInclinationPct,
+                -long,
+                orbitdays,
+                name,
+                neighbors
+              )
+            );
+          }
+          satId++;
         }
-
-        satId++;
       }
+      console.log(ringType, satellites);
     }
     return satellites;
   }
