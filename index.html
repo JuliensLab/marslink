@@ -33,11 +33,11 @@
         <div id="generateReportDiv"></div>
 
         <!-- Start Long-Term Run Button -->
-        <button id="startLongTermRun" class="large-button">Start Long-Term Run</button>
-        <br>
+        <!-- <button id="startLongTermRun" class="large-button">Start Long-Term Run</button>
+        <br> -->
 
         <!-- Start Scenarios Run Button -->
-        <button id="startLongTermScenariosRun" class="large-button">Start Scenarios Run</button>
+        <!-- <button id="startLongTermScenariosRun" class="large-button">Start Scenarios Run</button> -->
 
         <!-- Container to Display Simulation Results -->
         <div id="long-term-results" style="margin-top: 20px;">
@@ -75,15 +75,23 @@
     </div>
 
     <!-- Import map for three.js r170 -->
-    <script type="importmap">
+    <!-- <script type="importmap">
         {
           "imports": {
-            "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js?v=3.0",
+            "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
             "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
           }
         }
+    </script>    -->
+    <script type="importmap">
+        {
+          "imports": {
+            "three": "./scripts/imported/three/three.module.js",
+            "three/addons/": "./scripts/imported/three/addons/"
+          }
+        }
     </script>
-    <script type="module" src="scripts/simMain.js?v=3.0"></script>
+    <script type="module" src="scripts/simMain.js?v=4.0"></script>
 </body>
 
 </html>

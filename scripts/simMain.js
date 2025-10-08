@@ -1,17 +1,17 @@
 // simMain.js
 
-import { SimUi } from "./simUi.js?v=2.4";
-import { SimTime } from "./simTime.js?v=2.4";
-import { SimSolarSystem } from "./simSolarSystem.js?v=2.4";
-import { SimSatellites } from "./simSatellites.js?v=2.4";
-import { SimDeployment } from "./simDeployment.js?v=2.4";
-import { SimMissionValidator } from "./simMissionValidator.js?v=2.4";
-import { SimLinkBudget } from "./simLinkBudget.js?v=2.4";
-import { SimNetwork } from "./simNetwork.js?v=2.4";
+import { SimUi } from "./simUi.js?v=4.0";
+import { SimTime } from "./simTime.js?v=4.0";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.0";
+import { SimSatellites } from "./simSatellites.js?v=4.0";
+import { SimDeployment } from "./simDeployment.js?v=4.0";
+import { SimMissionValidator } from "./simMissionValidator.js?v=4.0";
+import { SimLinkBudget } from "./simLinkBudget.js?v=4.0";
+import { SimNetwork } from "./simNetwork.js?v=4.0";
 // Import both SimDisplay implementations with unique names
-import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=2.4";
-import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=2.4";
-import { generateReport } from "./reportGenerator.js?v=2.4";
+import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=4.0";
+import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=4.0";
+import { generateReport } from "./reportGenerator.js?v=4.0";
 
 export class SimMain {
   constructor() {
@@ -23,9 +23,9 @@ export class SimMain {
     // Initialize simulation components
     this.simTime = new SimTime();
     this.simSolarSystem = new SimSolarSystem();
-    this.simSatellites = new SimSatellites();
-    this.simDeployment = new SimDeployment(this.simSolarSystem.getSolarSystemData().planets);
     this.simLinkBudget = new SimLinkBudget();
+    this.simDeployment = new SimDeployment(this.simSolarSystem.getSolarSystemData().planets);
+    this.simSatellites = new SimSatellites(this.simLinkBudget);
     this.simNetwork = new SimNetwork(this.simLinkBudget);
     // Do not instantiate simDisplay here; it will be set by setDisplayType
     this.simDisplay = null;
@@ -35,6 +35,7 @@ export class SimMain {
 
     this.latencyChartInstance = null;
     this.missionProfiles = null; // Initialize reportData storage
+    this.capacityInfo = null;
 
     this.startSimulationLoop();
   }
@@ -87,7 +88,7 @@ export class SimMain {
     if (mbpsBetweenSats == 0) return [];
     const distOuterAu = uiConfig["circular_rings.distance-sun-slider-outer-au"];
     const distInnerAu = uiConfig["circular_rings.distance-sun-slider-inner-au"];
-    const inringIntraringBiasPct = uiConfig["circular_rings.inring-intraring-bias-pct"];
+    const inringIntraringBiasPct = uiConfig["circular_rings.inring-interring-bias-pct"];
     const earthMarsInclinationPct = uiConfig["circular_rings.earth-mars-orbit-inclination-pct"];
     const distanceKmBetweenSats = this.simLinkBudget.calculateKm(mbpsBetweenSats / 1000);
     const distanceAuBetweenSats = distanceKmBetweenSats / this.km_per_au;
@@ -165,15 +166,54 @@ export class SimMain {
     // Fetch values from slidersData (already updated)
     const mbpsBetweenSats = uiConfig[ringName + ".requiredmbpsbetweensats"];
     let sideExtensionDeg = uiConfig[ringName + ".side-extension-degrees-slider"];
-    if (mbpsBetweenSats == 0 || sideExtensionDeg == 0) return satellitesConfig;
+    let matchCircularRings = uiConfig[ringName + ".match-circular-rings"];
+    if (sideExtensionDeg == 0 || (mbpsBetweenSats == 0 && matchCircularRings == "no")) return satellitesConfig;
 
     // Determine ring type
     let ringType = ringName == "ring_mars" ? "Mars" : "Earth";
 
     let satCount = 0;
+    let gradientOneSideStartMbps = null;
+    // this code is solely to determine gradientOneSideStartMbps
+    if (matchCircularRings == "gradient") {
+      let ringCount = uiConfig["circular_rings.ringcount"];
+      if (ringCount == 0) console.error("Gradient selected but there are no circular rings to cater to");
+      ringCount += 2;
+      const mbpsBetweenSatsCircular = uiConfig["circular_rings.requiredmbpsbetweensats"];
+      if (mbpsBetweenSatsCircular == 0) return [];
+      const distOuterAu = uiConfig["circular_rings.distance-sun-slider-outer-au"];
+      const distInnerAu = uiConfig["circular_rings.distance-sun-slider-inner-au"];
+      const inringIntraringBiasPct = uiConfig["circular_rings.inring-interring-bias-pct"];
+      const distanceKmBetweenSats = this.simLinkBudget.calculateKm(mbpsBetweenSatsCircular / 1000);
+      const distanceAuBetweenSats = distanceKmBetweenSats / this.km_per_au;
+      const distanceAuBetweenRings = Math.abs(distOuterAu - distInnerAu) / (ringCount - 1);
+      gradientOneSideStartMbps = 9999999999;
+      console.log(gradientOneSideStartMbps);
+      for (let ringId = 1; ringId < ringCount - 2; ringId++) {
+        let satDistanceSunAu1 = Math.min(distInnerAu, distOuterAu) + distanceAuBetweenRings * ringId;
+        let satDistanceSunAu2 = Math.min(distInnerAu, distOuterAu) + distanceAuBetweenRings * (ringId + 1);
+
+        let satDistanceSunAuBias1 =
+          Math.min(distInnerAu, distOuterAu) + distanceAuBetweenRings * ringId * ((100 - inringIntraringBiasPct) / 100);
+        const satCount1 = Math.ceil(Math.PI / Math.asin(distanceAuBetweenSats / (2 * satDistanceSunAuBias1)));
+
+        let satDistanceSunAuBias2 =
+          Math.min(distInnerAu, distOuterAu) + distanceAuBetweenRings * (ringId + 1) * ((100 - inringIntraringBiasPct) / 100);
+        const satCount2 = Math.ceil(Math.PI / Math.asin(distanceAuBetweenSats / (2 * satDistanceSunAuBias2)));
+
+        const distanceThisRingToNextAU = Math.abs(satDistanceSunAu1 - satDistanceSunAu2);
+        const distanceThisRingToNextKm = this.simLinkBudget.convertAUtoKM(distanceThisRingToNextAU);
+        const throughputThisRingToNextMbpsOneSat = this.simLinkBudget.calculateGbps(distanceThisRingToNextKm) * 1000;
+        const throughputThisRingToNextMbpsAllSats = throughputThisRingToNextMbpsOneSat * Math.min(satCount1, satCount2);
+        const throughputOneSideOfPlanet = throughputThisRingToNextMbpsAllSats / 2;
+        console.log(throughputOneSideOfPlanet, gradientOneSideStartMbps);
+        if (throughputOneSideOfPlanet < gradientOneSideStartMbps) gradientOneSideStartMbps = Math.ceil(throughputOneSideOfPlanet);
+        console.log("chose mbps", gradientOneSideStartMbps);
+      }
+    }
     if (
-      ringName == "ring_earth" &&
-      uiConfig["ring_earth.match-circular-rings"] == "yes" &&
+      // ringName == "ring_earth" &&
+      matchCircularRings != "no" &&
       uiConfig["circular_rings.requiredmbpsbetweensats"] > 0 &&
       uiConfig["circular_rings.ringcount"] > 0
     ) {
@@ -182,7 +222,7 @@ export class SimMain {
       const mbpsBetweenSats = uiConfig["circular_rings.requiredmbpsbetweensats"];
       const distOuterAu = uiConfig["circular_rings.distance-sun-slider-outer-au"];
       const distInnerAu = uiConfig["circular_rings.distance-sun-slider-inner-au"];
-      const inringIntraringBiasPct = uiConfig["circular_rings.inring-intraring-bias-pct"];
+      const inringIntraringBiasPct = uiConfig["circular_rings.inring-interring-bias-pct"];
       const distanceKmBetweenSats = this.simLinkBudget.calculateKm(mbpsBetweenSats / 1000);
       const distanceAuBetweenSats = distanceKmBetweenSats / this.km_per_au;
       const distanceAuBetweenRings = Math.abs(distOuterAu - distInnerAu) / (ringCount - 1);
@@ -190,8 +230,8 @@ export class SimMain {
       let satDistanceSunAuBias =
         Math.min(distInnerAu, distOuterAu) + distanceAuBetweenRings * ringId * ((100 - inringIntraringBiasPct) / 100);
 
-      satCount = Math.ceil(Math.PI / Math.asin(distanceAuBetweenSats / (2 * satDistanceSunAuBias)));
-      sideExtensionDeg = 180;
+      satCount = Math.ceil(((Math.PI / Math.asin(distanceAuBetweenSats / (2 * satDistanceSunAuBias))) * sideExtensionDeg) / 180);
+      // sideExtensionDeg = 180;
     } else {
       const { a, n } = this.simSatellites.getParams_a_n(ringType);
       const distAverageAu = a;
@@ -213,6 +253,7 @@ export class SimMain {
       raan: 0,
       argPeri: 0,
       earthMarsInclinationPct: 0,
+      gradientOneSideStartMbps,
     });
 
     return satellitesConfig;
@@ -223,6 +264,12 @@ export class SimMain {
     const satellitesConfig = [];
 
     this.simLinkBudget.setTechnologyConfig(uiConfig);
+    this.simDeployment.setSatelliteMassConfig(
+      uiConfig["capability.satellite-empty-mass"],
+      uiConfig["capability.laser-terminal-mass"],
+      uiConfig["capability.laser-ports-per-satellite"]
+    );
+
     satellitesConfig.push(...this.setCircularRingsConfig(uiConfig));
     satellitesConfig.push(...this.setEccentricRingsConfig(uiConfig));
     if (uiConfig["ring_mars.side-extension-degrees-slider"]) satellitesConfig.push(...this.generateSatellitesConfig(uiConfig, "ring_mars"));
@@ -322,7 +369,7 @@ export class SimMain {
   setCosts(costConfig) {
     this.costPerLaunch = costConfig["costs.launch-cost-slider"];
     this.costPerSatellite = costConfig["costs.satellite-cost-slider"];
-    this.satsPerLaunch = costConfig["costs.sats-per-launch-slider"];
+    this.costPerLaserTerminal = costConfig["costs.laser-terminal-cost-slider"];
     if (this.ui) this.ui.updateInfoAreaCosts(this.getCostsHtml(this.calculateCosts(this.maxFlowGbps, this.resultTrees)));
   }
 
@@ -409,9 +456,18 @@ export class SimMain {
       // Calculate costs (all in dollars)
       const launchCost = liftoffCount * this.costPerLaunch * 1000000;
       const satellitesCost = satellitesCount * this.costPerSatellite * 1000000;
-      console.log(liftoffCount, this.costPerLaunch, satellitesCount, this.costPerSatellite);
-      const totalCosts = launchCost + propellantCost + satellitesCost;
-      console.log(totalCosts, launchCost, propellantCost, satellitesCost);
+      const laserPortsPerSatellite = this.simLinkBudget.maxLinksPerSatellite;
+      const laserTerminalsCost = satellitesCount * laserPortsPerSatellite * this.costPerLaserTerminal * 1000000;
+      console.log(
+        liftoffCount,
+        this.costPerLaunch,
+        satellitesCount,
+        this.costPerSatellite,
+        laserPortsPerSatellite,
+        this.costPerLaserTerminal
+      );
+      const totalCosts = launchCost + propellantCost + satellitesCost + laserTerminalsCost;
+      console.log(totalCosts, launchCost, propellantCost, satellitesCost, laserTerminalsCost);
 
       // Calculate cost per Mbps if maxFlowGbps is provided
       let costPerMbps = Infinity;
@@ -425,6 +481,7 @@ export class SimMain {
         launchCost,
         propellantCost,
         satellitesCost,
+        laserTerminalsCost,
         totalCosts,
         costPerMbps,
         propellantCostBreakdown,
@@ -432,8 +489,124 @@ export class SimMain {
     }
   }
 
-  getCostsHtml(costs) {
+  getCostsHtml(costs, networkData) {
     let html = "";
+    // Always show satellite count
+    html += `${this.satellitesCount} satellites`;
+    // Show capacity if available
+    if (this.capacityInfo) {
+      const { ringCapacities, interCap } = this.capacityInfo;
+      // Circular rings
+      const circularRings = Object.keys(ringCapacities)
+        .filter((r) => r.startsWith("ring_circ_"))
+        .sort((a, b) => {
+          const numA = parseInt(a.split("_")[2]);
+          const numB = parseInt(b.split("_")[2]);
+          return numA - numB;
+        });
+      html += `<div style="margin-top: 10px;">`;
+      html += `<div style="cursor: pointer; display: flex; align-items: center;">`;
+      html += `<span id="capacity-arrow">▼</span> <span>Capacity Details</span>`;
+      html += `</div>`;
+      html += `<div id="capacity-content" style="display: block; margin-top: 10px;">`;
+      // Between Earth and Mars
+      const earthFlows = ringCapacities["ring_earth"] ? ringCapacities["ring_earth"].flows : 0;
+      const earthFlowsCount = ringCapacities["ring_earth"] ? ringCapacities["ring_earth"].flowsCount : 0;
+      const marsFlows = ringCapacities["ring_mars"] ? ringCapacities["ring_mars"].flows : 0;
+      const marsFlowsCount = ringCapacities["ring_mars"] ? ringCapacities["ring_mars"].flowsCount : 0;
+      // Earth planet: sum of inter-ring link capacities for Earth
+      let earthPlanetSum = 0;
+      let earthPlanetLinks = ringCapacities["ring_earth"] ? ringCapacities["ring_earth"].planetLinks : [];
+      earthPlanetLinks.forEach((link) => (earthPlanetSum += link.cap));
+      if (earthPlanetSum > 0) {
+        html += `Earth<br>`;
+        html += `<span class='detail-data'>| ${Math.round(earthPlanetSum)} mbps (${earthPlanetLinks.length} links)</span><br>`;
+      }
+      // Earth inring
+      const earthInring = ringCapacities["ring_earth"] ? ringCapacities["ring_earth"].inring : [];
+      if (earthInring.length > 0) {
+        const min = Math.min(...earthInring);
+        const max = Math.max(...earthInring);
+        const avg = earthInring.reduce((a, b) => a + b, 0) / earthInring.length;
+
+        if (Math.abs(min - avg) < 1 && Math.abs(min - max) && Math.abs(max - avg)) html += `Earth ring: ${Math.round(avg)} mbps<br>`;
+        else html += `Earth ring: ${Math.round(min)} / ${Math.round(avg)} / ${Math.round(max)} mbps<br>`;
+      }
+      if (earthFlows > 0) {
+        html += `Between Earth and Mars: ${Math.round(earthFlows)} mbps (${earthFlowsCount} links @${
+          Math.round((earthFlows / earthFlowsCount) * 10) / 10
+        } mbps)<br>`;
+      }
+      // Between Earth and Circular
+      Object.keys(interCap)
+        .filter((key) => key.includes("ring_earth") && key.includes("ring_circ_"))
+        .forEach((key) => {
+          const parts = key.split("-");
+          const circPart = parts.find((p) => p.startsWith("ring_circ_"));
+          const circNum = parseInt(circPart.split("_")[2]);
+          const between = interCap[key];
+          html += `<span class='detail-data'>| ${Math.round(between.sum)} mbps (${between.count} links @${
+            Math.round((between.sum / between.count) * 10) / 10
+          } mbps)</span><br>`;
+        });
+      // Circular rings
+      circularRings.forEach((ring, index) => {
+        const ringNum = parseInt(ring.split("_")[2]);
+        const inring = ringCapacities[ring].inring;
+        if (inring.length > 0) {
+          const min = Math.min(...inring);
+          const max = Math.max(...inring);
+          const avg = inring.reduce((a, b) => a + b, 0) / inring.length;
+          if (Math.abs(min - avg) < 1 && Math.abs(min - max) && Math.abs(max - avg))
+            html += `Circ ring ${ringNum}: ${Math.round(avg)} mbps<br>`;
+          else html += `Circ ring ${ringNum}: ${Math.round(min)} / ${Math.round(avg)} / ${Math.round(max)} mbps<br>`;
+        } else {
+          html += `Circ ring ${ringNum}: 0 mbps<br>`;
+        }
+        if (index < circularRings.length - 1) {
+          const nextRing = circularRings[index + 1];
+          const nextNum = parseInt(nextRing.split("_")[2]);
+          const betweenKey = [ring, nextRing].sort().join("-");
+          const between = interCap[betweenKey] || { sum: 0, count: 0 };
+          html += `<span class='detail-data'>| ${Math.round(between.sum)} mbps (${between.count} links @${
+            Math.round((between.sum / between.count) * 10) / 10
+          } mbps)</span><br>`;
+        }
+      });
+      // Between Mars and Circular
+      Object.keys(interCap)
+        .filter((key) => key.includes("ring_mars") && key.includes("ring_circ_"))
+        .forEach((key) => {
+          const parts = key.split("-");
+          const circPart = parts.find((p) => p.startsWith("ring_circ_"));
+          const circNum = parseInt(circPart.split("_")[2]);
+          const between = interCap[key];
+          html += `<span class='detail-data'>| (CR${circNum}) ${Math.round(between.sum)}mbps (${between.count} links @${
+            Math.round((between.sum / between.count) * 10) / 10
+          } mbps)</span><br>`;
+        });
+      // Mars inring
+      const marsInring = ringCapacities["ring_mars"] ? ringCapacities["ring_mars"].inring : [];
+      if (marsInring.length > 0) {
+        const min = Math.min(...marsInring);
+        const max = Math.max(...marsInring);
+        const avg = marsInring.reduce((a, b) => a + b, 0) / marsInring.length;
+
+        if (Math.abs(min - avg) < 1 && Math.abs(min - max) && Math.abs(max - avg)) html += `Mars ring: ${Math.round(avg)} mbps<br>`;
+        else html += `Mars ring: ${Math.round(min)} / ${Math.round(avg)} / ${Math.round(max)} mbps<br>`;
+      }
+      // Mars planet: sum of inter-ring link capacities for Mars
+      let marsPlanetSum = 0;
+      let marsPlanetLinks = ringCapacities["ring_mars"] ? ringCapacities["ring_mars"].planetLinks : [];
+      marsPlanetLinks.forEach((link) => (marsPlanetSum += link.cap));
+      if (marsPlanetSum > 0) {
+        html += `<span class='detail-data'>| ${Math.round(marsPlanetSum)} mbps (${marsPlanetLinks.length} links)</span><br>`;
+        html += `Mars`;
+      }
+      html += `</div>`;
+      html += `</div>`;
+    }
+    // Show costs if available
     if (costs) {
       // Helper function to format costs in dollars to m, b, or t
       const formatCost = (value) => {
@@ -450,33 +623,108 @@ export class SimMain {
         }
       };
 
-      html += `${costs.satellitesCount} Sats ${costs.launchCount} Starships ${costs.tankerCount} Tankers`;
       html += `<br>`;
       html += `<br>`;
 
       html += `Total cost $${formatCost(costs.totalCosts)}`;
       html += "<br>";
-      html += `  Launch $${formatCost(costs.launchCost)} + Propellants $${formatCost(costs.propellantCost)} + Sats $${formatCost(
+      html += `<div style="margin-top: 10px;">`;
+      html += `<div style="cursor: pointer; display: flex; align-items: center;">`;
+      html += `<span id="cost-arrow">▼</span> <span>Cost Details</span>`;
+      html += `</div>`;
+      html += `<div id="cost-content" style="display: block; margin-top: 10px;">`;
+
+      html += `<span class='detail-data'>Launch $${formatCost(costs.launchCost)}<br>Sats $${formatCost(
         costs.satellitesCost
-      )}`;
+      )}<br>Lasers $${formatCost(costs.laserTerminalsCost)}<br>Propellants $${formatCost(costs.propellantCost)}</span>`;
 
       // Add propellant costs breakdown
       html += "<br>";
-      html += "  Propellants: ";
+      html += "<span class='detail-data'>";
       const propellantEntries = [];
       for (const [propellantType, cost] of Object.entries(costs.propellantCostBreakdown)) {
-        propellantEntries.push(`${propellantType} $${formatCost(cost)}`);
+        propellantEntries.push(`- ${propellantType} $${formatCost(cost)}`);
       }
-      html += propellantEntries.join(", ");
+      html += propellantEntries.join("<br>");
+
+      html += "</span>";
+
+      html += `</div>`;
+      html += `</div>`;
 
       if (costs.costPerMbps) {
         html += `<br>`;
-        html += ` $${costs.costPerMbps.toLocaleString()} / Mbps`;
+        html += `$${costs.costPerMbps.toLocaleString()} / Mbps`;
       }
-    } else {
-      html += `${this.satellitesCount} satellites`;
     }
     return html;
+  }
+
+  calculateCapacityInfo(links) {
+    const ringCapacities = {};
+    const interCap = {};
+    links.forEach((link) => {
+      let fromRing = link.fromId.split("-")[0];
+      let toRing = link.toId.split("-")[0];
+      // Treat planet nodes as their respective rings
+      if (fromRing === "Earth") fromRing = "ring_earth";
+      if (fromRing === "Mars") fromRing = "ring_mars";
+      if (toRing === "Earth") toRing = "ring_earth";
+      if (toRing === "Mars") toRing = "ring_mars";
+      const cap = link.gbpsCapacity * 1000;
+      if (!ringCapacities[fromRing]) ringCapacities[fromRing] = { inring: [], flows: 0, flowsCount: 0, planetLinks: [] };
+      if (!ringCapacities[toRing]) ringCapacities[toRing] = { inring: [], flows: 0, flowsCount: 0, planetLinks: [] };
+      if (fromRing === toRing) {
+        ringCapacities[fromRing].inring.push(cap);
+        // Add to planetLinks if planet is involved in intra-ring
+        if (link.fromId === "Earth" || link.toId === "Earth") {
+          const satId = link.fromId === "Earth" ? link.toId : link.fromId;
+          ringCapacities["ring_earth"].planetLinks.push({ cap, satId });
+        }
+        if (link.fromId === "Mars" || link.toId === "Mars") {
+          const satId = link.fromId === "Mars" ? link.toId : link.fromId;
+          ringCapacities["ring_mars"].planetLinks.push({ cap, satId });
+        }
+      } else {
+        const isInterplanetary =
+          (fromRing === "ring_earth" && toRing === "ring_mars") || (fromRing === "ring_mars" && toRing === "ring_earth");
+        if (isInterplanetary) {
+          ringCapacities[fromRing].flows += cap;
+          ringCapacities[toRing].flows += cap;
+          ringCapacities[fromRing].flowsCount += 1;
+          ringCapacities[toRing].flowsCount += 1;
+        } else {
+          // inter-ring, add to planetLinks if from planet
+          if (fromRing === "ring_earth") {
+            const satId = link.toId;
+            ringCapacities["ring_earth"].planetLinks.push({ cap, satId });
+          }
+          if (fromRing === "ring_mars") {
+            const satId = link.toId;
+            ringCapacities["ring_mars"].planetLinks.push({ cap, satId });
+          }
+          // For interCap, for all inter-ring except interplanetary
+          const key = [fromRing, toRing].sort().join("-");
+          if (!interCap[key]) interCap[key] = { sum: 0, count: 0 };
+          interCap[key].sum += cap;
+          interCap[key].count += 1;
+        }
+      }
+    });
+    // Console log planet links
+    if (ringCapacities["ring_earth"] && ringCapacities["ring_earth"].planetLinks.length > 0) {
+      console.log("Earth");
+      ringCapacities["ring_earth"].planetLinks.forEach((link) => {
+        console.log(`to ${link.satId}: ${Math.round(link.cap)}mbps`);
+      });
+    }
+    if (ringCapacities["ring_mars"] && ringCapacities["ring_mars"].planetLinks.length > 0) {
+      console.log("Mars");
+      ringCapacities["ring_mars"].planetLinks.forEach((link) => {
+        console.log(`to ${link.satId}: ${Math.round(link.cap)}mbps`);
+      });
+    }
+    return { ringCapacities, interCap };
   }
 
   /**
@@ -526,6 +774,8 @@ export class SimMain {
       // if (!new SimMissionValidator(this.missionProfiles)) throw new Error("Mission validation failed");
       satellites = this.simSatellites.updateSatellitesPositions(simDate);
       this.satellitesCount = satellites.length;
+      const possibleLinks = this.simNetwork.getPossibleLinks(planets, satellites);
+      this.capacityInfo = this.calculateCapacityInfo(possibleLinks);
       this.requestLinksUpdate = true;
       this.newSatellitesConfig = null;
     } else {
@@ -561,7 +811,7 @@ export class SimMain {
           this.makeLatencyChart(latencyData, binSize);
         }
       } else {
-        this.ui.updateInfoAreaCosts(this.getCostsHtml(null));
+        this.ui.updateInfoAreaCosts(this.getCostsHtml(null, null));
         this.ui.updateInfoAreaData("");
         this.makeLatencyChart(null);
       }
@@ -609,13 +859,13 @@ export class SimMain {
             this.updateLoop();
 
             // Resolve the promise with the result
-            resolve({ dates, calctimeMs, costs: finalCosts, dataSummary });
+            resolve({ dates, calctimeMs, costs: finalCosts, dataSummary, data });
           } else {
             // Handle the case where networkData is undefined
             console.error("No networkData was generated during the simulation.");
             const dataSummary = this.summarizeLongTermData(data);
             this.updateLoop();
-            resolve({ dates, calctimeMs, costs: {}, dataSummary });
+            resolve({ dates, calctimeMs, costs: {}, dataSummary, data });
           }
           return; // Terminate the simulation
         }
@@ -645,13 +895,13 @@ export class SimMain {
           // Calculate latency data
           const latencyData = this.simNetwork.calculateLatencies(networkData);
 
-          // Calculate costs based on network data
           const costs = this.calculateCosts(networkData.maxFlowGbps, this.resultTrees);
 
           // Extract relevant metrics
           const maxFlowGbps = networkData.error ? null : networkData.maxFlowGbps;
           const bestLatencyMinutes = latencyData.bestLatency !== null ? rnd(latencyData.bestLatency / 60, 1) : null;
           const avgLatencyMinutes = latencyData.averageLatency !== null ? rnd(latencyData.averageLatency / 60, 1) : null;
+          const maxLatencyMinutes = latencyData.maxLatency !== null ? rnd(latencyData.maxLatency / 60, 1) : null;
           const possibleLinksCount = possibleLinks.length;
 
           // Push the collected data into the 'data' array
@@ -661,6 +911,8 @@ export class SimMain {
             maxFlowGbps,
             bestLatencyMinutes,
             avgLatencyMinutes,
+            maxLatencyMinutes,
+            latencyHistogram: latencyData.histogram,
             costPerMbps: costs.costPerMbps,
           });
 
@@ -709,7 +961,7 @@ export class SimMain {
     };
 
     // Define the fields to summarize
-    const fields = ["possibleLinksCount", "maxFlowGbps", "bestLatencyMinutes", "avgLatencyMinutes", "costPerMbps"];
+    const fields = ["possibleLinksCount", "maxFlowGbps", "bestLatencyMinutes", "avgLatencyMinutes", "maxLatencyMinutes", "costPerMbps"];
 
     fields.forEach((field) => {
       // Extract non-null values for the current field
@@ -742,7 +994,13 @@ export class SimMain {
       console.error("Report data not available. Run the simulation first.");
       return;
     }
-    generateReport(this.missionProfiles, this.resultTrees);
+    const costs = {
+      costPerLaunchMillionUSD: this.costPerLaunch,
+      costPerSatelliteMillionUSD: this.costPerSatellite,
+      costPerLaserTerminalMillionUSD: this.costPerLaserTerminal,
+      laserPortsPerSatellite: this.simLinkBudget.maxLinksPerSatellite,
+    };
+    generateReport(this.missionProfiles, this.resultTrees, costs);
   }
 }
 // Initialize the simulation once the DOM is fully loaded

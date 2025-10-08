@@ -243,3 +243,10 @@ input[type="range"]::-moz-range-track {
   font-size: 13px;
   cursor: pointer;
 }
+
+.main-data {
+  color: #ffffffe4;
+}
+.detail-data {
+  color: rgba(141, 141, 141, 0.827);
+}

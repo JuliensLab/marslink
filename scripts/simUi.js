@@ -1,5 +1,5 @@
 // simUi.js
-import { slidersData } from "./slidersData.js?v=2.4";
+import { slidersData } from "./slidersData.js?v=4.0";
 
 export class SimUi {
   constructor(simMain) {
@@ -10,8 +10,14 @@ export class SimUi {
     this.createSliders();
     this.initializeSimMain();
 
-    this.setupLongTermRunButton();
-    this.setupLongTermScenariosRunButton();
+    // Remove unwanted buttons if they exist
+    const longTermButton = document.getElementById("startLongTermRun");
+    if (longTermButton) longTermButton.remove();
+
+    const scenariosButton = document.getElementById("startLongTermScenariosRun");
+    if (scenariosButton) scenariosButton.remove();
+
+    this.setupFullRunButton();
   }
 
   initializeSimMain() {
@@ -45,6 +51,85 @@ export class SimUi {
       this.simMain.generateReport();
     });
     document.getElementById("generateReportDiv").appendChild(reportButton); // Or append to a specific container
+
+    // Add collapsible input area
+    const collapsibleContainer = document.createElement("div");
+    collapsibleContainer.style.marginTop = "10px";
+
+    const collapsibleHeader = document.createElement("div");
+    collapsibleHeader.style.cursor = "pointer";
+    collapsibleHeader.style.display = "flex";
+    collapsibleHeader.style.alignItems = "center";
+    collapsibleHeader.innerHTML = '<span id="arrow">▶</span> <span>Full Run Parameters</span>';
+
+    const collapsibleContent = document.createElement("div");
+    collapsibleContent.style.display = "none";
+    collapsibleContent.style.marginTop = "10px";
+
+    // Load saved parameters from localStorage or use defaults
+    const savedDates = localStorage.getItem("fullRunDates") || "2034-08-19,2027-02-19";
+    const savedRingCounts = localStorage.getItem("fullRunRingCounts") || "2,4,6,8,10";
+    const savedMbps = localStorage.getItem("fullRunMbps") || "10,25,50,100,200";
+
+    collapsibleContent.innerHTML = `
+      <div style="margin-bottom: 10px;">
+        <label>Dates (yyyy-mm-dd, comma-separated): </label>
+        <input type="text" id="fullRunDates" value="${savedDates}" style="width: 300px;">
+      </div>
+      <div style="margin-bottom: 10px;">
+        <label>Ring Counts (comma-separated): </label>
+        <input type="text" id="fullRunRingCounts" value="${savedRingCounts}" style="width: 300px;">
+      </div>
+      <div style="margin-bottom: 10px;">
+        <label>In-ring Mbps (comma-separated): </label>
+        <input type="text" id="fullRunMbps" value="${savedMbps}" style="width: 300px;">
+      </div>
+    `;
+
+    collapsibleHeader.addEventListener("click", () => {
+      const arrow = document.getElementById("arrow");
+      if (collapsibleContent.style.display === "none") {
+        collapsibleContent.style.display = "block";
+        arrow.textContent = "▼";
+      } else {
+        collapsibleContent.style.display = "none";
+        arrow.textContent = "▶";
+      }
+    });
+
+    collapsibleContainer.appendChild(collapsibleHeader);
+    collapsibleContainer.appendChild(collapsibleContent);
+
+    document.getElementById("generateReportDiv").appendChild(collapsibleContainer);
+
+    // Add event listeners to save parameters on input change
+    const saveParameters = () => {
+      const datesInput = document.getElementById("fullRunDates").value;
+      const ringCountsInput = document.getElementById("fullRunRingCounts").value;
+      const mbpsInput = document.getElementById("fullRunMbps").value;
+
+      localStorage.setItem("fullRunDates", datesInput);
+      localStorage.setItem("fullRunRingCounts", ringCountsInput);
+      localStorage.setItem("fullRunMbps", mbpsInput);
+    };
+
+    // Save on blur (when user clicks away) and Enter key press
+    ["fullRunDates", "fullRunRingCounts", "fullRunMbps"].forEach((id) => {
+      const input = document.getElementById(id);
+      input.addEventListener("blur", saveParameters);
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          saveParameters();
+        }
+      });
+    });
+
+    // Add the Full Run button
+    const fullRunButton = document.createElement("button");
+    fullRunButton.textContent = "Start Full Run";
+    fullRunButton.id = "startFullRun";
+    fullRunButton.classList = "large-button";
+    document.getElementById("generateReportDiv").appendChild(fullRunButton);
   }
 
   saveToJson(object, fileName) {
@@ -74,10 +159,10 @@ export class SimUi {
   }
 
   /**
-   * Sets up the Start Long-Term Run button with its event listener.
+   * Sets up the Start Full Run button with its event listener.
    */
-  setupLongTermRunButton() {
-    const startButton = document.getElementById("startLongTermRun");
+  setupFullRunButton() {
+    const startButton = document.getElementById("startFullRun");
     const summaryContainer = document.getElementById("long-term-summary-run-text");
     const progressBar = document.getElementById("progress-bar-run"); // Ensure you have a progress bar in your HTML
     const progressText = document.getElementById("progress-text-run"); // And a progress text element
@@ -91,80 +176,38 @@ export class SimUi {
         progressText.textContent = "Progress: 0%";
 
         try {
-          // Define the simulation dates
-          const dates = { from: "2025-01-01", to: "2026-01-01", stepDays: 30 };
+          // Get input values
+          const datesInput = document.getElementById("fullRunDates").value;
+          const dates = datesInput.split(",").map((d) => d.trim());
 
-          // Run the long-term simulation and await its completion
-          const simulationResult = await this.simMain.longTermRun(dates);
+          const ringCountsInput = document.getElementById("fullRunRingCounts").value;
+          const ringCounts = ringCountsInput.split(",").map((r) => parseInt(r.trim()));
 
-          console.log("Long-Term Simulation Result:", simulationResult);
-          this.saveToJson(simulationResult, "SimulationResult");
-
-          // Helper function to round numbers to a specified precision
-          function rnd(number, precision) {
-            const factor = Math.pow(10, precision);
-            return Math.round(number * factor) / factor;
-          }
-
-          // Display the summary in the UI
-          let html = "<h3>Long-Term Run Summary:</h3>";
-          html += `${simulationResult.dataSummary.dayCount} samples, every ${simulationResult.dates.stepDays} days`;
-          html += "<br>";
-          html += `from ${simulationResult.dates.from} to ${simulationResult.dates.to}`;
-          html += "<br>";
-          html += `Latency avg of avg: ${rnd(simulationResult.dataSummary.avgLatencyMinutes.avg, 1)} minutes`;
-          html += "<br>";
-          html += `Latency avg of best: ${rnd(simulationResult.dataSummary.bestLatencyMinutes.avg, 1)} minutes`;
-          html += "<br>";
-          html += `Throughput avg: ${rnd(simulationResult.dataSummary.maxFlowGbps.avg * 1000, 0)} mbps`;
-          html += "<br>";
-          html += `Throughput worst: ${rnd(simulationResult.dataSummary.maxFlowGbps.min * 1000, 0)} mbps`;
-
-          summaryContainer.innerHTML = html;
-        } catch (error) {
-          console.error("Error during long-term simulation:", error);
-          summaryContainer.textContent = "An error occurred during the simulation.";
-        } finally {
-          // Re-enable the button after completion
-          startButton.disabled = false;
-          startButton.textContent = "Start Long-Term Run";
-        }
-      });
-    } else {
-      console.error("Start Long-Term Run button or summary container not found.");
-    }
-  }
-
-  /**
-   * Sets up the Start Long-Term Scenarios Run button with its event listener.
-   */
-  setupLongTermScenariosRunButton() {
-    const startButton = document.getElementById("startLongTermScenariosRun");
-    const summaryContainer = document.getElementById("long-term-summary-run-text");
-    const progressBar = document.getElementById("progress-bar-run"); // Ensure you have a progress bar in your HTML
-    const progressText = document.getElementById("progress-text-run"); // And a progress text element
-
-    if (startButton && summaryContainer && progressBar && progressText) {
-      startButton.addEventListener("click", async () => {
-        // Disable the button to prevent multiple clicks
-        startButton.disabled = true;
-        startButton.textContent = "Running...";
-        progressBar.style.width = "0%";
-        progressText.textContent = "Progress: 0%";
-
-        try {
-          // Define the simulation dates
-          const dates = { from: "2025-01-01", to: "2030-01-01", stepDays: 30 };
-
-          // Define the input ranges for scenarios
-          const circularRingsCountInputs = { from: 1, to: 6, step: 1 };
-          const circularRingsMbpsInputs = { from: 1, to: 310, step: 50 };
+          const mbpsInput = document.getElementById("fullRunMbps").value;
+          const throughputs = mbpsInput.split(",").map((m) => parseInt(m.trim()));
 
           // Calculate total number of scenarios for progress tracking
-          const totalScenarios =
-            Math.ceil((circularRingsCountInputs.to - circularRingsCountInputs.from) / circularRingsCountInputs.step + 1) *
-            Math.ceil((circularRingsMbpsInputs.to - circularRingsMbpsInputs.from) / circularRingsMbpsInputs.step + 1);
+          const totalScenarios = dates.length * ringCounts.length * throughputs.length;
           let completedScenarios = 0;
+
+          // Get base configuration (excluding overridden parameters)
+          const baseConfig = this.getGroupsConfig([
+            "capability",
+            "simulation",
+            "current_technology_performance",
+            "technology_improvement",
+            "ring_mars",
+            "circular_rings",
+            "eccentric_rings",
+            "ring_earth",
+            "costs",
+          ]);
+
+          // Remove parameters that are overridden by the simulation
+          delete baseConfig["circular_rings.ringcount"];
+          delete baseConfig["circular_rings.requiredmbpsbetweensats"];
+          delete baseConfig["eccentric_rings.ringcount"];
+          delete baseConfig["simulation.calctimeSec"];
 
           // Initialize satellitesConfig
           const satellitesConfig = this.getGroupsConfig([
@@ -180,86 +223,66 @@ export class SimUi {
 
           const resultArray = [];
 
-          // Iterate over each combination of circularRingsCount and circularRingsMbps
-          for (
-            let circularRingsCount = circularRingsCountInputs.from;
-            circularRingsCount <= circularRingsCountInputs.to;
-            circularRingsCount += circularRingsCountInputs.step
-          ) {
-            for (
-              let circularRingsMbps = circularRingsMbpsInputs.from;
-              circularRingsMbps <= circularRingsMbpsInputs.to;
-              circularRingsMbps += circularRingsMbpsInputs.step
-            ) {
-              // Update satellitesConfig with current scenario parameters
-              satellitesConfig["circular_rings.ringcount"] = circularRingsCount;
-              satellitesConfig["circular_rings.requiredmbpsbetweensats"] = circularRingsMbps;
+          // Iterate over each combination of ringCount, throughput, and date
+          for (const ringCount of ringCounts) {
+            for (const throughput of throughputs) {
+              for (const date of dates) {
+                // Update satellitesConfig with current scenario parameters
+                satellitesConfig["circular_rings.ringcount"] = ringCount;
+                satellitesConfig["circular_rings.requiredmbpsbetweensats"] = throughput;
+                satellitesConfig["eccentric_rings.ringcount"] = 0;
+                satellitesConfig["simulation.calctimeSec"] = 100; // No limit
 
-              // Apply the new satellites configuration
-              this.simMain.setSatellitesConfig(satellitesConfig);
+                // Set simTime to the date for deployment
+                const originalSimTime = this.simMain.simTime.getDate();
+                const targetDate = new Date(date);
+                this.simMain.simTime.simMsSinceStart = targetDate.getTime() - this.simMain.simTime.initDate.getTime();
+                this.simMain.simTime.previousRealMs = performance.now();
 
-              // Run the long-term simulation and await its completion
-              const result = await this.simMain.longTermRun(dates, (progress) => {
-                // Optionally, you can update scenario-specific progress here
-                // For simplicity, we're tracking overall scenario progress
-              });
+                // Apply the new satellites configuration
+                this.simMain.setSatellitesConfig(satellitesConfig);
 
-              result.satellitesConfig = JSON.parse(JSON.stringify(satellitesConfig));
-              // Push the result to the resultArray
-              resultArray.push(result);
+                // Run the simulation for the specific date
+                const result = await this.simMain.longTermRun({ from: date, to: date, stepDays: 1 });
 
-              // Update progress
-              completedScenarios++;
-              const overallProgress = completedScenarios / totalScenarios;
-              const percent = Math.round(overallProgress * 100);
-              progressBar.style.width = `${percent}%`;
-              progressText.textContent = `Progress: ${percent}%`;
+                // Restore original simTime and update display
+                this.simMain.simTime.simMsSinceStart = originalSimTime.getTime() - this.simMain.simTime.initDate.getTime();
+                this.simMain.simTime.previousRealMs = performance.now();
+                this.simMain.updateLoop();
+
+                result.scenario = { date, ringCount, throughputMbps: throughput };
+                // Push the result to the resultArray
+                resultArray.push(result);
+
+                // Update progress
+                completedScenarios++;
+                const overallProgress = completedScenarios / totalScenarios;
+                const percent = Math.round(overallProgress * 100);
+                progressBar.style.width = `${percent}%`;
+                progressText.textContent = `Progress: ${percent}%`;
+              }
             }
           }
 
-          console.log("Long-Term Scenarios Simulation Result:", resultArray);
-          this.saveToJson(resultArray, "SimulationScenariosResult");
+          console.log("Full Run Simulation Result:", resultArray);
+          const data = { config: baseConfig, results: resultArray };
 
-          // Helper function to round numbers to a specified precision
-          function rnd(number, precision) {
-            const factor = Math.pow(10, precision);
-            return Math.round(number * factor) / factor;
-          }
+          // Store data in localStorage for the results page
+          localStorage.setItem("marslinkFullRunResults", JSON.stringify(data));
 
-          // Generate a summary for all scenarios
-          let html = "<h3>Scenarios Run Summary:</h3>";
-          html += `<p>Total Scenarios: ${resultArray.length}</p>`;
-
-          // Optionally, iterate over each result and display individual summaries
-          resultArray.forEach((simulationResult, index) => {
-            html += `<h4>Scenario ${index + 1}:</h4>`;
-            html += `<p>Rings Count: ${simulationResult.dates.stepDays}</p>`; // Adjust as needed
-            html += `${simulationResult.dataSummary.dayCount} samples, every ${simulationResult.dates.stepDays} days`;
-            html += "<br>";
-            html += `From ${simulationResult.dates.from} to ${simulationResult.dates.to}`;
-            html += "<br>";
-            html += `Latency avg of avg: ${rnd(simulationResult.dataSummary.avgLatencyMinutes.avg, 1)} minutes`;
-            html += "<br>";
-            html += `Latency avg of best: ${rnd(simulationResult.dataSummary.bestLatencyMinutes.avg, 1)} minutes`;
-            html += "<br>";
-            html += `Throughput avg: ${rnd(simulationResult.dataSummary.maxFlowGbps.avg * 1000, 0)} mbps`;
-            html += "<br>";
-            html += `Throughput worst: ${rnd(simulationResult.dataSummary.maxFlowGbps.min * 1000, 0)} mbps`;
-            html += "<br><br>";
-          });
-
-          summaryContainer.innerHTML = html;
+          // Open the results webpage
+          window.open("results/fullrun/index.html");
         } catch (error) {
-          console.error("Error during long-term scenarios simulation:", error);
+          console.error("Error during full run simulation:", error);
           summaryContainer.textContent = "An error occurred during the simulation.";
         } finally {
           // Re-enable the button after completion
           startButton.disabled = false;
-          startButton.textContent = "Start Scenarios Run";
+          startButton.textContent = "Start Full Run";
         }
       });
     } else {
-      console.error("Start Scenarios Run button, summary container, or progress elements not found.");
+      console.error("Start Full Run button or summary container not found.");
     }
   }
 
@@ -274,6 +297,11 @@ export class SimUi {
       if (sliderValue === 0) return 0;
       const absValue = Math.abs(sliderValue - 1);
       const result = Math.pow(2, absValue);
+      return result * Math.sign(sliderValue);
+    } else if (slider.scale === "pow10") {
+      if (sliderValue === 0) return 0;
+      const absValue = Math.abs(sliderValue - 1);
+      const result = Math.pow(10, absValue);
       return result * Math.sign(sliderValue);
     } else {
       return sliderValue;
@@ -340,6 +368,16 @@ export class SimUi {
         let step = slider.step;
 
         if (slider.scale === "pow2") {
+          const steps = slider.steps || 101;
+          if (slider.min < 0 && slider.max > 0) {
+            min = -Math.floor(steps / 2);
+            max = Math.floor(steps / 2);
+          } else if (slider.min >= 0) {
+            min = 0;
+            max = steps - 1;
+          }
+          step = 1;
+        } else if (slider.scale === "pow10") {
           const steps = slider.steps || 101;
           if (slider.min < 0 && slider.max > 0) {
             min = -Math.floor(steps / 2);
@@ -516,21 +554,21 @@ export class SimUi {
 
         case "current_technology_performance.current-throughput-gbps":
         case "current_technology_performance.current-distance-km":
-        case "technology_improvement.telescope-diameter-m":
-        case "technology_improvement.receiver-sensitivity-improvement":
-        case "technology_improvement.transmitter-power-improvement":
-        case "technology_improvement.efficiency-improvement":
+        case "technology_improvement.improvement-factor":
         case "capability.laser-ports-per-satellite":
+        case "capability.satellite-empty-mass":
+        case "capability.laser-terminal-mass":
         case "simulation.maxDistanceAU":
         case "simulation.calctimeMs":
         case "simulation.failed-satellites-slider":
+        case "ring_mars.match-circular-rings":
         case "ring_mars.side-extension-degrees-slider":
         case "ring_mars.requiredmbpsbetweensats":
         case "circular_rings.ringcount":
         case "circular_rings.requiredmbpsbetweensats":
         case "circular_rings.distance-sun-slider-outer-au":
         case "circular_rings.distance-sun-slider-inner-au":
-        case "circular_rings.inring-intraring-bias-pct":
+        case "circular_rings.inring-interring-bias-pct":
         case "circular_rings.earth-mars-orbit-inclination-pct":
         case "eccentric_rings.ringcount":
         case "eccentric_rings.requiredmbpsbetweensats":
@@ -557,7 +595,7 @@ export class SimUi {
 
         case "costs.satellite-cost-slider":
         case "costs.launch-cost-slider":
-        case "costs.sats-per-launch-slider":
+        case "costs.laser-terminal-cost-slider":
           this.simMain.setCosts(this.getGroupsConfig(["costs"]));
           break;
 
@@ -602,6 +640,22 @@ export class SimUi {
 
   updateInfoAreaCosts(html) {
     document.getElementById("info-area-costs").innerHTML = html;
+    const arrows = ["capacity", "cost"];
+    for (const arrow of arrows) {
+      const capacityArrow = document.getElementById(`${arrow}-arrow`);
+      if (capacityArrow) {
+        const capacityContent = document.getElementById(`${arrow}-content`);
+        capacityArrow.parentElement.addEventListener("click", () => {
+          if (capacityContent.style.display === "none") {
+            capacityContent.style.display = "block";
+            capacityArrow.textContent = "▼";
+          } else {
+            capacityContent.style.display = "none";
+            capacityArrow.textContent = "▶";
+          }
+        });
+      }
+    }
   }
 
   /**

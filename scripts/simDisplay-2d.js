@@ -5,8 +5,8 @@
  * with pan and zoom (mouse & touch).
  ***********************************************/
 
-import { SimSolarSystem } from "./simSolarSystem.js?v=2.4";
-import { createCarModel } from "./modelCar.js?v=2.4";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.0";
+import { createCarModel } from "./modelCar.js?v=4.0";
 
 /**
  * Converts astronomical units (AU) to 3D units using a scale factor.
@@ -428,8 +428,8 @@ export class SimDisplay {
     }
 
     // === Draw Satellites (example) ===
-    if (false) {
-      const satSize = 8;
+    if (true) {
+      const satSize = 4;
       for (let satellite of this.satellites) {
         const pos = this.satellitePositions[satellite.name];
         if (!pos) continue;

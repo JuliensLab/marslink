@@ -1,5 +1,4 @@
 // simNetwork.js
-// alternating links between ring N+1 and ring N-1
 
 export class SimNetwork {
   constructor(simLinkBudget) {
@@ -49,6 +48,7 @@ export class SimNetwork {
   };
 
   getPossibleLinks(planets, satellites) {
+    const maxLinksPerSatellite = this.simLinkBudget.getMaxLinksPerSatellite();
     // Group satellites by ringName
     const rings = {}; // { ringName: [satellite1, satellite2, ...] }
 
@@ -87,17 +87,20 @@ export class SimNetwork {
 
     const finalLinks = []; // Final list of links to return
 
-    console.log(`Satellites have ${this.simLinkBudget.maxLinksPerSatellite} ports each`);
-
     this.intraRing(rings, positions, linkCounts, finalLinks);
 
     this.marsEarthRings(rings, positions, linkCounts, finalLinks);
+    // this.interCircularRings(rings, positions, linkCounts, finalLinks);
+    // this.interEccentricRings(rings, positions, linkCounts, finalLinks);
+    // this.connectEccentricAndCircularRings(rings, positions, linkCounts, finalLinks);
 
-    this.interCircularRings(rings, positions, linkCounts, finalLinks);
-
-    this.interEccentricRings(rings, positions, linkCounts, finalLinks);
-
-    this.connectEccentricAndCircularRings(rings, positions, linkCounts, finalLinks);
+    // const isOdd = maxLinksPerSatellite % 2 === 1;
+    // if (isOdd) {
+    //   this.marsEarthRings(rings, positions, linkCounts, finalLinks, true);
+    //   this.interCircularRings(rings, positions, linkCounts, finalLinks, true);
+    //   this.interEccentricRings(rings, positions, linkCounts, finalLinks, true);
+    //   this.connectEccentricAndCircularRings(rings, positions, linkCounts, finalLinks, true);
+    // }
 
     return finalLinks;
   }
@@ -110,8 +113,6 @@ export class SimNetwork {
 
     // Precompute AU to KM conversion if not already done
     const AU_IN_KM = this.AU_IN_KM; // Assuming this is a constant
-
-    let linksAdded = 0;
 
     // Iterate through each ring
     for (const [ringName, ringSatellites] of Object.entries(rings)) {
@@ -165,8 +166,6 @@ export class SimNetwork {
           // Add the new link to the Set to avoid future duplicates
           existingLinks.add(linkKey);
 
-          linksAdded++;
-
           // Early termination if satellite has reached max links after adding
           if (linkCounts[satellite.name] >= this.simLinkBudget.maxLinksPerSatellite) {
             break; // Exit the neighbors loop for this satellite
@@ -174,13 +173,11 @@ export class SimNetwork {
         }
       }
     }
-
-    console.log(
-      `Intra-ring links (${Object.values(rings).reduce((sum, sats) => sum + sats.length, 0)} satellites): ${linksAdded} connections made`
-    );
   }
 
-  interEccentricRings(rings, positions, linkCounts, finalLinks) {
+  interEccentricRings(rings, positions, linkCounts, finalLinks, skipInvert = false) {
+    const maxLinksPerSatellite = this.simLinkBudget.maxLinksPerSatellite;
+    const isOdd = maxLinksPerSatellite % 2 === 1;
     // Step 1: Identify valid rings (eccentric and circular rings)
     const eccentricRingNames = Object.keys(rings).filter((ringName) => ringName.startsWith("ring_ecce"));
     const circularRingNames = Object.keys(rings).filter((ringName) => ringName.startsWith("ring_circ"));
@@ -200,8 +197,12 @@ export class SimNetwork {
 
     for (const eccentricRingName of eccentricRingNames) {
       const eccSatellites = rings[eccentricRingName];
+      const sortedEccSatellites = eccSatellites.slice().sort((a, b) => (a.position.vpo || 0) - (b.position.vpo || 0));
+      for (let i = 0; i < sortedEccSatellites.length; i++) {
+        const skipCondition = isOdd && (skipInvert ? i % 2 === 0 : i % 2 === 1);
+        if (skipCondition) continue;
+        const eccSatellite = sortedEccSatellites[i];
 
-      for (const eccSatellite of eccSatellites) {
         // Iterate through all valid rings
         for (const targetRingName of validRingNames) {
           // Exclude if both satellites are in the same eccentric ring
@@ -264,7 +265,6 @@ export class SimNetwork {
     filteredLinks.sort((a, b) => b.gbpsCapacity - a.gbpsCapacity);
 
     // Step 6: Assign links while respecting constraints
-    let linksAdded = 0;
     for (const link of filteredLinks) {
       const fromId = link.fromSatellite.name;
       const toId = link.toSatellite.name;
@@ -306,18 +306,9 @@ export class SimNetwork {
       // Add the new link to the Set to avoid future duplicates
       existingLinks.add(linkKey);
 
-      linksAdded++;
-
       // Optional: Early termination if desired
       // If there's a limit on the number of links to assign, implement it here
     }
-
-    console.log(
-      `Inter-eccentric ring links (${eccentricRingNames.length} rings, ${eccentricRingNames.reduce(
-        (sum, name) => sum + rings[name].length,
-        0
-      )} satellites): ${linksAdded} connections made`
-    );
   }
 
   /**
@@ -349,149 +340,134 @@ export class SimNetwork {
     return { lower, higher };
   }
 
-  interCircularRings(rings, positions, linkCounts, finalLinks) {
-    // Step 2: Add Links for Circular Rings Based on `a` and `vpo` (Excluding Mars and Earth Rings)
+  interCircularRings(rings, positions, linkCounts, finalLinks, skipInvert = false) {
+    const maxLinksPerSatellite = this.simLinkBudget.maxLinksPerSatellite;
+    const isOdd = maxLinksPerSatellite % 2 === 1;
 
     // Identify circular rings (exclude 'ring_mars' and 'ring_earth')
     const circularRingNames = Object.keys(rings).filter((ringName) => ringName.startsWith("ring_circ"));
 
-    // Sort circular rings from closest to furthest based on 'a' (ascending order)
+    // Sort circular rings from furthest to closest based on 'a' (ascending order)
     const sortedCircularRings = circularRingNames.slice().sort((a, b) => {
       const aDistance = rings[a][0].a; // 'a' is the distance from the sun in AU
       const bDistance = rings[b][0].a;
-      return aDistance - bDistance; // Ascending order: closest first
+      return aDistance - bDistance; // Ascending order: nearest first
     });
 
     // Initialize a Set for existing links for O(1) lookup
     const existingLinks = new Set(finalLinks.map((link) => `${link.fromId}-${link.toId}`));
 
-    // Precompute AU to KM conversion if not already done
-    const AU_IN_KM = this.AU_IN_KM; // Assuming this is a constant
+    // Precompute AU to KM conversion
+    const AU_IN_KM = this.AU_IN_KM;
 
-    // Precompute sorted satellites for each ring
-    const ringSatellites = {};
-    sortedCircularRings.forEach((ringName) => {
-      ringSatellites[ringName] = rings[ringName].slice().sort((a, b) => a.position.vpo - b.position.vpo);
-    });
-
-    // Iterate through each circular ring
-    for (let i = 0; i < sortedCircularRings.length; i++) {
+    // Iterate through each circular ring and link to the next inner ring
+    for (let i = 0; i < sortedCircularRings.length - 1; i++) {
       const currentRingName = sortedCircularRings[i];
-      let ringLinksAdded = 0;
-      const currentRingSatellites = ringSatellites[currentRingName];
-      const sortedCurrentRingSatellites = currentRingSatellites; // already sorted
+      const nextRingName = sortedCircularRings[i + 1];
+      const currentRingSatellites = rings[currentRingName];
+      const nextRingSatellites = rings[nextRingName];
 
-      const prevRingName = i > 0 ? sortedCircularRings[i - 1] : null;
-      const nextRingName = i < sortedCircularRings.length - 1 ? sortedCircularRings[i + 1] : null;
+      // Sort satellites by VPO for efficient searching
+      const sortedNextRingSatellites = nextRingSatellites.slice().sort((a, b) => a.position.vpo - b.position.vpo);
+      const sortedVpoList = sortedNextRingSatellites.map((sat) => sat.position.vpo);
+      const sortedCurrentRingSatellites = currentRingSatellites.slice().sort((a, b) => a.position.vpo - b.position.vpo);
 
-      // For each satellite in the current ring
-      sortedCurrentRingSatellites.forEach((currentSatellite, j) => {
-        // Determine if this satellite should attempt to connect to the next ring
-        let shouldConnectToNext = false;
-        if (i === 0 && this.simLinkBudget.maxLinksPerSatellite === 3) {
-          // For the first ring with 3 ports, only odd satellites connect to n+1
-          shouldConnectToNext = j % 2 === 1;
-        } else {
-          // For other rings or 4 ports, all satellites with ports available connect to n+1
-          shouldConnectToNext = linkCounts[currentSatellite.name] < this.simLinkBudget.maxLinksPerSatellite;
+      let nextIndex = 0;
+      const nextLength = sortedVpoList.length;
+      let lastConnectedIndex = -2; // Track the index of the last connected satellite in the current ring
+
+      for (let j = 0; j < sortedCurrentRingSatellites.length; j++) {
+        // Determine if we should attempt a connection
+        const shouldAttemptConnection = !isOdd || j - lastConnectedIndex > 1;
+
+        if (!shouldAttemptConnection) continue;
+
+        const currentSatellite = sortedCurrentRingSatellites[j];
+        const currentVpo = currentSatellite.position.vpo % 360; // Ensure vpo is within [0, 360)
+
+        // Sweep to find the nearest higher VPO satellite
+        while (nextIndex < nextLength && sortedVpoList[nextIndex] < currentVpo) {
+          nextIndex++;
         }
 
-        if (!shouldConnectToNext) return;
+        // Determine nearest lower and higher satellites with wrap-around
+        const nearestHigher = sortedNextRingSatellites[nextIndex % nextLength];
+        const nearestLower = sortedNextRingSatellites[(nextIndex - 1 + nextLength) % nextLength];
 
-        // Try to connect to the next ring (i+1) if it exists
-        if (i + 1 < sortedCircularRings.length) {
-          const nextRingIndex = i + 1;
-          const nextRingName = sortedCircularRings[nextRingIndex];
-          const nextRingSatellites = ringSatellites[nextRingName];
-          const sortedNextVpoList = nextRingSatellites.map((sat) => sat.position.vpo);
+        // Calculate distances
+        const distanceAULower = this.calculateDistanceAU(positions[currentSatellite.name], positions[nearestLower.name]);
+        const distanceAUHigher = this.calculateDistanceAU(positions[currentSatellite.name], positions[nearestHigher.name]);
 
-          const currentVpo = currentSatellite.position.vpo % 360; // Ensure vpo is within [0, 360)
+        // Collect candidates, sorted by distance
+        const candidates = [
+          { satellite: nearestLower, distanceAU: distanceAULower },
+          { satellite: nearestHigher, distanceAU: distanceAUHigher },
+        ].sort((a, b) => a.distanceAU - b.distanceAU);
 
-          // Sweep to find the nearest higher vpo satellite
-          let nextIndex = 0;
-          while (nextIndex < sortedNextVpoList.length && sortedNextVpoList[nextIndex] < currentVpo) {
-            nextIndex++;
+        let connected = false;
+        for (const targetSatellite of candidates) {
+          const toId = targetSatellite.satellite.name;
+          const fromId = currentSatellite.name;
+
+          // Check if both satellites can have more links
+          if (
+            linkCounts[fromId] >= this.simLinkBudget.maxLinksPerSatellite ||
+            linkCounts[toId] >= this.simLinkBudget.maxLinksPerSatellite
+          ) {
+            continue; // Try the next candidate
           }
 
-          // Determine nearest lower and higher satellites with wrap-around
-          const nearestHigher = nextRingSatellites[nextIndex % sortedNextVpoList.length];
-          const nearestLower = nextRingSatellites[(nextIndex - 1 + sortedNextVpoList.length) % sortedNextVpoList.length];
+          // Enforce maximum distance constraint
+          const distanceAU = targetSatellite.distanceAU;
+          if (distanceAU > this.simLinkBudget.maxDistanceAU) continue;
 
-          // Calculate distances
-          const distanceAULower = this.calculateDistanceAU(positions[currentSatellite.name], positions[nearestLower.name]);
-          const distanceAUHigher = this.calculateDistanceAU(positions[currentSatellite.name], positions[nearestHigher.name]);
+          const distanceKm = distanceAU * AU_IN_KM;
+          const gbpsCapacity = this.calculateGbps(distanceKm);
+          const latencySeconds = this.calculateLatency(distanceKm);
 
-          // Collect candidates, sorted by distance
-          const candidates = [
-            { satellite: nearestLower, distanceAU: distanceAULower },
-            { satellite: nearestHigher, distanceAU: distanceAUHigher },
-          ].sort((a, b) => a.distanceAU - b.distanceAU);
+          // Order the IDs lexicographically to avoid duplicate links
+          const [orderedFromId, orderedToId] = fromId < toId ? [fromId, toId] : [toId, fromId];
+          const linkKey = `${orderedFromId}-${orderedToId}`;
 
-          // Select the closest candidate that has ports available
-          let targetSatellite = null;
-          for (const candidate of candidates) {
-            if (linkCounts[candidate.satellite.name] < this.simLinkBudget.maxLinksPerSatellite) {
-              targetSatellite = candidate;
-              break;
-            }
-          }
+          // Check if the link already exists
+          if (existingLinks.has(linkKey)) continue;
 
-          if (targetSatellite) {
-            // Enforce maximum distance constraint
-            const distanceAU = targetSatellite.distanceAU;
-            if (distanceAU <= this.simLinkBudget.maxDistanceAU) {
-              // Verify ports are still available before adding the link
-              if (
-                linkCounts[currentSatellite.name] >= this.simLinkBudget.maxLinksPerSatellite ||
-                linkCounts[targetSatellite.satellite.name] >= this.simLinkBudget.maxLinksPerSatellite
-              ) {
-                return;
-              }
+          // Add the link
+          finalLinks.push({
+            fromId: orderedFromId,
+            toId: orderedToId,
+            distanceAU,
+            distanceKm,
+            latencySeconds,
+            gbpsCapacity,
+          });
 
-              const distanceKm = distanceAU * AU_IN_KM;
-              const gbpsCapacity = this.calculateGbps(distanceKm);
-              const latencySeconds = this.calculateLatency(distanceKm);
+          // Increment link counts
+          linkCounts[fromId]++;
+          linkCounts[toId]++;
 
-              // Order the IDs lexicographically to avoid duplicate links
-              const [orderedFromId, orderedToId] =
-                currentSatellite.name < targetSatellite.satellite.name
-                  ? [currentSatellite.name, targetSatellite.satellite.name]
-                  : [targetSatellite.satellite.name, currentSatellite.name];
-              const linkKey = `${orderedFromId}-${orderedToId}`;
+          // Add the new link to the Set
+          existingLinks.add(linkKey);
 
-              // Check if the link already exists using the Set
-              if (!existingLinks.has(linkKey)) {
-                // Add the link
-                finalLinks.push({
-                  fromId: orderedFromId,
-                  toId: orderedToId,
-                  distanceAU,
-                  distanceKm,
-                  latencySeconds,
-                  gbpsCapacity,
-                });
-
-                // Increment link counts
-                linkCounts[currentSatellite.name]++;
-                linkCounts[targetSatellite.satellite.name]++;
-
-                // Add the new link to the Set
-                existingLinks.add(linkKey);
-
-                ringLinksAdded++;
-              }
-            }
-          }
+          // Mark this satellite as connected
+          lastConnectedIndex = j;
+          connected = true;
+          break; // Stop after connecting to one target
         }
-      });
 
-      console.log(
-        `Processing ring ${currentRingName} (index ${i}, ${currentRingSatellites.length} satellites): ${ringLinksAdded} connections made`
-      );
+        // If no connection was made and we're in the second pass (skipInvert=true),
+        // consider switching to the opposite set of satellites in the next iteration
+        if (isOdd && !connected && skipInvert && j < sortedCurrentRingSatellites.length - 1) {
+          // Force the next satellite to be considered regardless of the skip pattern
+          lastConnectedIndex = j - 1; // Allow the next satellite to attempt a connection
+        }
+      }
     }
   }
 
-  marsEarthRings(rings, positions, linkCounts, finalLinks) {
+  marsEarthRings(rings, positions, linkCounts, finalLinks, skipInvert = false) {
+    const maxLinksPerSatellite = this.simLinkBudget.maxLinksPerSatellite;
+    const isOdd = maxLinksPerSatellite % 2 === 1;
     const binSizeAU = 0.3;
     const maxConnectionsPerPlanetarySatellite = 3; // Maximum of 2 links per satellite in planetary rings
 
@@ -548,16 +524,19 @@ export class SimNetwork {
 
     earthMarsRings.forEach((targetRingName) => {
       const targetSatellites = rings[targetRingName];
+      const sortedTargetSatellites = targetSatellites.slice().sort((a, b) => (a.position.vpo || 0) - (b.position.vpo || 0));
       const excludedRing = targetRingName; // Prevent connecting to the same ring
 
       // For each satellite in the Mars or Earth ring
-      targetSatellites.forEach((satellite) => {
+      for (let i = 0; i < sortedTargetSatellites.length; i++) {
+        const skipCondition = isOdd && (skipInvert ? i % 2 === 0 : i % 2 === 1);
+        if (skipCondition) continue;
+        const satellite = sortedTargetSatellites[i];
         const satellitePosition = positions[satellite.name];
         const binX = getBinIndex(satellitePosition.x);
         const binY = getBinIndex(satellitePosition.y);
 
-        let nearestSatellite = null;
-        let nearestDistanceAU = Infinity;
+        let possibleTargets = [];
 
         // Explore nearby bins for potential connections
         const nearbyBins = [
@@ -583,45 +562,39 @@ export class SimNetwork {
                 return; // Skip if invalid ring or excluded ring
               }
 
-              // Check if the target satellite already has too many connections
-              if (targetRingConnectionCounts[targetSat.name] >= this.simLinkBudget.maxLinksPerSatellite) {
-                return;
-              }
-
               const distanceAU = this.calculateDistanceAU(positions[satellite.name], positions[targetSat.name]);
               if (distanceAU > this.simLinkBudget.maxDistanceAU) return; // Skip if distance exceeds max
 
-              // Track the nearest satellite
-              if (distanceAU < nearestDistanceAU) {
-                nearestSatellite = targetSat;
-                nearestDistanceAU = distanceAU;
-              }
+              possibleTargets.push({ satellite: targetSat, distanceAU });
             });
           }
         });
 
-        if (nearestSatellite) {
-          const distanceKm = nearestDistanceAU * this.AU_IN_KM;
-          const gbpsCapacity = this.calculateGbps(distanceKm);
-          const latencySeconds = this.calculateLatency(distanceKm);
+        if (possibleTargets.length > 0) {
+          possibleTargets.sort((a, b) => a.distanceAU - b.distanceAU);
+          const topCount = 2;
+          for (let k = 0; k < Math.min(topCount, possibleTargets.length); k++) {
+            const target = possibleTargets[k];
+            const distanceAU = target.distanceAU;
+            const distanceKm = distanceAU * this.AU_IN_KM;
+            const gbpsCapacity = this.calculateGbps(distanceKm);
+            const latencySeconds = this.calculateLatency(distanceKm);
 
-          // Order IDs lexicographically to avoid duplicates
-          const [orderedFromId, orderedToId] =
-            satellite.name < nearestSatellite.name ? [satellite.name, nearestSatellite.name] : [nearestSatellite.name, satellite.name];
+            // Order IDs lexicographically to avoid duplicates
+            const [orderedFromId, orderedToId] =
+              satellite.name < target.satellite.name ? [satellite.name, target.satellite.name] : [target.satellite.name, satellite.name];
 
-          potentialLinks.push({
-            fromId: orderedFromId,
-            toId: orderedToId,
-            distanceAU: nearestDistanceAU,
-            distanceKm,
-            latencySeconds,
-            gbpsCapacity,
-          });
-
-          // Increment connection count for the target satellite
-          targetRingConnectionCounts[nearestSatellite.name]++;
+            potentialLinks.push({
+              fromId: orderedFromId,
+              toId: orderedToId,
+              distanceAU,
+              distanceKm,
+              latencySeconds,
+              gbpsCapacity,
+            });
+          }
         }
-      });
+      }
     });
 
     // **New Implementation Starts Here**
@@ -639,9 +612,6 @@ export class SimNetwork {
     // Initialize a Set for existing links for O(1) lookup
     const existingLinks = new Set(finalLinks.map((link) => `${link.fromId}-${link.toId}`));
 
-    let linksAdded = 0;
-    let marsLinksAdded = 0;
-    let earthLinksAdded = 0;
     potentialLinks.forEach((link) => {
       const { fromId, toId, distanceAU, distanceKm, latencySeconds, gbpsCapacity } = link;
 
@@ -662,8 +632,8 @@ export class SimNetwork {
       if (linkCounts[toId] >= this.simLinkBudget.maxLinksPerSatellite) {
         return; // Skip if 'toId' has reached its max links
       }
-      // Check if 'toId' has reached its maximum links as per simLinkBudget // marsEarthRings
-      if (linkCounts[fromId] >= this.simLinkBudget.maxLinksPerSatellite - 1) {
+      // Check if 'fromId' has reached its maximum links as per simLinkBudget // marsEarthRings
+      if (linkCounts[fromId] >= this.simLinkBudget.maxLinksPerSatellite) {
         return; // Skip if 'fromId' has reached its max links
       }
 
@@ -683,12 +653,6 @@ export class SimNetwork {
 
       // Add the new link to the Set to avoid future duplicates
       existingLinks.add(linkKey);
-
-      linksAdded++;
-
-      // Count Mars and Earth links
-      if (fromId === "Mars") marsLinksAdded++;
-      else if (fromId === "Earth") earthLinksAdded++;
     });
 
     // **New Implementation Ends Here**
@@ -696,14 +660,11 @@ export class SimNetwork {
     // Optionally, log the number of potential links and assigned links
     // console.log(`Potential Links: ${potentialLinks.length}`);
     // console.log(`Assigned Links: ${finalLinks.length}`);
-
-    const marsRing = rings["ring_mars"];
-    const earthRing = rings["ring_earth"];
-    console.log(`Mars ring links (${marsRing ? marsRing.length : 0} satellites): ${marsLinksAdded} connections made`);
-    console.log(`Earth ring links (${earthRing ? earthRing.length : 0} satellites): ${earthLinksAdded} connections made`);
   }
 
-  connectEccentricAndCircularRings(rings, positions, linkCounts, finalLinks) {
+  connectEccentricAndCircularRings(rings, positions, linkCounts, finalLinks, skipInvert = false) {
+    const maxLinksPerSatellite = this.simLinkBudget.maxLinksPerSatellite;
+    const isOdd = maxLinksPerSatellite % 2 === 1;
     // Step 1: Identify eccentric rings and circular rings
     const eccentricRingNames = Object.keys(rings).filter((ringName) => ringName.startsWith("ring_ecce"));
     const circularRingNames = Object.keys(rings).filter((ringName) => ringName.startsWith("ring_circ"));
@@ -731,7 +692,11 @@ export class SimNetwork {
     // For each satellite in eccentric rings
     eccentricRingNames.forEach((ecceRingName) => {
       const eccSatellites = rings[ecceRingName];
-      eccSatellites.forEach((eccSatellite) => {
+      const sortedEccSatellites = eccSatellites.slice().sort((a, b) => (a.position.vpo || 0) - (b.position.vpo || 0));
+      for (let i = 0; i < sortedEccSatellites.length; i++) {
+        const skipCondition = isOdd && (skipInvert ? i % 2 === 0 : i % 2 === 1);
+        if (skipCondition) continue;
+        const eccSatellite = sortedEccSatellites[i];
         const { x, y } = positions[eccSatellite.name];
         const binX = getBinIndex(x);
         const binY = getBinIndex(y);
@@ -773,7 +738,7 @@ export class SimNetwork {
             latencySeconds,
           });
         });
-      });
+      }
     });
 
     // Step 4: Filter the possibleLinks to retain only those with sufficient capacity
@@ -791,7 +756,6 @@ export class SimNetwork {
     const connectedEccentricSatellites = new Set();
     const connectedCircularSatellites = new Set();
 
-    let linksAdded = 0;
     filteredLinks.forEach((link) => {
       const fromId = link.fromSatellite.name;
       const toId = link.toSatellite.name;
@@ -830,18 +794,7 @@ export class SimNetwork {
       // Mark satellites as connected
       connectedEccentricSatellites.add(fromId);
       connectedCircularSatellites.add(toId);
-
-      linksAdded++;
     });
-
-    console.log(
-      `Eccentric to circular ring connections (${eccentricRingNames.length} eccentric rings, ${
-        circularRingNames.length
-      } circular rings, ${eccentricRingNames.reduce((sum, name) => sum + rings[name].length, 0)} + ${circularRingNames.reduce(
-        (sum, name) => sum + rings[name].length,
-        0
-      )} satellites): ${linksAdded} connections made`
-    );
   }
 
   /**
@@ -1083,7 +1036,6 @@ export class SimNetwork {
     let totalFlowLatencyProduct = 0;
     let totalFlow = 0;
     let minLatency = Infinity;
-    let maxLatency = -Infinity;
 
     // Helper Function to Find a Path with Positive Flow
     const findPathWithFlow = () => {
@@ -1150,9 +1102,6 @@ export class SimNetwork {
       if (totalLatency < minLatency) {
         minLatency = totalLatency;
       }
-      if (totalLatency > maxLatency) {
-        maxLatency = totalLatency;
-      }
 
       paths.push({ path, flow: minFlow, latency: totalLatency });
 
@@ -1190,7 +1139,6 @@ export class SimNetwork {
       histogram: sortedBins,
       bestLatency: minLatency,
       averageLatency: averageLatency,
-      maxLatency: maxLatency === -Infinity ? null : maxLatency,
     };
   }
 }

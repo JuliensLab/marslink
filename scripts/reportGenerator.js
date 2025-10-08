@@ -1,6 +1,6 @@
 // reportGenerator.js
 
-import { printTree } from "./simMissionValidator.js?v=2.4";
+import { printTree } from "./simMissionValidator.js?v=4.0";
 
 // Helper function to get vehicle icon
 function getIcon(vehicle) {
@@ -44,7 +44,15 @@ function formatNumber(num, precision = 0) {
   }
 }
 
-export async function generateReport(missionProfiles, resultTrees) {
+export async function generateReport(missionProfiles, resultTrees, costs) {
+  // remove
+  // const costs = {
+  //   costPerLaunch: this.costPerLaunch * 1000000,
+  //   costPerSatellite: this.costPerSatellite * 1000000,
+  //   costPerLaserTerminal: this.costPerLaserTerminal * 1000000,
+  //   laserPortsPerSatellite: this.simLinkBudget.maxLinksPerSatellite,
+  // };
+
   console.log("missionProfiles", missionProfiles);
   console.log("resultTrees", resultTrees);
   const response = await fetch("reportTemplate.html");
@@ -173,9 +181,9 @@ export async function generateReport(missionProfiles, resultTrees) {
 
   // Process each orbit
   for (const [orbitId, orbitData] of Object.entries(orbits)) {
-    const starshipCost = orbitData.deploymentFlights_count * 10; // $10M per flight
-    const tankerCost = orbitData.tankersPerFlight * orbitData.deploymentFlights_count * 10; // $10M per flight
-    const satelliteCost = orbitData.satCount * 5; // $5M per satellite
+    const starshipCost = orbitData.deploymentFlights_count * costs.costPerLaunchMillionUSD; // $10M per flight
+    const tankerCost = orbitData.tankersPerFlight * orbitData.deploymentFlights_count * costs.costPerLaunchMillionUSD; // $10M per flight
+    const satelliteCost = orbitData.satCount * costs.costPerSatelliteMillionUSD; // $5M per satellite
     let totalPropellantCost = 0;
     let propellantCostsForOrbit = {};
 
@@ -241,9 +249,9 @@ export async function generateReport(missionProfiles, resultTrees) {
   totalsSections += `<h4>Hardware Unit Costs</h4>`;
   totalsSections += `<table>`;
   totalsSections += `<tr><th>Item</th><th>Cost ($ million per unit)</th></tr>`;
-  totalsSections += `<tr><td>Starship flight</td><td>10.0</td></tr>`;
-  totalsSections += `<tr><td>Tanker flight</td><td>10.0</td></tr>`;
-  totalsSections += `<tr><td>Satellite</td><td>5.0</td></tr>`;
+  totalsSections += `<tr><td>Starship/Tanker flight</td><td>${costs.costPerLaunchMillionUSD}</td></tr>`;
+  totalsSections += `<tr><td>Satellite</td><td>${costs.costPerSatelliteMillionUSD}</td></tr>`;
+  totalsSections += `<tr><td>Laser port</td><td>${costs.costPerLaserTerminalMillionUSD}</td></tr>`;
   totalsSections += `</table>`;
 
   totalsSections += `</div>`;

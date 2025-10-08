@@ -1,6 +1,6 @@
 // simDeployment.js
 
-import { calculateHohmannDeltaV_km_s } from "./simDeltaV.js?v=2.4";
+import { calculateHohmannDeltaV_km_s } from "./simDeltaV.js?v=4.0";
 
 // Define the Starship performance data, including booster data
 const starshipPerformance = {
@@ -91,6 +91,19 @@ export class SimDeployment {
     }
     this.variant = variant;
     this.starship = starshipPerformance[variant];
+
+    // Default satellite masses
+    this.satelliteEmptyMass = 1000; // kg
+    this.laserTerminalMass = 50; // kg
+    this.laserPortsPerSatellite = 4;
+  }
+
+  setSatelliteMassConfig(emptyMass, laserTerminalMass, laserPorts) {
+    this.satelliteEmptyMass = emptyMass;
+    this.laserTerminalMass = laserTerminalMass;
+    this.laserPortsPerSatellite = laserPorts;
+    // Update the vehicle properties
+    this.vehicleProperties.satellite.dryMass_kg = this.satelliteEmptyMass + this.laserPortsPerSatellite * this.laserTerminalMass;
   }
 
   /**

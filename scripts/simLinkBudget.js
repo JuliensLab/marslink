@@ -14,17 +14,12 @@ export class SimLinkBudget {
     this.calctimeMs = technologyConfig["simulation.calctimeSec"] * 1000;
     this.maxLinksPerSatellite = technologyConfig["capability.laser-ports-per-satellite"];
 
-    const currentTelescopeDiameterM = 0.1;
-    const telescopeAreaImprovement = (technologyConfig["technology_improvement.telescope-area-improvement"] = Math.pow(
-      technologyConfig["technology_improvement.telescope-diameter-m"] / currentTelescopeDiameterM,
-      2
-    ));
+    this.techImprovementFactor = Math.pow(2, technologyConfig["technology_improvement.improvement-factor"] - 1);
+    console.log("this.techImprovementFactor", this.techImprovementFactor);
+  }
 
-    this.techImprovementFactor =
-      telescopeAreaImprovement *
-      technologyConfig["technology_improvement.receiver-sensitivity-improvement"] *
-      technologyConfig["technology_improvement.transmitter-power-improvement"] *
-      technologyConfig["technology_improvement.efficiency-improvement"];
+  convertAUtoKM(AU) {
+    return AU * this.AU_IN_KM;
   }
 
   // Function to calculate Gbps capacity based on distance
