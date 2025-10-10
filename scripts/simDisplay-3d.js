@@ -1,12 +1,12 @@
 // simDisplay-3d.js
 
 import * as THREE from "three";
-import { OrbitControls } from "three/addons/controls/OrbitControls.js?v=4.1";
-import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js?v=4.1";
-import { RenderPass } from "three/addons/postprocessing/RenderPass.js?v=4.1";
-import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js?v=4.1";
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.1";
-import { createCarModel } from "./modelCar.js?v=4.1";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js?v=4.3";
+import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js?v=4.3";
+import { RenderPass } from "three/addons/postprocessing/RenderPass.js?v=4.3";
+import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js?v=4.3";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.3";
+import { createCarModel } from "./modelCar.js?v=4.3";
 
 /**
  * Converts astronomical units (AU) to 3D units using a scale factor.
@@ -390,34 +390,63 @@ export class SimDisplay {
     // Combine all links
     const allLinks = [...this.activeLinks, ...inactiveLinks];
 
-    const numLinks = allLinks.length;
+    // Filter to only links with valid positions
+    const validLinks = allLinks.filter((link) => {
+      const fromPosition = this.planetPositions[link.fromId] || this.satellitePositions[link.fromId];
+      const toPosition = this.planetPositions[link.toId] || this.satellitePositions[link.toId];
+      return (
+        fromPosition &&
+        toPosition &&
+        !isNaN(fromPosition.x) &&
+        !isNaN(fromPosition.y) &&
+        !isNaN(fromPosition.z) &&
+        !isNaN(toPosition.x) &&
+        !isNaN(toPosition.y) &&
+        !isNaN(toPosition.z)
+      );
+    });
+
+    const numLinks = validLinks.length;
     const positions = new Float32Array(numLinks * 2 * 3);
     const colors = new Float32Array(numLinks * 2 * 3);
 
     // Calculate min and max flow for color mapping (for active links only)
     let flows = [];
-    if (this.linksColorsType === "actual") flows = this.activeLinks.map((link) => link.gbpsFlowActual);
-    else if (this.linksColorsType === "capacity") flows = allLinks.map((link) => link.gbpsCapacity);
+    if (this.linksColorsType === "actual") {
+      flows = this.activeLinks
+        .filter((link) => {
+          const fromPosition = this.planetPositions[link.fromId] || this.satellitePositions[link.fromId];
+          const toPosition = this.planetPositions[link.toId] || this.satellitePositions[link.toId];
+          return (
+            fromPosition &&
+            toPosition &&
+            !isNaN(fromPosition.x) &&
+            !isNaN(fromPosition.y) &&
+            !isNaN(fromPosition.z) &&
+            !isNaN(toPosition.x) &&
+            !isNaN(toPosition.y) &&
+            !isNaN(toPosition.z)
+          );
+        })
+        .map((link) => link.gbpsFlowActual);
+    } else if (this.linksColorsType === "capacity") {
+      flows = validLinks.map((link) => link.gbpsCapacity);
+    }
 
-    const maxFlow = Math.max(...flows);
-    const minFlow = Math.min(...flows);
+    const maxFlow = flows.length > 0 ? Math.max(...flows) : 1;
+    const minFlow = flows.length > 0 ? Math.min(...flows) : 0;
 
     // const maxFlow = this.styles.links.active.gbpsmax;
     // const minFlow = this.styles.links.active.gbpsmin;
     // console.log(this.linksColorsType, maxFlow, minFlow);
 
     for (let i = 0; i < numLinks; i++) {
-      const link = allLinks[i];
+      const link = validLinks[i];
       const isActive = activeLinkSet.has(link.fromId + "_" + link.toId);
 
       // Get 'from' and 'to' positions
       const fromPosition = this.planetPositions[link.fromId] || this.satellitePositions[link.fromId];
       const toPosition = this.planetPositions[link.toId] || this.satellitePositions[link.toId];
-
-      if (!fromPosition || !toPosition) {
-        console.warn(`Cannot find positions for link between "${link.fromId}" and "${link.toId}"`);
-        continue;
-      }
 
       // Set positions
       positions[i * 6] = fromPosition.x;

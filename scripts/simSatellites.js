@@ -1,6 +1,6 @@
 // simSatellites.js
 
-import { helioCoords } from "./simOrbits.js?v=4.1";
+import { helioCoords } from "./simOrbits.js?v=4.3";
 
 export class SimSatellites {
   constructor(simLinkBudget) {
@@ -99,32 +99,32 @@ export class SimSatellites {
         let perInterringLinkMbps = gradientOneSideStartMbps ? gradientOneSideStartMbps / (satCountIfFullRing / 2) : null;
         let requiredThroughputMbps = gradientOneSideStartMbps;
 
-        console.log(
-          ringType,
-          "satCountOneSide",
-          satCountOneSide,
-          "satCountIfFullRing",
-          satCountIfFullRing,
-          "orbitCircumferenceKm",
-          orbitCircumferenceKm,
-          "sideExtensionDeg",
-          sideExtensionDeg,
-          "longIncrement",
-          longIncrement,
-          "gradientOneSideStartMbps",
-          gradientOneSideStartMbps,
-          "inringAvgDistKm",
-          inringAvgDistKm,
-          "inringAvgMbps",
-          inringAvgMbps,
-          "requiredThroughputMbps",
-          requiredThroughputMbps
-        );
+        // console.log(
+        //   ringType,
+        //   "satCountOneSide",
+        //   satCountOneSide,
+        //   "satCountIfFullRing",
+        //   satCountIfFullRing,
+        //   "orbitCircumferenceKm",
+        //   orbitCircumferenceKm,
+        //   "sideExtensionDeg",
+        //   sideExtensionDeg,
+        //   "longIncrement",
+        //   longIncrement,
+        //   "gradientOneSideStartMbps",
+        //   gradientOneSideStartMbps,
+        //   "inringAvgDistKm",
+        //   inringAvgDistKm,
+        //   "inringAvgMbps",
+        //   inringAvgMbps,
+        //   "requiredThroughputMbps",
+        //   requiredThroughputMbps
+        // );
 
         let satId = 0;
         let longiDeg = 0;
         while (longiDeg < sideExtensionDeg - longIncrement) {
-          console.log("longiDeg", longiDeg, "sideExtensionDeg", sideExtensionDeg);
+          // console.log("longiDeg", longiDeg, "sideExtensionDeg", sideExtensionDeg);
           // calculate next distance
           const nextDistKm = this.calculateKm(requiredThroughputMbps / 1000);
           // convert to degrees
@@ -132,16 +132,16 @@ export class SimSatellites {
           const selectedIncrement = Math.min(longIncrementGradient, longIncrement);
           longiDeg += selectedIncrement;
 
-          console.log(
-            "nextDistKm",
-            nextDistKm,
-            "longIncrementGradient",
-            longIncrementGradient,
-            "selectedIncrement",
-            selectedIncrement,
-            "longiDeg",
-            longiDeg
-          );
+          // console.log(
+          //   "nextDistKm",
+          //   nextDistKm,
+          //   "longIncrementGradient",
+          //   longIncrementGradient,
+          //   "selectedIncrement",
+          //   selectedIncrement,
+          //   "longiDeg",
+          //   longiDeg
+          // );
 
           satellites.push(
             this.generateSatellite(
@@ -181,11 +181,11 @@ export class SimSatellites {
         }
 
         while (longiDeg < sideExtensionDeg - longIncrement) {
-          console.log("longiDeg", longiDeg, "sideExtensionDeg", sideExtensionDeg);
+          // console.log("longiDeg", longiDeg, "sideExtensionDeg", sideExtensionDeg);
           const selectedIncrement = longIncrement;
           longiDeg += selectedIncrement;
 
-          console.log("selectedIncrement", selectedIncrement, "longiDeg", longiDeg);
+          // console.log("selectedIncrement", selectedIncrement, "longiDeg", longiDeg);
 
           satellites.push(
             this.generateSatellite(

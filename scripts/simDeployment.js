@@ -1,6 +1,6 @@
 // simDeployment.js
 
-import { calculateHohmannDeltaV_km_s } from "./simDeltaV.js?v=4.1";
+import { calculateHohmannDeltaV_km_s } from "./simDeltaV.js?v=4.3";
 
 // Define the Starship performance data, including booster data
 const starshipPerformance = {

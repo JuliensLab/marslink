@@ -1,5 +1,5 @@
 // simUi.js
-import { slidersData } from "./slidersData.js?v=4.1";
+import { slidersData } from "./slidersData.js?v=4.3";
 
 export class SimUi {
   constructor(simMain) {
@@ -37,6 +37,7 @@ export class SimUi {
         "ring_earth",
       ])
     );
+    console.log("Initial satellitesConfig set, improvement-factor:", this.simMain.satellitesConfig ? this.simMain.satellitesConfig["technology_improvement.improvement-factor"] : "not set yet");
     // Set the initial display type
     const linksColors = this.slidersData.simulation["links-colors"].value;
     this.simMain.setLinksColors(linksColors);
@@ -67,11 +68,16 @@ export class SimUi {
     collapsibleContent.style.marginTop = "10px";
 
     // Load saved parameters from localStorage or use defaults
+    const savedImprovementScores = localStorage.getItem("fullRunImprovementScores") || "256,512,1024";
     const savedDates = localStorage.getItem("fullRunDates") || "2034-08-19,2027-02-19";
-    const savedRingCounts = localStorage.getItem("fullRunRingCounts") || "2,4,6,8,10";
-    const savedMbps = localStorage.getItem("fullRunMbps") || "10,25,50,100,200";
+    const savedRingCounts = localStorage.getItem("fullRunRingCounts") || "2,3,4,5,6";
+    const savedMbps = localStorage.getItem("fullRunMbps") || "25,50,100";
 
     collapsibleContent.innerHTML = `
+       <div style="margin-bottom: 10px;">
+        <label>Improvement Scores (comma-separated): </label>
+        <input type="text" id="fullRunImprovementScores" value="${savedImprovementScores}" style="width: 300px;">
+      </div>
       <div style="margin-bottom: 10px;">
         <label>Dates (yyyy-mm-dd, comma-separated): </label>
         <input type="text" id="fullRunDates" value="${savedDates}" style="width: 300px;">
@@ -84,6 +90,7 @@ export class SimUi {
         <label>In-ring Mbps (comma-separated): </label>
         <input type="text" id="fullRunMbps" value="${savedMbps}" style="width: 300px;">
       </div>
+    
     `;
 
     collapsibleHeader.addEventListener("click", () => {
@@ -107,14 +114,16 @@ export class SimUi {
       const datesInput = document.getElementById("fullRunDates").value;
       const ringCountsInput = document.getElementById("fullRunRingCounts").value;
       const mbpsInput = document.getElementById("fullRunMbps").value;
+      const improvementScoresInput = document.getElementById("fullRunImprovementScores").value;
 
       localStorage.setItem("fullRunDates", datesInput);
       localStorage.setItem("fullRunRingCounts", ringCountsInput);
       localStorage.setItem("fullRunMbps", mbpsInput);
+      localStorage.setItem("fullRunImprovementScores", improvementScoresInput);
     };
 
     // Save on blur (when user clicks away) and Enter key press
-    ["fullRunDates", "fullRunRingCounts", "fullRunMbps"].forEach((id) => {
+    ["fullRunDates", "fullRunRingCounts", "fullRunMbps", "fullRunImprovementScores"].forEach((id) => {
       const input = document.getElementById(id);
       input.addEventListener("blur", saveParameters);
       input.addEventListener("keydown", (e) => {
@@ -186,8 +195,11 @@ export class SimUi {
           const mbpsInput = document.getElementById("fullRunMbps").value;
           const throughputs = mbpsInput.split(",").map((m) => parseInt(m.trim()));
 
+          const improvementScoresInput = document.getElementById("fullRunImprovementScores").value;
+          const improvementScores = improvementScoresInput.split(",").map((s) => parseFloat(s.trim()));
+
           // Calculate total number of scenarios for progress tracking
-          const totalScenarios = dates.length * ringCounts.length * throughputs.length;
+          const totalScenarios = dates.length * ringCounts.length * throughputs.length * improvementScores.length;
           let completedScenarios = 0;
 
           // Get base configuration (excluding overridden parameters)
@@ -195,7 +207,6 @@ export class SimUi {
             "capability",
             "simulation",
             "current_technology_performance",
-            "technology_improvement",
             "ring_mars",
             "circular_rings",
             "eccentric_rings",
@@ -208,13 +219,13 @@ export class SimUi {
           delete baseConfig["circular_rings.requiredmbpsbetweensats"];
           delete baseConfig["eccentric_rings.ringcount"];
           delete baseConfig["simulation.calctimeSec"];
+          delete baseConfig["technology_improvement.improvement-factor"];
 
           // Initialize satellitesConfig
           const satellitesConfig = this.getGroupsConfig([
             "capability",
             "simulation",
             "current_technology_performance",
-            "technology_improvement",
             "ring_mars",
             "circular_rings",
             "eccentric_rings",
@@ -223,43 +234,49 @@ export class SimUi {
 
           const resultArray = [];
 
-          // Iterate over each combination of ringCount, throughput, and date
-          for (const ringCount of ringCounts) {
-            for (const throughput of throughputs) {
-              for (const date of dates) {
-                // Update satellitesConfig with current scenario parameters
-                satellitesConfig["circular_rings.ringcount"] = ringCount;
-                satellitesConfig["circular_rings.requiredmbpsbetweensats"] = throughput;
-                satellitesConfig["eccentric_rings.ringcount"] = 0;
-                satellitesConfig["simulation.calctimeSec"] = 100; // No limit
+          // Iterate over each combination of improvementScore, ringCount, throughput, and date
+          for (const improvementScore of improvementScores) {
+            for (const ringCount of ringCounts) {
+              for (const throughput of throughputs) {
+                for (const date of dates) {
+                  // Update satellitesConfig with current scenario parameters
+                  satellitesConfig["circular_rings.ringcount"] = ringCount;
+                  satellitesConfig["circular_rings.requiredmbpsbetweensats"] = throughput;
+                  satellitesConfig["eccentric_rings.ringcount"] = 0;
+                  satellitesConfig["simulation.calctimeSec"] = 100; // No limit
+                  satellitesConfig["technology_improvement.improvement-factor"] = Math.log2(improvementScore) + 1;
+                  console.log("Setting improvement-factor in full run:", satellitesConfig["technology_improvement.improvement-factor"], "for improvementScore:", improvementScore);
+                  console.log("////", "improvementScore", improvementScore, satellitesConfig["technology_improvement.improvement-factor"]);
+                  console.log("Running simulation with config:", satellitesConfig);
 
-                // Set simTime to the date for deployment
-                const originalSimTime = this.simMain.simTime.getDate();
-                const targetDate = new Date(date);
-                this.simMain.simTime.simMsSinceStart = targetDate.getTime() - this.simMain.simTime.initDate.getTime();
-                this.simMain.simTime.previousRealMs = performance.now();
+                  // Set simTime to the date for deployment
+                  const originalSimTime = this.simMain.simTime.getDate();
+                  const targetDate = new Date(date);
+                  this.simMain.simTime.simMsSinceStart = targetDate.getTime() - this.simMain.simTime.initDate.getTime();
+                  this.simMain.simTime.previousRealMs = performance.now();
 
-                // Apply the new satellites configuration
-                this.simMain.setSatellitesConfig(satellitesConfig);
+                  // Apply the new satellites configuration
+                  this.simMain.setSatellitesConfig(satellitesConfig);
 
-                // Run the simulation for the specific date
-                const result = await this.simMain.longTermRun({ from: date, to: date, stepDays: 1 });
+                  // Run the simulation for the specific date
+                  const result = await this.simMain.longTermRun({ from: date, to: date, stepDays: 1 });
 
-                // Restore original simTime and update display
-                this.simMain.simTime.simMsSinceStart = originalSimTime.getTime() - this.simMain.simTime.initDate.getTime();
-                this.simMain.simTime.previousRealMs = performance.now();
-                this.simMain.updateLoop();
+                  // Restore original simTime and update display
+                  this.simMain.simTime.simMsSinceStart = originalSimTime.getTime() - this.simMain.simTime.initDate.getTime();
+                  this.simMain.simTime.previousRealMs = performance.now();
+                  this.simMain.updateLoop();
 
-                result.scenario = { date, ringCount, throughputMbps: throughput };
-                // Push the result to the resultArray
-                resultArray.push(result);
+                  result.scenario = { date, ringCount, throughputMbps: throughput, improvementScore };
+                  // Push the result to the resultArray
+                  resultArray.push(result);
 
-                // Update progress
-                completedScenarios++;
-                const overallProgress = completedScenarios / totalScenarios;
-                const percent = Math.round(overallProgress * 100);
-                progressBar.style.width = `${percent}%`;
-                progressText.textContent = `Progress: ${percent}%`;
+                  // Update progress
+                  completedScenarios++;
+                  const overallProgress = completedScenarios / totalScenarios;
+                  const percent = Math.round(overallProgress * 100);
+                  progressBar.style.width = `${percent}%`;
+                  progressText.textContent = `Progress: ${percent}%`;
+                }
               }
             }
           }
@@ -390,12 +407,40 @@ export class SimUi {
         }
 
         const savedValue = localStorage.getItem(fullSliderId);
+        let validSavedValue = savedValue;
+        if (savedValue !== null) {
+          if (slider.type === "select" || slider.type === "dropdown" || slider.type === "radio") {
+            if (!slider.options || !slider.options.includes(savedValue)) {
+              validSavedValue = null;
+            }
+          } else {
+            const num = parseFloat(savedValue);
+            if (isNaN(num)) {
+              validSavedValue = null;
+            } else if (slider.scale === "pow2" || slider.scale === "pow10") {
+              if (!Number.isInteger(num) || num < min || num > max) {
+                validSavedValue = null;
+              }
+            } else {
+              if (num < min || num > max) {
+                validSavedValue = null;
+              }
+            }
+          }
+          if (validSavedValue === null && fullSliderId === "technology_improvement.improvement-factor") {
+            console.log("Invalid saved value for improvement-factor:", savedValue, "resetting to default");
+          }
+        }
         let sliderValue =
-          savedValue !== null
+          validSavedValue !== null
             ? slider.type === "select" || slider.type === "dropdown" || slider.type === "radio"
-              ? savedValue
-              : parseFloat(savedValue)
+              ? validSavedValue
+              : parseFloat(validSavedValue)
             : slider.value;
+
+        if (fullSliderId === "technology_improvement.improvement-factor") {
+          console.log("Creating slider for improvement-factor, savedValue:", savedValue, "validSavedValue:", validSavedValue, "sliderValue:", sliderValue, "slider.value from data:", slider.value);
+        }
 
         const sliderContainer = document.createElement("div");
         sliderContainer.className = "slider-container";
@@ -491,16 +536,33 @@ export class SimUi {
             this.updateValues(fullSliderId, newValue);
           });
         } else if (slider.type !== "radio") {
-          input.addEventListener("input", () => {
-            let newValue = parseFloat(input.value);
-            let displayValue = this.mapSliderValueToUserFacing(slider, newValue);
-            valueSpan.textContent = this.formatNumber(displayValue) + slider.unit;
-            this.updateValues(fullSliderId, newValue);
-          });
+          if (fullSliderId === "simulation.calctimeSec") {
+            // For calctimeSec, update display on input, but update value only on change (release)
+            input.addEventListener("input", () => {
+              let newValue = parseFloat(input.value);
+              let displayValue = this.mapSliderValueToUserFacing(slider, newValue);
+              valueSpan.textContent = this.formatNumber(displayValue) + slider.unit;
+            });
+            input.addEventListener("change", () => {
+              let newValue = parseFloat(input.value);
+              this.updateValues(fullSliderId, newValue);
+            });
+          } else {
+            input.addEventListener("input", () => {
+              let newValue = parseFloat(input.value);
+              let displayValue = this.mapSliderValueToUserFacing(slider, newValue);
+              valueSpan.textContent = this.formatNumber(displayValue) + slider.unit;
+              this.updateValues(fullSliderId, newValue);
+            });
+          }
         }
 
         slider.value =
           slider.type === "select" || slider.type === "dropdown" || slider.type === "radio" ? sliderValue : parseFloat(sliderValue);
+
+        if (fullSliderId === "technology_improvement.improvement-factor") {
+          console.log("After setting slider.value for improvement-factor:", slider.value);
+        }
       }
     }
 
@@ -555,11 +617,14 @@ export class SimUi {
         case "current_technology_performance.current-throughput-gbps":
         case "current_technology_performance.current-distance-km":
         case "technology_improvement.improvement-factor":
+          if (sliderId === "technology_improvement.improvement-factor") {
+            console.log("Dispatching update for improvement-factor, newValue:", newValue);
+          }
         case "capability.laser-ports-per-satellite":
         case "capability.satellite-empty-mass":
         case "capability.laser-terminal-mass":
         case "simulation.maxDistanceAU":
-        case "simulation.calctimeMs":
+        case "simulation.calctimeSec":
         case "simulation.failed-satellites-slider":
         case "ring_mars.match-circular-rings":
         case "ring_mars.side-extension-degrees-slider":
@@ -613,6 +678,10 @@ export class SimUi {
         // Safely access the value, defaulting to sliderData.value if undefined
         const value =
           this.sliders?.[categoryKey]?.[sliderKey]?.value !== undefined ? this.sliders[categoryKey][sliderKey].value : sliderData.value;
+
+        if (categoryKey === "technology_improvement" && sliderKey === "improvement-factor") {
+          console.log("Getting config for improvement-factor, value:", value, "from sliders:", this.sliders?.[categoryKey]?.[sliderKey]?.value, "from data:", sliderData.value);
+        }
 
         // Check the type from slidersData to determine how to handle the value
         if (sliderData.type === "radio" || typeof sliderData.value === "string") {

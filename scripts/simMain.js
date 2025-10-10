@@ -1,17 +1,17 @@
 // simMain.js
 
-import { SimUi } from "./simUi.js?v=4.1";
-import { SimTime } from "./simTime.js?v=4.1";
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.1";
-import { SimSatellites } from "./simSatellites.js?v=4.1";
-import { SimDeployment } from "./simDeployment.js?v=4.1";
-import { SimMissionValidator } from "./simMissionValidator.js?v=4.1";
-import { SimLinkBudget } from "./simLinkBudget.js?v=4.1";
-import { SimNetwork } from "./simNetwork.js?v=4.1";
+import { SimUi } from "./simUi.js?v=4.3";
+import { SimTime } from "./simTime.js?v=4.3";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.3";
+import { SimSatellites } from "./simSatellites.js?v=4.3";
+import { SimDeployment } from "./simDeployment.js?v=4.3";
+import { SimMissionValidator } from "./simMissionValidator.js?v=4.3";
+import { SimLinkBudget } from "./simLinkBudget.js?v=4.3";
+import { SimNetwork } from "./simNetwork.js?v=4.3";
 // Import both SimDisplay implementations with unique names
-import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=4.1";
-import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=4.1";
-import { generateReport } from "./reportGenerator.js?v=4.1";
+import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=4.3";
+import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=4.3";
+import { generateReport } from "./reportGenerator.js?v=4.3";
 
 export class SimMain {
   constructor() {
@@ -30,6 +30,8 @@ export class SimMain {
     // Do not instantiate simDisplay here; it will be set by setDisplayType
     this.simDisplay = null;
     this.linksColors = null;
+
+    this.previousCalctimeMs = this.simLinkBudget.calctimeMs;
 
     this.ui = new SimUi(this); // This will call initializeSimMain, setting simDisplay
 
@@ -206,9 +208,9 @@ export class SimMain {
         const throughputThisRingToNextMbpsOneSat = this.simLinkBudget.calculateGbps(distanceThisRingToNextKm) * 1000;
         const throughputThisRingToNextMbpsAllSats = throughputThisRingToNextMbpsOneSat * Math.min(satCount1, satCount2);
         const throughputOneSideOfPlanet = throughputThisRingToNextMbpsAllSats / 2;
-        console.log(throughputOneSideOfPlanet, gradientOneSideStartMbps);
+        // console.log(throughputOneSideOfPlanet, gradientOneSideStartMbps);
         if (throughputOneSideOfPlanet < gradientOneSideStartMbps) gradientOneSideStartMbps = Math.ceil(throughputOneSideOfPlanet);
-        console.log("chose mbps", gradientOneSideStartMbps);
+        // console.log("chose mbps", gradientOneSideStartMbps);
       }
     }
     if (
@@ -264,6 +266,10 @@ export class SimMain {
     const satellitesConfig = [];
 
     this.simLinkBudget.setTechnologyConfig(uiConfig);
+    if (this.simLinkBudget.calctimeMs !== this.previousCalctimeMs) {
+      this.requestLinksUpdate = true;
+      this.previousCalctimeMs = this.simLinkBudget.calctimeMs;
+    }
     this.simDeployment.setSatelliteMassConfig(
       uiConfig["capability.satellite-empty-mass"],
       uiConfig["capability.laser-terminal-mass"],
@@ -774,6 +780,7 @@ export class SimMain {
       // if (!new SimMissionValidator(this.missionProfiles)) throw new Error("Mission validation failed");
       satellites = this.simSatellites.updateSatellitesPositions(simDate);
       this.satellitesCount = satellites.length;
+      console.log("Total satellites on main page:", this.satellitesCount);
       const possibleLinks = this.simNetwork.getPossibleLinks(planets, satellites);
       this.capacityInfo = this.calculateCapacityInfo(possibleLinks);
       this.requestLinksUpdate = true;
@@ -1000,7 +1007,7 @@ export class SimMain {
       costPerLaserTerminalMillionUSD: this.costPerLaserTerminal,
       laserPortsPerSatellite: this.simLinkBudget.maxLinksPerSatellite,
     };
-    generateReport(this.missionProfiles, this.resultTrees, costs);
+    generateReport(this.missionProfiles, this.resultTrees, costs, this.simSatellites.satellites);
   }
 }
 // Initialize the simulation once the DOM is fully loaded

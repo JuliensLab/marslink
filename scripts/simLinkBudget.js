@@ -15,7 +15,7 @@ export class SimLinkBudget {
     this.maxLinksPerSatellite = technologyConfig["capability.laser-ports-per-satellite"];
 
     this.techImprovementFactor = Math.pow(2, technologyConfig["technology_improvement.improvement-factor"] - 1);
-    console.log("this.techImprovementFactor", this.techImprovementFactor);
+    console.log("//// this.techImprovementFactor", this.techImprovementFactor);
   }
 
   convertAUtoKM(AU) {
@@ -24,11 +24,13 @@ export class SimLinkBudget {
 
   // Function to calculate Gbps capacity based on distance
   calculateGbps(distanceKm) {
+    if (isNaN(distanceKm) || distanceKm <= 0) return 0;
     return this.techImprovementFactor * this.baseGbps * Math.pow(this.baseDistanceKm / distanceKm, 2);
   }
 
   // Function to calculate distance based on Gbps capacity
   calculateKm(gbps) {
+    if (gbps <= 0) return Infinity;
     return Math.round(this.baseDistanceKm * Math.sqrt((this.techImprovementFactor * this.baseGbps) / gbps));
   }
 
