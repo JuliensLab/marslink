@@ -1,5 +1,35 @@
 // simNetwork.js
-// alternating links between ring N+1 and ring N-1
+
+/*
+We need to rework this. We start over.
+
+Start with creating a function that checks if a satellite is between sun and earth orbit (SEO), between earth and mars orbits (EMO) or beyond Mars orbit (BMO).
+
+Create links between satellites of the same ring (one on either side), only if the number of laser terminals on the ring is > 2.
+
+Next, go through Earth ring satellites, and mark them all as out facing. Next, go through each Mars ring satellite, and mark them all as sun facing.
+Next, if the circular rings have exactly 3 laser terminals per satellite, then go through each cicular ring, go through each satellite, and mark every other as sun facing (the others as out facing).
+If circular rings have 2 or 4+ laser terminals per satellite, then mark all as out facing and sun facing (two ports dedicated to that, one for out facing and one for sun facing).
+We're assigning ports to satellites and keeping track of direction facing and used or not.
+Going through circular rings, we mark all satellites that are SEO or BMO as unused (for now at least).
+
+Then, we take the first circular ring (nearest to the sun). For each satellite, we check if it has unused sun facing ports. If so, we find the nearest satellite in the earth ring and mark the vpo range that is covered.
+The vpo range is: we look at the preceeding and following satellites in the same ring (which have sun facing ports, might be N+1 or N+2 (if 3 ports). If the N-1 (or N-2) sat has a vpo of 30 and the N+1 (or N+2) sat has a vpo of 50, 
+then the vpo range covered by our satellite is 35 to 45 (midpoint between neighbors). 
+We mark this range as covered. We connect this satellite to the nearest earth ring satellite (may use vpo to find it quickly, keep in mind its modulo 360).
+Any uncovered vpo range after exhausting all satellites of the first circular ring requires to move to the next circular ring. Once all vpo ranges are covered 
+(be careful about the value precision, we don't want 45.001 to be uncovered because of rounding errors), we move to the next step.
+After we achieve this part, we should have the earth ring connected to the sun facing satellites of the nearest out satellites.
+
+We do the same for Mars but in reverse. We start with the furthest circular ring from the sun, and connect its out facing satellites to Mars ring satellites.
+In all these steps, we ensure an out-facing port connects to a sun-facing port.
+
+Finally, we need to connect circular rings together. We take the ring that has the least number of satellites, and connect it to the nearest ring, using vpo to find the nearest satellite in the next ring.
+We keep going until all circular rings are connected. We don't need to connect SEO or BMO satellites (but we still want to have their intra-ring connections if more than 2 ports).
+
+
+
+*/
 
 export class SimNetwork {
   constructor(simLinkBudget) {
