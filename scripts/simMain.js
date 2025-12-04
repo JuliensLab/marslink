@@ -20,6 +20,7 @@ export class SimMain {
     this.newSatellitesConfig = null;
     this.requestLinksUpdate = false;
     this.configChanged = false;
+    this.displayChanged = false;
 
     // Initialize simulation components
     this.simTime = new SimTime();
@@ -73,6 +74,10 @@ export class SimMain {
   }
 
   setLinksColors(type) {
+    if (type === "actual" && this.linksColors !== "actual") {
+      this.displayChanged = true;
+      this.requestLinksUpdate = true;
+    }
     this.linksColors = type;
     if (this.simDisplay) this.simDisplay.setLinksColors(type);
   }
@@ -783,7 +788,7 @@ export class SimMain {
       this.simDisplay.updatePositions(planets, satellites);
       this.ui.updateSimTime(simDate);
 
-      if (this.linksColors === "actual" && (this.simLinkBudget.calctimeMs > 0 || this.configChanged)) {
+      if (this.linksColors === "actual" && (this.simLinkBudget.calctimeMs > 0 || this.configChanged || this.displayChanged)) {
         let perf = performance.now();
         const networkData = this.simNetwork.getNetworkData(planets, satellites, possibleLinks, this.simLinkBudget.calctimeMs);
         console.log(`Flow: ${Math.round(performance.now() - perf)} ms`);
@@ -805,6 +810,7 @@ export class SimMain {
       }
       this.requestLinksUpdate = false;
       this.configChanged = false;
+      this.displayChanged = false;
     } else {
       this.simDisplay.updatePositions(planets, satellites);
     }
