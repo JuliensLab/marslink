@@ -19,6 +19,7 @@ import { SIM_CONSTANTS } from "./simConstants.js";
 
 export let sunScaleFactor = SIM_CONSTANTS.SUN_SCALE_FACTOR;
 export let planetScaleFactor = SIM_CONSTANTS.PLANET_SCALE_FACTOR;
+export let satelliteScaleFactor = SIM_CONSTANTS.SATELLITE_SCALE_FACTOR;
 
 export function auTo3D(au) {
   return au;
@@ -53,6 +54,8 @@ export class SimDisplay {
     this.stopAnimation = false; // Flag to stop animation
     this.sunSizeFactor = 1;
     this.planetSizeFactor = 1;
+    this.satelliteSizeFactor = 1;
+    this.currentSatelliteScale = 1;
     // === Styles ===
     this.styles = {
       links: {
@@ -278,15 +281,18 @@ export class SimDisplay {
    * @param {number} sunFactor - Multiplier for sun size.
    * @param {number} planetsFactor - Multiplier for planets size.
    */
-  setSizeFactors(sunFactor, planetsFactor) {
+  setSizeFactors(sunFactor, planetsFactor, satellitesFactor) {
     const sunRatio = sunFactor / this.sunSizeFactor;
     const planetRatio = planetsFactor / this.planetSizeFactor;
+    const satelliteRatio = satellitesFactor / this.satelliteSizeFactor;
 
     this.sunSizeFactor = sunFactor;
     this.planetSizeFactor = planetsFactor;
+    this.satelliteSizeFactor = satellitesFactor;
 
     sunScaleFactor = SIM_CONSTANTS.SUN_SCALE_FACTOR * sunFactor;
     planetScaleFactor = SIM_CONSTANTS.PLANET_SCALE_FACTOR * planetsFactor;
+    satelliteScaleFactor = SIM_CONSTANTS.SATELLITE_SCALE_FACTOR * satellitesFactor;
 
     // Update existing meshes
     if (this.sunMesh) {
@@ -303,6 +309,12 @@ export class SimDisplay {
         }
       }
     }
+    // Update satellites geometry scale
+    if (this.satelliteMesh) {
+      const ratio = satelliteScaleFactor / this.currentSatelliteScale;
+      this.satelliteMesh.geometry.scale(ratio, ratio, ratio);
+      this.currentSatelliteScale = satelliteScaleFactor;
+    }
   }
 
   /**
@@ -318,7 +330,7 @@ export class SimDisplay {
 
     if (satellites.length === 0) return;
 
-    const scale = 0.002;
+    const scale = 0.0001;
     // Satellite geometry: Cylinder (adjust dimensions as needed)
     const geometry = new THREE.CylinderGeometry(
       scale, // Radius (top and bottom)
@@ -366,6 +378,9 @@ export class SimDisplay {
     // Add the instanced mesh to the scene
     this.satellitesGroup.add(instancedMesh);
     this.satelliteMesh = instancedMesh; // Save reference for later updates
+
+    // Initial scale is already applied to geometry
+    this.currentSatelliteScale = 1;
   }
 
   /**
@@ -595,8 +610,8 @@ export class SimDisplay {
     });
     this.linkLabels = [];
 
-    // Only show labels when 'L' key is pressed
-    if (!this.showLinkLabels) return;
+    // Only show labels when 'L' key is pressed and display flow is not 'none'
+    if (!this.showLinkLabels || this.linksColorsType === "none") return;
 
     validLinks.forEach((link) => {
       const fromPosition = this.planetPositions[link.fromId] || this.satellitePositions[link.fromId];
@@ -625,8 +640,14 @@ export class SimDisplay {
       if (screenDist > 50) {
         // Create label at midpoint
         const midPoint = new THREE.Vector3().addVectors(fromPos, toPos).multiplyScalar(0.5);
-        const capacityMbps = Math.round(link.gbpsCapacity * 1000); // Convert Gbps to Mbps
-        const label = this.createTextSprite(`${capacityMbps}`);
+        // Determine display value based on linksColorsType
+        let displayMbps = 0;
+        if (this.linksColorsType === "actual") {
+          displayMbps = Math.round(link.gbpsFlowActual * 1000);
+        } else if (this.linksColorsType === "capacity") {
+          displayMbps = Math.round(link.gbpsCapacity * 1000);
+        }
+        const label = this.createTextSprite(`${displayMbps}`);
         label.position.copy(midPoint);
         this.linkLabelsGroup.add(label);
         this.linkLabels.push(label);

@@ -3,7 +3,7 @@
 import { SIM_CONSTANTS } from "./simConstants.js";
 
 export const slidersData = {
-  simulation: {
+  display: {
     "display-type": {
       type: "radio",
       label: "Display Type",
@@ -18,20 +18,10 @@ export const slidersData = {
       value: "actual", // Default to 3D
       unit: "",
     },
-    "time-acceleration-slider": {
-      label: "Time Acceleration",
-      min: -Math.pow(2, 25),
-      max: Math.pow(2, 25),
-      value: 1,
-      unit: "",
-      scale: "pow2",
-      steps: 51,
-      updateLongTermScore: false,
-    },
     "sun-size-factor": {
       label: "Sun Size Factor",
-      min: 1,
-      max: 11,
+      min: 0,
+      max: 10,
       value: 6,
       unit: "x",
       scale: "pow2",
@@ -40,12 +30,34 @@ export const slidersData = {
     },
     "planets-size-factor": {
       label: "Planets Size Factor",
-      min: 1,
-      max: 11,
+      min: 0,
+      max: 10,
       value: 9,
       unit: "x",
       scale: "pow2",
       steps: 11,
+      updateLongTermScore: false,
+    },
+    "satellite-size-factor": {
+      label: "Satellite Size Factor",
+      min: 0,
+      max: 10,
+      value: 3,
+      unit: "x",
+      scale: "pow2",
+      steps: 11,
+      updateLongTermScore: false,
+    },
+  },
+  simulation: {
+    "time-acceleration-slider": {
+      label: "Time Acceleration",
+      min: -Math.pow(2, 25),
+      max: Math.pow(2, 25),
+      value: 1,
+      unit: "",
+      scale: "pow2",
+      steps: 51,
       updateLongTermScore: false,
     },
     // "failed-satellites-slider": {
@@ -136,7 +148,7 @@ export const slidersData = {
   },
   laser_technology: {
     "current-throughput-gbps": {
-      label: "Today's throughput",
+      label: "Baseline throughput",
       min: 1,
       max: 999,
       value: SIM_CONSTANTS.DEFAULT_BASE_GBPS,
@@ -146,7 +158,7 @@ export const slidersData = {
       updateLongTermScore: true,
     },
     "current-distance-km": {
-      label: "Today's distance",
+      label: "Baseline distance",
       min: 100,
       max: 10000,
       value: SIM_CONSTANTS.DEFAULT_BASE_DISTANCE_KM,
@@ -165,16 +177,6 @@ export const slidersData = {
       steps: 21,
       updateLongTermScore: true,
     },
-    "laser-ports-per-satellite": {
-      label: "Laser Terminals per Satellite",
-      min: 2,
-      max: 10,
-      value: 4,
-      step: 1,
-      unit: " ports",
-      scale: "linear",
-      updateLongTermScore: true,
-    },
     "laser-terminal-mass": {
       label: "Laser Terminal Mass",
       min: 10,
@@ -187,6 +189,16 @@ export const slidersData = {
     },
   },
   ring_earth: {
+    "laser-ports-per-satellite": {
+      label: "Laser Terminals per Satellite",
+      min: 2,
+      max: 10,
+      value: 3,
+      step: 1,
+      unit: " ports",
+      scale: "linear",
+      updateLongTermScore: true,
+    },
     "side-extension-degrees-slider": {
       label: "Side extension",
       min: 0,
@@ -217,6 +229,16 @@ export const slidersData = {
     },
   },
   ring_mars: {
+    "laser-ports-per-satellite": {
+      label: "Laser Terminals per Satellite",
+      min: 2,
+      max: 10,
+      value: 3,
+      step: 1,
+      unit: " ports",
+      scale: "linear",
+      updateLongTermScore: true,
+    },
     "side-extension-degrees-slider": {
       label: "Side extension",
       min: 0,
@@ -247,6 +269,16 @@ export const slidersData = {
     },
   },
   circular_rings: {
+    "laser-ports-per-satellite": {
+      label: "Laser Terminals per Satellite",
+      min: 2,
+      max: 10,
+      value: 4,
+      step: 1,
+      unit: " ports",
+      scale: "linear",
+      updateLongTermScore: true,
+    },
     ringcount: {
       label: "Ring count",
       min: 0,
@@ -309,6 +341,16 @@ export const slidersData = {
     },
   },
   eccentric_rings: {
+    "laser-ports-per-satellite": {
+      label: "Laser Terminals per Satellite",
+      min: 2,
+      max: 10,
+      value: 4,
+      step: 1,
+      unit: " ports",
+      scale: "linear",
+      updateLongTermScore: true,
+    },
     ringcount: {
       label: "Ring count",
       min: 0,

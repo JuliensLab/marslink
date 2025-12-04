@@ -98,12 +98,25 @@ export class SimDeployment {
     this.laserPortsPerSatellite = 4;
   }
 
-  setSatelliteMassConfig(emptyMass, laserTerminalMass, laserPorts) {
+  setSatelliteMassConfig(emptyMass, laserTerminalMass, ringPorts) {
     this.satelliteEmptyMass = emptyMass;
     this.laserTerminalMass = laserTerminalMass;
-    this.laserPortsPerSatellite = laserPorts;
-    // Update the vehicle properties
-    this.vehicleProperties.satellite.dryMass_kg = this.satelliteEmptyMass + this.laserPortsPerSatellite * this.laserTerminalMass;
+    this.dryMasses = {
+      ring_earth: emptyMass + ringPorts.ring_earth * laserTerminalMass,
+      ring_mars: emptyMass + ringPorts.ring_mars * laserTerminalMass,
+      circular_rings: emptyMass + ringPorts.circular_rings * laserTerminalMass,
+      eccentric_rings: emptyMass + ringPorts.eccentric_rings * laserTerminalMass,
+    };
+    // Update the vehicle properties to the maximum dry mass for compatibility
+    this.vehicleProperties.satellite.dryMass_kg = Math.max(...Object.values(this.dryMasses));
+  }
+
+  getDryMassForRing(ringName) {
+    if (ringName === "ring_earth") return this.dryMasses.ring_earth;
+    if (ringName === "ring_mars") return this.dryMasses.ring_mars;
+    if (ringName.startsWith("ring_circ")) return this.dryMasses.circular_rings;
+    if (ringName.startsWith("ring_ecce")) return this.dryMasses.eccentric_rings;
+    return this.satelliteEmptyMass; // fallback
   }
 
   /**
@@ -525,7 +538,9 @@ export class SimDeployment {
 
     const solarPanelMass_kg =
       this.vehicleProperties.satellite.solarPanelMass_EarthOrbit_kg * Math.pow(targetOrbitElements.apsides.apo_pctEarth, 2);
-    this.addVehicle(vehicles, "Satellites", this.vehicleProperties.satellite, solarPanelMass_kg);
+    const baseDryMass = this.getDryMassForRing(targetOrbitElements.ringName);
+    const satelliteProps = { ...this.vehicleProperties.satellite, dryMass_kg: baseDryMass };
+    this.addVehicle(vehicles, "Satellites", satelliteProps, solarPanelMass_kg);
 
     // End-of-life deorbit back to Earth (responsible disposal)
     this.addDeorbitManeuver(vehicles, "Satellites", targetOrbitElements);

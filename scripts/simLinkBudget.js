@@ -18,6 +18,13 @@ export class SimLinkBudget {
     this.calctimeMs = technologyConfig["simulation.calctimeSec"] * 1000;
     this.maxLinksPerSatellite = technologyConfig["laser_technology.laser-ports-per-satellite"];
 
+    this.maxLinksPerRing = {
+      ring_earth: technologyConfig["ring_earth.laser-ports-per-satellite"],
+      ring_mars: technologyConfig["ring_mars.laser-ports-per-satellite"],
+      circular_rings: technologyConfig["circular_rings.laser-ports-per-satellite"],
+      eccentric_rings: technologyConfig["eccentric_rings.laser-ports-per-satellite"],
+    };
+
     this.techImprovementFactor = Math.pow(2, technologyConfig["laser_technology.improvement-factor"]);
     console.log("//// this.techImprovementFactor", this.techImprovementFactor);
   }
@@ -50,5 +57,14 @@ export class SimLinkBudget {
 
   getMaxLinksPerSatellite() {
     return this.maxLinksPerSatellite;
+  }
+
+  getMaxLinksPerRing(ringName) {
+    if (!ringName) return this.maxLinksPerSatellite;
+    if (ringName === "ring_earth") return this.maxLinksPerRing.ring_earth;
+    if (ringName === "ring_mars") return this.maxLinksPerRing.ring_mars;
+    if (ringName.startsWith("ring_circ")) return this.maxLinksPerRing.circular_rings;
+    if (ringName.startsWith("ring_ecce")) return this.maxLinksPerRing.eccentric_rings;
+    return this.maxLinksPerSatellite; // fallback
   }
 }

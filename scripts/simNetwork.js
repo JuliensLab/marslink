@@ -87,9 +87,7 @@ export class SimNetwork {
 
     const finalLinks = []; // Final list of links to return
 
-    console.log(`Satellites have ${this.simLinkBudget.maxLinksPerSatellite} ports each`);
-
-    if (this.simLinkBudget.maxLinksPerSatellite > 2) this.intraRing(rings, positions, linkCounts, finalLinks);
+    this.intraRing(rings, positions, linkCounts, finalLinks);
 
     this.marsEarthRings(rings, positions, linkCounts, finalLinks);
 
@@ -115,9 +113,12 @@ export class SimNetwork {
 
     // Iterate through each ring
     for (const [ringName, ringSatellites] of Object.entries(rings)) {
+      // Skip rings with satellites that have exactly 2 ports
+      if (this.simLinkBudget.getMaxLinksPerRing(ringName) === 2) continue;
+
       for (const satellite of ringSatellites) {
         // Early termination if satellite has reached max links
-        if (linkCounts[satellite.name] >= this.simLinkBudget.maxLinksPerSatellite) {
+        if (linkCounts[satellite.name] >= this.simLinkBudget.getMaxLinksPerRing(satellite.ringName)) {
           continue;
         }
 
@@ -126,7 +127,7 @@ export class SimNetwork {
           if (!positions[neighborName]) continue;
 
           // Early termination if neighbor has reached max links
-          if (linkCounts[neighborName] >= this.simLinkBudget.maxLinksPerSatellite) {
+          if (linkCounts[neighborName] >= this.simLinkBudget.getMaxLinksPerRing(satellite.ringName)) {
             continue;
           }
 
@@ -168,7 +169,7 @@ export class SimNetwork {
           linksAdded++;
 
           // Early termination if satellite has reached max links after adding
-          if (linkCounts[satellite.name] >= this.simLinkBudget.maxLinksPerSatellite) {
+          if (linkCounts[satellite.name] >= this.simLinkBudget.getMaxLinksPerRing(satellite.ringName)) {
             break; // Exit the neighbors loop for this satellite
           }
         }
@@ -272,7 +273,10 @@ export class SimNetwork {
       const toRing = link.toSatellite.ringName;
 
       // Check if satellites have reached maximum links
-      if (linkCounts[fromId] >= this.simLinkBudget.maxLinksPerSatellite || linkCounts[toId] >= this.simLinkBudget.maxLinksPerSatellite) {
+      if (
+        linkCounts[fromId] >= this.simLinkBudget.getMaxLinksPerRing(fromRing) ||
+        linkCounts[toId] >= this.simLinkBudget.getMaxLinksPerRing(toRing)
+      ) {
         continue;
       }
 
@@ -388,12 +392,13 @@ export class SimNetwork {
       sortedCurrentRingSatellites.forEach((currentSatellite, j) => {
         // Determine if this satellite should attempt to connect to the next ring
         let shouldConnectToNext = false;
-        if (i === 0 && this.simLinkBudget.maxLinksPerSatellite === 3) {
+        const maxLinks = this.simLinkBudget.getMaxLinksPerRing(currentSatellite.ringName);
+        if (i === 0 && maxLinks === 3) {
           // For the first ring with 3 ports, only odd satellites connect to n+1
           shouldConnectToNext = j % 2 === 1;
         } else {
           // For other rings or 4 ports, all satellites with ports available connect to n+1
-          shouldConnectToNext = linkCounts[currentSatellite.name] < this.simLinkBudget.maxLinksPerSatellite;
+          shouldConnectToNext = linkCounts[currentSatellite.name] < maxLinks;
         }
 
         if (!shouldConnectToNext) return;
@@ -430,7 +435,7 @@ export class SimNetwork {
           // Select the closest candidate that has ports available
           let targetSatellite = null;
           for (const candidate of candidates) {
-            if (linkCounts[candidate.satellite.name] < this.simLinkBudget.maxLinksPerSatellite) {
+            if (linkCounts[candidate.satellite.name] < this.simLinkBudget.getMaxLinksPerRing(candidate.satellite.ringName)) {
               targetSatellite = candidate;
               break;
             }
@@ -442,8 +447,8 @@ export class SimNetwork {
             if (distanceAU <= this.simLinkBudget.maxDistanceAU) {
               // Verify ports are still available before adding the link
               if (
-                linkCounts[currentSatellite.name] >= this.simLinkBudget.maxLinksPerSatellite ||
-                linkCounts[targetSatellite.satellite.name] >= this.simLinkBudget.maxLinksPerSatellite
+                linkCounts[currentSatellite.name] >= this.simLinkBudget.getMaxLinksPerRing(currentSatellite.ringName) ||
+                linkCounts[targetSatellite.satellite.name] >= this.simLinkBudget.getMaxLinksPerRing(targetSatellite.satellite.ringName)
               ) {
                 return;
               }
@@ -584,7 +589,7 @@ export class SimNetwork {
               }
 
               // Check if the target satellite already has too many connections
-              if (targetRingConnectionCounts[targetSat.name] >= this.simLinkBudget.maxLinksPerSatellite) {
+              if (targetRingConnectionCounts[targetSat.name] >= this.simLinkBudget.getMaxLinksPerRing(targetSat.ringName)) {
                 return;
               }
 
@@ -650,20 +655,22 @@ export class SimNetwork {
       if (existingLinks.has(linkKey)) return;
 
       // Check if 'fromId' is part of planetary rings and has reached its maximum of 2 links
-      const isFromPlanetaryRing = earthMarsRings.includes(
-        Object.keys(rings).find((ringName) => rings[ringName].some((sat) => sat.name === fromId))
-      );
+      const fromRing = Object.keys(rings).find((ringName) => rings[ringName].some((sat) => sat.name === fromId));
+      const isFromPlanetaryRing = earthMarsRings.includes(fromRing);
 
       if (isFromPlanetaryRing && linkCounts[fromId] >= maxConnectionsPerPlanetarySatellite) {
         return; // Skip if 'fromId' has reached its max links
       }
 
+      // Determine toRing
+      const toRing = toId === "Earth" ? "ring_earth" : "ring_mars";
+
       // Check if 'toId' has reached its maximum links as per simLinkBudget // marsEarthRings
-      if (linkCounts[toId] >= this.simLinkBudget.maxLinksPerSatellite) {
+      if (linkCounts[toId] >= this.simLinkBudget.getMaxLinksPerRing(toRing)) {
         return; // Skip if 'toId' has reached its max links
       }
-      // Check if 'toId' has reached its maximum links as per simLinkBudget // marsEarthRings
-      if (linkCounts[fromId] >= this.simLinkBudget.maxLinksPerSatellite - 1) {
+      // Check if 'fromId' has reached its maximum links as per simLinkBudget // marsEarthRings
+      if (linkCounts[fromId] >= this.simLinkBudget.getMaxLinksPerRing(fromRing) - 1) {
         return; // Skip if 'fromId' has reached its max links
       }
 

@@ -15,6 +15,7 @@ export const SIM_CONSTANTS = {
   // Display constants
   SUN_SCALE_FACTOR: 1,
   PLANET_SCALE_FACTOR: 1,
+  SATELLITE_SCALE_FACTOR: 1,
 
   // Solar system data
   SOLAR_SYSTEM_DATA: {

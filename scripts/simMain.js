@@ -19,6 +19,7 @@ export class SimMain {
     this.previousLinkUpdateSimDate = 0;
     this.newSatellitesConfig = null;
     this.requestLinksUpdate = false;
+    this.configChanged = false;
 
     // Initialize simulation components
     this.simTime = new SimTime();
@@ -32,6 +33,7 @@ export class SimMain {
     this.linksColors = null;
     this.sunSizeFactor = 1;
     this.planetsSizeFactor = 1;
+    this.satelliteSizeFactor = 1;
 
     this.previousCalctimeMs = this.simLinkBudget.calctimeMs;
 
@@ -93,7 +95,7 @@ export class SimMain {
   setSunSizeFactor(factor) {
     this.sunSizeFactor = factor;
     if (this.simDisplay && typeof this.simDisplay.setSizeFactors === "function") {
-      this.simDisplay.setSizeFactors(this.sunSizeFactor, this.otherObjectsSizeFactor);
+      this.simDisplay.setSizeFactors(this.sunSizeFactor, this.planetsSizeFactor, this.satelliteSizeFactor);
     }
   }
 
@@ -105,7 +107,19 @@ export class SimMain {
   setPlanetsSizeFactor(factor) {
     this.planetsSizeFactor = factor;
     if (this.simDisplay && typeof this.simDisplay.setSizeFactors === "function") {
-      this.simDisplay.setSizeFactors(this.sunSizeFactor, this.planetsSizeFactor);
+      this.simDisplay.setSizeFactors(this.sunSizeFactor, this.planetsSizeFactor, this.satelliteSizeFactor);
+    }
+  }
+
+  /**
+   * Sets the satellites size factor for the display.
+   *
+   * @param {number} factor - Multiplier for satellites size.
+   */
+  setSatelliteSizeFactor(factor) {
+    this.satelliteSizeFactor = factor;
+    if (this.simDisplay && typeof this.simDisplay.setSizeFactors === "function") {
+      this.simDisplay.setSizeFactors(this.sunSizeFactor, this.planetsSizeFactor, this.satelliteSizeFactor);
     }
   }
 
@@ -300,7 +314,12 @@ export class SimMain {
     this.simDeployment.setSatelliteMassConfig(
       uiConfig["economics.satellite-empty-mass"],
       uiConfig["laser_technology.laser-terminal-mass"],
-      uiConfig["laser_technology.laser-ports-per-satellite"]
+      {
+        ring_earth: uiConfig["ring_earth.laser-ports-per-satellite"],
+        ring_mars: uiConfig["ring_mars.laser-ports-per-satellite"],
+        circular_rings: uiConfig["circular_rings.laser-ports-per-satellite"],
+        eccentric_rings: uiConfig["eccentric_rings.laser-ports-per-satellite"],
+      }
     );
 
     this.simSatellites.setMaxSatCount(uiConfig["simulation.maxSatCount"]);
@@ -409,119 +428,51 @@ export class SimMain {
   }
 
   calculateCosts(maxFlowGbps, resultTrees) {
-    const satellitesCount = this.satellitesCount;
-    if (satellitesCount) {
-      // Calculate total deployment launches (Starship launches)
-      let launchCount = 0;
-      resultTrees.forEach((orbitTree) => {
-        launchCount += orbitTree.deploymentFlights_count;
-      });
-      const starshipCount = launchCount;
+    let totalSatellitesCount = 0;
+    let totalLaunchCount = 0;
+    let totalTankerCount = 0;
+    let totalLiftoffCount = 0;
+    let totalLaunchCost = 0;
+    let totalPropellantCost = 0;
+    let totalSatellitesCost = 0;
+    let totalLaserTerminalsCost = 0;
+    let propellantCostBreakdown = {};
 
-      // Recompute propellant usage per orbit, similar to generateReport
-      const orbits = {};
-      resultTrees.forEach((orbitTree) => {
-        orbits[orbitTree.ringName] = {
-          deploymentFlights_count: orbitTree.deploymentFlights_count,
-          satCountPerDeploymentFlight: orbitTree.satCountPerDeploymentFlight,
-          satCount: orbitTree.satCount,
-          propellant: {},
-        };
-        for (let data of Object.values(orbitTree.vehicles)) {
-          if (!Object.keys(orbits[orbitTree.ringName].propellant).includes(data.propellantType))
-            orbits[orbitTree.ringName].propellant[data.propellantType] = { selfPropulsion_kg: 0, tankerPropellant_kg: 0 };
-          orbits[orbitTree.ringName].propellant[data.propellantType].selfPropulsion_kg +=
-            (data.count ? data.count * data.propellantLoaded_kg : data.propellantLoaded_kg) * orbitTree.deploymentFlights_count;
-          orbits[orbitTree.ringName].propellant[data.propellantType].tankerPropellant_kg +=
-            (data.count ? data.count * data.tankerPropellant_kg : data.tankerPropellant_kg) * orbitTree.deploymentFlights_count;
-        }
-      });
-
-      // Calculate total tanker propellant mass
-      let total_tankerPropellant_kg = 0;
-      for (const orbitData of Object.values(orbits)) {
-        for (const propellantData of Object.values(orbitData.propellant)) {
-          total_tankerPropellant_kg += propellantData.tankerPropellant_kg;
+    for (const orbit of resultTrees) {
+      totalSatellitesCount += orbit.satellitesCount;
+      totalLaunchCount += orbit.launchCount;
+      totalTankerCount += orbit.tankerCount;
+      totalLiftoffCount += orbit.liftoffCount;
+      totalLaunchCost += orbit.launchCost;
+      totalPropellantCost += orbit.propellantCost;
+      totalSatellitesCost += orbit.satellitesCost;
+      totalLaserTerminalsCost += orbit.laserTerminalsCost;
+      if (orbit.propellantCostBreakdown) {
+        for (const [type, cost] of Object.entries(orbit.propellantCostBreakdown)) {
+          if (!propellantCostBreakdown[type]) propellantCostBreakdown[type] = 0;
+          propellantCostBreakdown[type] += cost;
         }
       }
-
-      // Assume each tanker launch delivers 100,000 kg of propellant (configurable in future)
-      const tankerCapacity_kg = 100000; // Assumption: 100 tons per tanker launch
-      const tankerCount = Math.ceil(total_tankerPropellant_kg / tankerCapacity_kg);
-
-      // Total liftoffs include both Starship (deployment) and tanker launches
-      const liftoffCount = starshipCount + tankerCount;
-
-      // Calculate total propellant mass by type (self + tanker) and their costs
-      const allPropellantTypes = [];
-      for (const orbitData of Object.values(orbits)) {
-        for (const propellantType of Object.keys(orbitData.propellant)) {
-          if (!allPropellantTypes.includes(propellantType)) allPropellantTypes.push(propellantType);
-        }
-      }
-
-      const totalPropellant_kg = {};
-      for (const propellantType of allPropellantTypes) {
-        totalPropellant_kg[propellantType] = 0;
-        for (const orbitData of Object.values(orbits)) {
-          if (orbitData.propellant[propellantType]) {
-            totalPropellant_kg[propellantType] +=
-              orbitData.propellant[propellantType].selfPropulsion_kg + orbitData.propellant[propellantType].tankerPropellant_kg;
-          }
-        }
-      }
-
-      // Define propellant costs per kg (assumed values; should be properties of the class)
-      const propellantCosts = this.propellantCosts || {
-        "CH4/O2": 0.3, // $0.3 per kg
-        Argon: 0.5, // $0.5 per kg
-      };
-
-      // Calculate total propellant cost and breakdown
-      let propellantCost = 0;
-      const propellantCostBreakdown = {};
-      for (const [propellantType, kg] of Object.entries(totalPropellant_kg)) {
-        const costPerKg = propellantCosts[propellantType] || 0;
-        const cost = kg * costPerKg; // Cost in dollars
-        propellantCostBreakdown[propellantType] = cost;
-        propellantCost += cost;
-        console.log(propellantType, kg, costPerKg, cost);
-      }
-
-      // Calculate costs (all in dollars)
-      const launchCost = liftoffCount * this.costPerLaunch * 1000000;
-      const satellitesCost = satellitesCount * this.costPerSatellite * 1000000;
-      const laserPortsPerSatellite = this.simLinkBudget.maxLinksPerSatellite;
-      const laserTerminalsCost = satellitesCount * laserPortsPerSatellite * this.costPerLaserTerminal * 1000000;
-      console.log(
-        liftoffCount,
-        this.costPerLaunch,
-        satellitesCount,
-        this.costPerSatellite,
-        laserPortsPerSatellite,
-        this.costPerLaserTerminal
-      );
-      const totalCosts = launchCost + propellantCost + satellitesCost + laserTerminalsCost;
-      console.log(totalCosts, launchCost, propellantCost, satellitesCost, laserTerminalsCost);
-
-      // Calculate cost per Mbps if maxFlowGbps is provided
-      let costPerMbps = Infinity;
-      if (maxFlowGbps) costPerMbps = Math.round(totalCosts / (maxFlowGbps * 1000));
-
-      return {
-        satellitesCount,
-        launchCount: starshipCount,
-        tankerCount,
-        liftoffCount,
-        launchCost,
-        propellantCost,
-        satellitesCost,
-        laserTerminalsCost,
-        totalCosts,
-        costPerMbps,
-        propellantCostBreakdown,
-      };
     }
+
+    const totalCosts = totalLaunchCost + totalPropellantCost + totalSatellitesCost + totalLaserTerminalsCost;
+
+    let costPerMbps = Infinity;
+    if (maxFlowGbps) costPerMbps = Math.round(totalCosts / (maxFlowGbps * 1000));
+
+    return {
+      satellitesCount: totalSatellitesCount,
+      launchCount: totalLaunchCount,
+      tankerCount: totalTankerCount,
+      liftoffCount: totalLiftoffCount,
+      launchCost: totalLaunchCost,
+      propellantCost: totalPropellantCost,
+      satellitesCost: totalSatellitesCost,
+      laserTerminalsCost: totalLaserTerminalsCost,
+      totalCosts,
+      costPerMbps,
+      propellantCostBreakdown,
+    };
   }
 
   getCostsHtml(costs, networkData) {
@@ -813,6 +764,7 @@ export class SimMain {
       const possibleLinks = this.simNetwork.getPossibleLinks(planets, satellites);
       this.capacityInfo = this.calculateCapacityInfo(possibleLinks);
       this.requestLinksUpdate = true;
+      this.configChanged = true;
       this.newSatellitesConfig = null;
     } else {
       satellites = this.simSatellites.updateSatellitesPositions(simDate);
@@ -831,7 +783,7 @@ export class SimMain {
       this.simDisplay.updatePositions(planets, satellites);
       this.ui.updateSimTime(simDate);
 
-      if (this.simLinkBudget.calctimeMs > 0) {
+      if (this.linksColors === "actual" && (this.simLinkBudget.calctimeMs > 0 || this.configChanged)) {
         let perf = performance.now();
         const networkData = this.simNetwork.getNetworkData(planets, satellites, possibleLinks, this.simLinkBudget.calctimeMs);
         console.log(`Flow: ${Math.round(performance.now() - perf)} ms`);
@@ -852,6 +804,7 @@ export class SimMain {
         this.makeLatencyChart(null);
       }
       this.requestLinksUpdate = false;
+      this.configChanged = false;
     } else {
       this.simDisplay.updatePositions(planets, satellites);
     }

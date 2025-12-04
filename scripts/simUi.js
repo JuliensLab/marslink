@@ -33,10 +33,29 @@ export class SimUi {
       this.simMain.satellitesConfig ? this.simMain.satellitesConfig["laser_technology.improvement-factor"] : "not set yet"
     );
     // Set the initial display type
-    const linksColors = this.slidersData.simulation["links-colors"].value;
+    const linksColors = this.slidersData.display["links-colors"].value;
     this.simMain.setLinksColors(linksColors);
-    const displayType = this.slidersData.simulation["display-type"].value;
+    const displayType = this.slidersData.display["display-type"].value;
     this.simMain.setDisplayType(displayType);
+
+    // Set initial size factors
+    const sunSizeSlider = this.slidersData.display["sun-size-factor"];
+    const sunSizeValue = this.mapSliderValueToUserFacing(sunSizeSlider, parseFloat(this.sliders.display["sun-size-factor"].value));
+    this.simMain.setSunSizeFactor(sunSizeValue);
+
+    const planetsSizeSlider = this.slidersData.display["planets-size-factor"];
+    const planetsSizeValue = this.mapSliderValueToUserFacing(
+      planetsSizeSlider,
+      parseFloat(this.sliders.display["planets-size-factor"].value)
+    );
+    this.simMain.setPlanetsSizeFactor(planetsSizeValue);
+
+    const satellitesSizeSlider = this.slidersData.display["satellite-size-factor"];
+    const satellitesSizeValue = this.mapSliderValueToUserFacing(
+      satellitesSizeSlider,
+      parseFloat(this.sliders.display["satellite-size-factor"].value)
+    );
+    this.simMain.setSatelliteSizeFactor(satellitesSizeValue);
 
     // Add a report button (adjust container as per your UI structure)
     const reportButton = document.createElement("button");
@@ -589,20 +608,23 @@ export class SimUi {
 
       // Dispatch actions based on slider ID
       switch (sliderId) {
-        case "simulation.display-type":
+        case "display.display-type":
           this.simMain.setDisplayType(newValue);
           break;
-        case "simulation.links-colors":
+        case "display.links-colors":
           this.simMain.setLinksColors(newValue);
           break;
         case "simulation.time-acceleration-slider":
           this.simMain.setTimeAccelerationFactor(newValue);
           break;
-        case "simulation.sun-size-factor":
+        case "display.sun-size-factor":
           this.simMain.setSunSizeFactor(newValue);
           break;
-        case "simulation.planets-size-factor":
+        case "display.planets-size-factor":
           this.simMain.setPlanetsSizeFactor(newValue);
+          break;
+        case "display.satellite-size-factor":
+          this.simMain.setSatelliteSizeFactor(newValue);
           break;
 
         case "laser_technology.current-throughput-gbps":
@@ -611,7 +633,10 @@ export class SimUi {
           if (sliderId === "laser_technology.improvement-factor") {
             console.log("Dispatching update for improvement-factor, newValue:", newValue);
           }
-        case "laser_technology.laser-ports-per-satellite":
+        case "ring_earth.laser-ports-per-satellite":
+        case "ring_mars.laser-ports-per-satellite":
+        case "circular_rings.laser-ports-per-satellite":
+        case "eccentric_rings.laser-ports-per-satellite":
         case "economics.satellite-empty-mass":
         case "laser_technology.laser-terminal-mass":
         case "simulation.maxDistanceAU":

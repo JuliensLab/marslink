@@ -47,6 +47,7 @@ export function kmTo3D(km) {
  */
 export let sunScaleFactor = 1;
 export let planetScaleFactor = 1;
+export let satelliteScaleFactor = 1;
 
 export class SimDisplay {
   /**
@@ -302,9 +303,10 @@ export class SimDisplay {
    * @param {number} sunFactor - Multiplier for sun size.
    * @param {number} planetsFactor - Multiplier for planets size.
    */
-  setSizeFactors(sunFactor, planetsFactor) {
+  setSizeFactors(sunFactor, planetsFactor, satellitesFactor) {
     sunScaleFactor = 1 * sunFactor;
     planetScaleFactor = 1 * planetsFactor;
+    satelliteScaleFactor = 1 * satellitesFactor;
   }
 
   /**
@@ -440,7 +442,7 @@ export class SimDisplay {
 
     // === Draw Satellites (example) ===
     if (true) {
-      const satSize = 4;
+      const satSize = 4 * satelliteScaleFactor;
       for (let satellite of this.satellites) {
         const pos = this.satellitePositions[satellite.name];
         if (!pos) continue;
