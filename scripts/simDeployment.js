@@ -429,7 +429,7 @@ export class SimDeployment {
     sat.stationKeepingArgon_kg = argon_kg; // for reporting
     sat.propellantCapacity_kg = Math.max(sat.propellantCapacity_kg, sat.propellantLoaded_kg);
 
-    console.log(`${vehicleId}: Station-keeping argon = ${argon_kg} kg (${total_annual_dv_ms.toFixed(1)} m/s/yr)`);
+    // console.log(`${vehicleId}: Station-keeping argon = ${argon_kg} kg (${total_annual_dv_ms.toFixed(1)} m/s/yr)`);
   }
 
   /**
@@ -452,7 +452,7 @@ export class SimDeployment {
     this.addManeuverByDeltaVRequired(vehicles, vehicleId, "Deorbit burn 1 (departure from ring)", deorbitDeltaV1);
     this.addManeuverByDeltaVRequired(vehicles, vehicleId, "Deorbit inclination change", outbound.deltaV_inclination);
 
-    console.log(`${vehicleId}: Deorbit Δv = ${(deorbitDeltaV1 + deorbitDeltaV2 + outbound.deltaV_inclination).toFixed(1)} km/s`);
+    // console.log(`${vehicleId}: Deorbit Δv = ${(deorbitDeltaV1 + deorbitDeltaV2 + outbound.deltaV_inclination).toFixed(1)} km/s`);
   }
 
   /**
@@ -464,7 +464,7 @@ export class SimDeployment {
     const results_by_orbit = [];
     for (const targetOrbitElements of targetOrbitElementsArray) {
       if (targetOrbitElements == null) {
-        console.log("targetOrbitElements is null, skipping");
+        // console.log("targetOrbitElements is null, skipping");
         continue;
       }
       let counter = 0;

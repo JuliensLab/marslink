@@ -4,7 +4,9 @@ import { helioCoords } from "./simOrbits.js?v=4.3";
 import { SIM_CONSTANTS } from "./simConstants.js";
 
 export class SimSolarSystem {
-  constructor() {}
+  constructor() {
+    this.solarSystemData = SIM_CONSTANTS.SOLAR_SYSTEM_DATA;
+  }
 
   getSolarSystemData() {
     return this.solarSystemData;
@@ -15,6 +17,4 @@ export class SimSolarSystem {
       this.solarSystemData.planets[name].position = helioCoords(object, simDaysSinceStart);
     return this.solarSystemData.planets;
   }
-
-  solarSystemData = SIM_CONSTANTS.SOLAR_SYSTEM_DATA;
 }

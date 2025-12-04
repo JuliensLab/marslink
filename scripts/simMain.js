@@ -217,7 +217,7 @@ export class SimMain {
       const distanceAuBetweenSats = distanceKmBetweenSats / this.km_per_au;
       const distanceAuBetweenRings = Math.abs(distOuterAu - distInnerAu) / (ringCount - 1);
       gradientOneSideStartMbps = 9999999999;
-      console.log(gradientOneSideStartMbps);
+      // console.log(gradientOneSideStartMbps);
       for (let ringId = 1; ringId < ringCount - 2; ringId++) {
         let satDistanceSunAu1 = Math.min(distInnerAu, distOuterAu) + distanceAuBetweenRings * ringId;
         let satDistanceSunAu2 = Math.min(distInnerAu, distOuterAu) + distanceAuBetweenRings * (ringId + 1);

@@ -167,8 +167,8 @@ export const slidersData = {
     },
     "laser-ports-per-satellite": {
       label: "Laser Terminals per Satellite",
-      min: 3,
-      max: 20,
+      min: 2,
+      max: 10,
       value: 4,
       step: 1,
       unit: " ports",

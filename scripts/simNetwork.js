@@ -89,7 +89,7 @@ export class SimNetwork {
 
     console.log(`Satellites have ${this.simLinkBudget.maxLinksPerSatellite} ports each`);
 
-    this.intraRing(rings, positions, linkCounts, finalLinks);
+    if (this.simLinkBudget.maxLinksPerSatellite > 2) this.intraRing(rings, positions, linkCounts, finalLinks);
 
     this.marsEarthRings(rings, positions, linkCounts, finalLinks);
 

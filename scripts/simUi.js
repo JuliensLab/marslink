@@ -431,19 +431,6 @@ export class SimUi {
               : parseFloat(validSavedValue)
             : slider.value;
 
-        if (fullSliderId === "laser_technology.improvement-factor") {
-          console.log(
-            "Creating slider for improvement-factor, savedValue:",
-            savedValue,
-            "validSavedValue:",
-            validSavedValue,
-            "sliderValue:",
-            sliderValue,
-            "slider.value from data:",
-            slider.value
-          );
-        }
-
         const sliderContainer = document.createElement("div");
         sliderContainer.className = "slider-container";
 
@@ -561,10 +548,6 @@ export class SimUi {
 
         slider.value =
           slider.type === "select" || slider.type === "dropdown" || slider.type === "radio" ? sliderValue : parseFloat(sliderValue);
-
-        if (fullSliderId === "laser_technology.improvement-factor") {
-          console.log("After setting slider.value for improvement-factor:", slider.value);
-        }
       }
     }
 
@@ -687,17 +670,6 @@ export class SimUi {
         // Safely access the value, defaulting to sliderData.value if undefined
         const value =
           this.sliders?.[categoryKey]?.[sliderKey]?.value !== undefined ? this.sliders[categoryKey][sliderKey].value : sliderData.value;
-
-        if (categoryKey === "laser_technology" && sliderKey === "improvement-factor") {
-          console.log(
-            "Getting config for improvement-factor, value:",
-            value,
-            "from sliders:",
-            this.sliders?.[categoryKey]?.[sliderKey]?.value,
-            "from data:",
-            sliderData.value
-          );
-        }
 
         // Check the type from slidersData to determine how to handle the value
         if (sliderData.type === "radio" || typeof sliderData.value === "string") {
