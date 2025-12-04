@@ -14,15 +14,18 @@ import { createCarModel } from "./modelCar.js?v=4.3";
  * @param {number} au - Distance in astronomical units.
  * @returns {number} Distance in 3D units
  */
-export const sunScaleFactor = 30;
-export const planetScaleFactor = 300;
+
+import { SIM_CONSTANTS } from "./simConstants.js";
+
+export let sunScaleFactor = SIM_CONSTANTS.SUN_SCALE_FACTOR;
+export let planetScaleFactor = SIM_CONSTANTS.PLANET_SCALE_FACTOR;
 
 export function auTo3D(au) {
   return au;
 }
 
 export function kmToAu(km) {
-  return km / 149597871;
+  return km / SIM_CONSTANTS.AU_IN_KM;
 }
 
 /**
@@ -48,6 +51,8 @@ export class SimDisplay {
    */
   constructor(container = document.body) {
     this.stopAnimation = false; // Flag to stop animation
+    this.sunSizeFactor = 1;
+    this.planetSizeFactor = 1;
     // === Styles ===
     this.styles = {
       links: {
@@ -112,16 +117,23 @@ export class SimDisplay {
     this.scene.add(this.satellitesGroup);
     this.linksGroup = new THREE.Group();
     this.scene.add(this.linksGroup);
+    this.linkLabelsGroup = new THREE.Group();
+    this.scene.add(this.linkLabelsGroup);
 
     // Initialize links arrays
     this.possibleLinks = [];
     this.activeLinks = [];
+    this.linkLabels = [];
+    this.showLinkLabels = false; // Flag for 'L' key press
 
     // === Load Scene Elements ===
     this.loadScene();
 
     // === Resize Listener ===
     window.addEventListener("resize", this.onWindowResize.bind(this), false);
+
+    // === Keyboard Listeners ===
+    window.addEventListener("keydown", this.onKeyDown.bind(this), false);
 
     // === Bind Animate Method ===
     this.animate = this.animate.bind(this);
@@ -148,9 +160,10 @@ export class SimDisplay {
     // === Sun ===
     const sunData = this.solarSystemData.sun;
     const sunTexture = this.textureLoader.load(sunData.texturePath);
-    const sunGeometry = new THREE.SphereGeometry(kmTo3D(sunData.diameterKm / 2) * sunScaleFactor, 64, 64);
+    const sunGeometry = new THREE.SphereGeometry(kmTo3D(sunData.diameterKm / 2), 64, 64);
     const sunMaterial = new THREE.MeshBasicMaterial({ map: sunTexture, color: 0xffffff });
     const sunMesh = new THREE.Mesh(sunGeometry, sunMaterial);
+    sunMesh.scale.set(sunScaleFactor, sunScaleFactor, sunScaleFactor);
     sunMesh.position.set(0, 0, 0);
     sunMesh.castShadow = false;
     sunMesh.receiveShadow = false;
@@ -210,7 +223,7 @@ export class SimDisplay {
     for (const planetData of this.solarSystemData.planets) {
       if (planetData.shape === "sphere") {
         // Create a sphere for spherical planets
-        const geometry = new THREE.SphereGeometry(kmTo3D(planetData.diameterKm / 2) * planetScaleFactor, 32, 32);
+        const geometry = new THREE.SphereGeometry(kmTo3D(planetData.diameterKm / 2), 32, 32);
         const texture = this.textureLoader.load(planetData.texturePath);
         const material = new THREE.MeshPhongMaterial({
           map: texture,
@@ -218,6 +231,7 @@ export class SimDisplay {
           specular: new THREE.Color(0x111111),
         });
         const planetMesh = new THREE.Mesh(geometry, material);
+        planetMesh.scale.set(planetScaleFactor, planetScaleFactor, planetScaleFactor);
         planetMesh.castShadow = true;
         planetMesh.receiveShadow = true;
         planetMesh.params = planetData; // Store parameters if needed
@@ -233,6 +247,62 @@ export class SimDisplay {
   setLinksColors(type) {
     // Set the links material based on the type
     this.linksColorsType = type;
+  }
+
+  /**
+   * Creates a sprite with text for displaying link capacity.
+   *
+   * @param {string} text - The text to display.
+   * @returns {THREE.Sprite} The text sprite.
+   */
+  createTextSprite(text) {
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d");
+    const fontSize = 24;
+    context.font = `${fontSize}px Arial`;
+    const textWidth = context.measureText(text).width;
+    canvas.width = textWidth + 20;
+    canvas.height = fontSize + 20;
+    context.fillStyle = "rgba(255, 255, 255, 1)";
+    context.fillText(text, 10, fontSize + 5);
+    const texture = new THREE.CanvasTexture(canvas);
+    const spriteMaterial = new THREE.SpriteMaterial({ map: texture });
+    const sprite = new THREE.Sprite(spriteMaterial);
+    sprite.scale.set(0.01, 0.01, 1); // Adjust scale as needed
+    return sprite;
+  }
+
+  /**
+   * Sets the size factors for sun and planets.
+   *
+   * @param {number} sunFactor - Multiplier for sun size.
+   * @param {number} planetsFactor - Multiplier for planets size.
+   */
+  setSizeFactors(sunFactor, planetsFactor) {
+    const sunRatio = sunFactor / this.sunSizeFactor;
+    const planetRatio = planetsFactor / this.planetSizeFactor;
+
+    this.sunSizeFactor = sunFactor;
+    this.planetSizeFactor = planetsFactor;
+
+    sunScaleFactor = SIM_CONSTANTS.SUN_SCALE_FACTOR * sunFactor;
+    planetScaleFactor = SIM_CONSTANTS.PLANET_SCALE_FACTOR * planetsFactor;
+
+    // Update existing meshes
+    if (this.sunMesh) {
+      this.sunMesh.scale.set(sunScaleFactor, sunScaleFactor, sunScaleFactor);
+    }
+    for (const planetName in this.planets) {
+      const planetMesh = this.planets[planetName];
+      if (planetMesh) {
+        if (planetMesh.type === "Mesh") {
+          planetMesh.scale.set(planetScaleFactor, planetScaleFactor, planetScaleFactor);
+        } else if (planetMesh.type === "Group") {
+          // For car models
+          planetMesh.scale.set(0.001 * planetsFactor, 0.001 * planetsFactor, 0.001 * planetsFactor);
+        }
+      }
+    }
   }
 
   /**
@@ -506,6 +576,62 @@ export class SimDisplay {
     this.linksGeometry.attributes.position.needsUpdate = true;
     this.linksGeometry.attributes.color.needsUpdate = true;
     this.linksGeometry.computeBoundingSphere();
+
+    // Update link labels
+    this.updateLinkLabels(validLinks);
+  }
+
+  /**
+   * Updates the text labels for links based on screen distance and zoom level.
+   *
+   * @param {Array} validLinks - Array of valid links.
+   */
+  updateLinkLabels(validLinks) {
+    // Clear existing labels
+    this.linkLabels.forEach((label) => {
+      this.linkLabelsGroup.remove(label);
+      if (label.material.map) label.material.map.dispose();
+      label.material.dispose();
+    });
+    this.linkLabels = [];
+
+    // Only show labels when 'L' key is pressed
+    if (!this.showLinkLabels) return;
+
+    validLinks.forEach((link) => {
+      const fromPosition = this.planetPositions[link.fromId] || this.satellitePositions[link.fromId];
+      const toPosition = this.planetPositions[link.toId] || this.satellitePositions[link.toId];
+
+      const fromPos = new THREE.Vector3(fromPosition.x, fromPosition.y, fromPosition.z);
+      const toPos = new THREE.Vector3(toPosition.x, toPosition.y, toPosition.z);
+
+      // Project to screen space
+      const fromScreen = fromPos.clone().project(this.camera);
+      const toScreen = toPos.clone().project(this.camera);
+
+      // Check if at least one endpoint is in viewport (NDC -1 to 1)
+      const fromInViewport =
+        fromScreen.x >= -1 && fromScreen.x <= 1 && fromScreen.y >= -1 && fromScreen.y <= 1 && fromScreen.z >= -1 && fromScreen.z <= 1;
+      const toInViewport =
+        toScreen.x >= -1 && toScreen.x <= 1 && toScreen.y >= -1 && toScreen.y <= 1 && toScreen.z >= -1 && toScreen.z <= 1;
+      if (!fromInViewport && !toInViewport) return; // Skip if both endpoints are off-screen
+
+      // Calculate screen distance in pixels
+      const screenDist = Math.sqrt(
+        Math.pow(((fromScreen.x - toScreen.x) * window.innerWidth) / 2, 2) +
+          Math.pow(((fromScreen.y - toScreen.y) * window.innerHeight) / 2, 2)
+      );
+
+      if (screenDist > 50) {
+        // Create label at midpoint
+        const midPoint = new THREE.Vector3().addVectors(fromPos, toPos).multiplyScalar(0.5);
+        const capacityMbps = Math.round(link.gbpsCapacity * 1000); // Convert Gbps to Mbps
+        const label = this.createTextSprite(`${capacityMbps}`);
+        label.position.copy(midPoint);
+        this.linkLabelsGroup.add(label);
+        this.linkLabels.push(label);
+      }
+    });
   }
 
   /**
@@ -518,6 +644,17 @@ export class SimDisplay {
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.composer.setSize(window.innerWidth, window.innerHeight);
     this.bloomPass.setSize(window.innerWidth, window.innerHeight);
+  }
+
+  /**
+   * Handles keydown events.
+   *
+   * @param {KeyboardEvent} event - The keyboard event.
+   */
+  onKeyDown(event) {
+    if (event.key.toLowerCase() === "l") {
+      this.showLinkLabels = !this.showLinkLabels;
+    }
   }
 
   /**
@@ -561,6 +698,7 @@ export class SimDisplay {
     // Clear groups (e.g., satellites, links)
     this.clearGroup(this.satellitesGroup);
     this.clearGroup(this.linksGroup);
+    this.clearGroup(this.linkLabelsGroup);
 
     // Dispose of planet meshes
     for (let planetMesh of Object.values(this.planets)) {

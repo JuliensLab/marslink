@@ -1,5 +1,7 @@
 // simOrbits.js
 
+import { SIM_CONSTANTS } from "./simConstants.js";
+
 /**
  * Computes heliocentric coordinates and rotation angles for an object based on its Keplerian orbital elements.
  * @param {Object} ele - Orbital elements object with properties:
@@ -26,10 +28,10 @@
  */
 export function helioCoords(ele, date) {
   const PI = Math.PI;
-  const DEG_TO_RAD = PI / 180; // Constant for degree-to-radian conversion
+  const DEG_TO_RAD = SIM_CONSTANTS.DEG_TO_RAD;
 
   // Julian Day at Unix epoch (1970-01-01 00:00:00 UTC)
-  const JULIAN_DAY_UNIX_EPOCH = 2440587.5;
+  const JULIAN_DAY_UNIX_EPOCH = SIM_CONSTANTS.JULIAN_DAY_UNIX_EPOCH;
 
   // Convert the provided date to milliseconds since Unix epoch and then to days
   const millisecondsSinceEpoch = date.getTime();

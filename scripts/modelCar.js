@@ -5,7 +5,7 @@ import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js?v=4.3";
 import { RGBELoader } from "three/addons/loaders/RGBELoader.js?v=4.3";
 
 // Function to load and create a car model
-export function createCarModel(THREE, planetData, scene, planets) {
+export function createCarModel(THREE, planetData, scene, planets, scaleFactor = 1) {
   const dracoLoader = new DRACOLoader();
   dracoLoader.setDecoderPath("./scripts/imported/draco/");
 
@@ -42,7 +42,7 @@ export function createCarModel(THREE, planetData, scene, planets) {
     carModel.getObjectByName("glass").material = glassMaterial;
 
     // Adjust scaling and position for the solar system
-    const scale = 0.001;
+    const scale = 0.001 * scaleFactor;
     carModel.scale.set(scale, scale, scale);
     carModel.position.set(0, 0, 0);
 

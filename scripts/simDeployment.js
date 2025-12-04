@@ -388,6 +388,74 @@ export class SimDeployment {
   }
 
   /**
+   * Adds station-keeping argon budget for 15-year lifetime
+   * Includes Jupiter secular, SRP, and Earth/Mars co-orbital penalty
+   */
+  addStationKeepingPropellant(vehicles, vehicleId, targetOrbitElements, lifetime_years = 15) {
+    const sat = vehicles[vehicleId];
+    if (!sat || sat.propellantType !== "Argon") return;
+
+    const r_au = targetOrbitElements.a || 1.5; // semi-major axis in AU
+    const isEarthRing = targetOrbitElements.ringType === "Earth";
+    const isMarsRing = targetOrbitElements.ringType === "Mars";
+
+    // 1. Jupiter secular Δv (Laskar 1988 envelope; m/s/yr)
+    const base_dv = 15; // At 1 AU, low i
+    let jupiter_dv = base_dv * Math.pow(1.0 / r_au, 1.5); // Scale with a^{-3/2}
+    jupiter_dv = Math.max(12, Math.min(18, jupiter_dv)); // Clip to envelope
+    if (targetOrbitElements.i_deg > 10) jupiter_dv *= 0.9; // Inclination damping factor
+
+    // 2. Solar Radiation Pressure (A/m = 0.04 m²/kg average for 50 m² panels on 1250 kg sat)
+    const srp_at_1au = 36; // m/s per year at A/m = 0.02
+    const area_to_mass = 50 / sat.dryMass_kg; // ~0.04 m²/kg
+    const srp_dv = srp_at_1au * (0.02 / area_to_mass) * Math.pow(1.0 / r_au, 2);
+
+    // 3. Earth/Mars co-orbital penalty (gravity gradient + differential SRP)
+    const proximity_penalty = isEarthRing || isMarsRing ? 20 : 0; // m/s per year
+
+    const total_annual_dv_ms = jupiter_dv + srp_dv + proximity_penalty;
+    const total_dv_ms = total_annual_dv_ms * lifetime_years;
+
+    // Rocket equation: m_prop = m_dry * (exp(Δv / (Isp·g0)) - 1)
+    const isp = 4500; // argon gridded ion thruster (realistic 2030)
+    const g0 = 9.80665;
+    let argon_kg = sat.dryMass_kg * (Math.exp(total_dv_ms / (isp * g0)) - 1);
+
+    // Add 30% margin (thruster inefficiency, off-nominal orbits, contingency)
+    argon_kg = Math.ceil(argon_kg * 1.3);
+
+    // Add to satellite
+    this.addManeuverByPropellantRequired(vehicles, vehicleId, "Station keeping", argon_kg);
+    sat.stationKeepingArgon_kg = argon_kg; // for reporting
+    sat.propellantCapacity_kg = Math.max(sat.propellantCapacity_kg, sat.propellantLoaded_kg);
+
+    console.log(`${vehicleId}: Station-keeping argon = ${argon_kg} kg (${total_annual_dv_ms.toFixed(1)} m/s/yr)`);
+  }
+
+  /**
+   * Adds deorbit maneuver (reverse Hohmann + inclination change) using argon
+   */
+  addDeorbitManeuver(vehicles, vehicleId, targetOrbitElements) {
+    const sat = vehicles[vehicleId];
+    if (!sat || sat.propellantType !== "Argon") return;
+
+    const outbound = calculateHohmannDeltaV_km_s(this.earth, targetOrbitElements);
+
+    // Deorbit is symmetric: same Δv as outbound, but in reverse order
+    const deorbitDeltaV1 = targetOrbitElements.ringName.startsWith("ring_ecce")
+      ? outbound.deltaV1 // eccentric: first burn is larger
+      : outbound.deltaV2;
+    const deorbitDeltaV2 = targetOrbitElements.ringName.startsWith("ring_ecce") ? outbound.deltaV2 : outbound.deltaV1;
+
+    // Add burns in reverse chronological order (last maneuver first in code)
+    this.addManeuverByDeltaVRequired(vehicles, vehicleId, "Deorbit burn 2 (circularization at Earth)", deorbitDeltaV2);
+    this.addManeuverByDeltaVRequired(vehicles, vehicleId, "Deorbit burn 1 (departure from ring)", deorbitDeltaV1);
+    this.addManeuverByDeltaVRequired(vehicles, vehicleId, "Deorbit inclination change", outbound.deltaV_inclination);
+
+    console.log(`${vehicleId}: Deorbit Δv = ${(deorbitDeltaV1 + deorbitDeltaV2 + outbound.deltaV_inclination).toFixed(1)} km/s`);
+  }
+
+  /**
    * Gets the mission profile for a given target orbit
    * @param {Array} targetOrbitElementsArray - Array of orbital elements for each ring
    * @returns {Object} Mission profile for the given target orbit
@@ -458,8 +526,16 @@ export class SimDeployment {
     const solarPanelMass_kg =
       this.vehicleProperties.satellite.solarPanelMass_EarthOrbit_kg * Math.pow(targetOrbitElements.apsides.apo_pctEarth, 2);
     this.addVehicle(vehicles, "Satellites", this.vehicleProperties.satellite, solarPanelMass_kg);
+
+    // End-of-life deorbit back to Earth (responsible disposal)
+    this.addDeorbitManeuver(vehicles, "Satellites", targetOrbitElements);
+
+    // Station-keeping for 15 years (Jupiter + SRP + proximity)
+    this.addStationKeepingPropellant(vehicles, "Satellites", targetOrbitElements, 15);
+
     this.addManeuverByDeltaVRequired(vehicles, "Satellites", "Inclination change", outboundDeltaV_km_per_s.deltaV_inclination);
     this.addManeuverByDeltaVRequired(vehicles, "Satellites", "2nd Hohmann maneuver", outboundDeltaV2);
+
     this.addVehicle(vehicles, "Starship", this.vehicleProperties.starship);
     this.addManeuverByPropellantRequired(
       vehicles,

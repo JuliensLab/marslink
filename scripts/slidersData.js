@@ -1,5 +1,7 @@
 // slidersData.js
 
+import { SIM_CONSTANTS } from "./simConstants.js";
+
 export const slidersData = {
   simulation: {
     "display-type": {
@@ -26,6 +28,26 @@ export const slidersData = {
       steps: 51,
       updateLongTermScore: false,
     },
+    "sun-size-factor": {
+      label: "Sun Size Factor",
+      min: 1,
+      max: 11,
+      value: 6,
+      unit: "x",
+      scale: "pow2",
+      steps: 11,
+      updateLongTermScore: false,
+    },
+    "planets-size-factor": {
+      label: "Planets Size Factor",
+      min: 1,
+      max: 11,
+      value: 9,
+      unit: "x",
+      scale: "pow2",
+      steps: 11,
+      updateLongTermScore: false,
+    },
     // "failed-satellites-slider": {
     //   label: "Satellite failure probability",
     //   min: 0,
@@ -40,9 +62,19 @@ export const slidersData = {
       label: "Maximum link range AU",
       min: 0,
       max: 2,
-      value: 0.4,
+      value: SIM_CONSTANTS.DEFAULT_MAX_DISTANCE_AU,
       step: 0.01,
       unit: " AU",
+      scale: "linear",
+      updateLongTermScore: true,
+    },
+    maxSatCount: {
+      label: "Max Satellites in Simulation",
+      min: 1000,
+      max: 20000,
+      value: 2000,
+      step: 100,
+      unit: "",
       scale: "linear",
       updateLongTermScore: true,
     },
@@ -57,7 +89,7 @@ export const slidersData = {
       updateLongTermScore: true,
     },
   },
-  costs: {
+  economics: {
     "launch-cost-slider": {
       label: "Starship/Tanker Launch",
       description: "Cost to launch one Starship",
@@ -91,18 +123,6 @@ export const slidersData = {
       scale: "linear",
       updateLongTermScore: false,
     },
-  },
-  capability: {
-    "laser-ports-per-satellite": {
-      label: "Laser Terminals per Satellite",
-      min: 3,
-      max: 20,
-      value: 4,
-      step: 1,
-      unit: " ports",
-      scale: "linear",
-      updateLongTermScore: true,
-    },
     "satellite-empty-mass": {
       label: "Satellite Empty Mass",
       min: 100,
@@ -110,6 +130,48 @@ export const slidersData = {
       value: 1000,
       step: 10,
       unit: " kg",
+      scale: "linear",
+      updateLongTermScore: true,
+    },
+  },
+  laser_technology: {
+    "current-throughput-gbps": {
+      label: "Today's throughput",
+      min: 1,
+      max: 999,
+      value: SIM_CONSTANTS.DEFAULT_BASE_GBPS,
+      step: 1,
+      unit: " Gbps",
+      scale: "linear",
+      updateLongTermScore: true,
+    },
+    "current-distance-km": {
+      label: "Today's distance",
+      min: 100,
+      max: 10000,
+      value: SIM_CONSTANTS.DEFAULT_BASE_DISTANCE_KM,
+      step: 1,
+      unit: " km",
+      scale: "linear",
+      updateLongTermScore: true,
+    },
+    "improvement-factor": {
+      label: "Improvement factor",
+      min: 0,
+      max: 20,
+      value: 10,
+      unit: " x",
+      scale: "pow2",
+      steps: 21,
+      updateLongTermScore: true,
+    },
+    "laser-ports-per-satellite": {
+      label: "Laser Terminals per Satellite",
+      min: 3,
+      max: 20,
+      value: 4,
+      step: 1,
+      unit: " ports",
       scale: "linear",
       updateLongTermScore: true,
     },
@@ -121,40 +183,6 @@ export const slidersData = {
       step: 1,
       unit: " kg",
       scale: "linear",
-      updateLongTermScore: true,
-    },
-  },
-  current_technology_performance: {
-    "current-throughput-gbps": {
-      label: "Today's throughput",
-      min: 1,
-      max: 999,
-      value: 100,
-      step: 1,
-      unit: " Gbps",
-      scale: "linear",
-      updateLongTermScore: true,
-    },
-    "current-distance-km": {
-      label: "Today's distance",
-      min: 100,
-      max: 10000,
-      value: 5400,
-      step: 1,
-      unit: " km",
-      scale: "linear",
-      updateLongTermScore: true,
-    },
-  },
-  technology_improvement: {
-    "improvement-factor": {
-      label: "Improvement factor",
-      min: 1,
-      max: Math.pow(2, 20),
-      value: 11,
-      unit: " x",
-      scale: "pow2",
-      steps: 21,
       updateLongTermScore: true,
     },
   },

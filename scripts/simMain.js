@@ -30,6 +30,8 @@ export class SimMain {
     // Do not instantiate simDisplay here; it will be set by setDisplayType
     this.simDisplay = null;
     this.linksColors = null;
+    this.sunSizeFactor = 1;
+    this.planetsSizeFactor = 1;
 
     this.previousCalctimeMs = this.simLinkBudget.calctimeMs;
 
@@ -63,6 +65,7 @@ export class SimMain {
       return;
     }
     this.simDisplay.setLinksColors(this.linksColors);
+    this.simDisplay.setSizeFactors(this.sunSizeFactor, this.planetsSizeFactor);
 
     this.requestLinksUpdate = true;
   }
@@ -80,6 +83,30 @@ export class SimMain {
    */
   setTimeAccelerationFactor(timeAccelerationFactor) {
     this.simTime.setTimeAccelerationFactor(timeAccelerationFactor);
+  }
+
+  /**
+   * Sets the sun size factor for the display.
+   *
+   * @param {number} factor - Multiplier for sun size.
+   */
+  setSunSizeFactor(factor) {
+    this.sunSizeFactor = factor;
+    if (this.simDisplay && typeof this.simDisplay.setSizeFactors === "function") {
+      this.simDisplay.setSizeFactors(this.sunSizeFactor, this.otherObjectsSizeFactor);
+    }
+  }
+
+  /**
+   * Sets the planets size factor for the display.
+   *
+   * @param {number} factor - Multiplier for planets size.
+   */
+  setPlanetsSizeFactor(factor) {
+    this.planetsSizeFactor = factor;
+    if (this.simDisplay && typeof this.simDisplay.setSizeFactors === "function") {
+      this.simDisplay.setSizeFactors(this.sunSizeFactor, this.planetsSizeFactor);
+    }
   }
 
   setCircularRingsConfig(uiConfig) {
@@ -271,10 +298,12 @@ export class SimMain {
       this.previousCalctimeMs = this.simLinkBudget.calctimeMs;
     }
     this.simDeployment.setSatelliteMassConfig(
-      uiConfig["capability.satellite-empty-mass"],
-      uiConfig["capability.laser-terminal-mass"],
-      uiConfig["capability.laser-ports-per-satellite"]
+      uiConfig["economics.satellite-empty-mass"],
+      uiConfig["laser_technology.laser-terminal-mass"],
+      uiConfig["laser_technology.laser-ports-per-satellite"]
     );
+
+    this.simSatellites.setMaxSatCount(uiConfig["simulation.maxSatCount"]);
 
     satellitesConfig.push(...this.setCircularRingsConfig(uiConfig));
     satellitesConfig.push(...this.setEccentricRingsConfig(uiConfig));
@@ -373,9 +402,9 @@ export class SimMain {
   }
 
   setCosts(costConfig) {
-    this.costPerLaunch = costConfig["costs.launch-cost-slider"];
-    this.costPerSatellite = costConfig["costs.satellite-cost-slider"];
-    this.costPerLaserTerminal = costConfig["costs.laser-terminal-cost-slider"];
+    this.costPerLaunch = costConfig["economics.launch-cost-slider"];
+    this.costPerSatellite = costConfig["economics.satellite-cost-slider"];
+    this.costPerLaserTerminal = costConfig["economics.laser-terminal-cost-slider"];
     if (this.ui) this.ui.updateInfoAreaCosts(this.getCostsHtml(this.calculateCosts(this.maxFlowGbps, this.resultTrees)));
   }
 

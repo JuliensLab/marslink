@@ -293,6 +293,8 @@ export function printTree(spaceChar, vehicles, node, level, previousEndMass = nu
       initialString = `${prefix.repeat(level - 1)}${spaceChar}${spaceChar}│⛽🠖${spaceChar}`;
     } else if (node.maneuver.type === "propellant transfer (receive)") {
       initialString = `${prefix.repeat(level - 1)}${spaceChar}${spaceChar}│🠔⛽${spaceChar}`;
+    } else if (node.maneuver.label === "Station keeping") {
+      initialString = `${prefix.repeat(level)}⚓ `;
     } else initialString = `${prefix.repeat(level)}🚀 `;
 
     let maneuverString = "";

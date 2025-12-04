@@ -24,20 +24,14 @@ export class SimUi {
     const timeAccelerationSlider = this.slidersData.simulation["time-acceleration-slider"];
     const timeAccelerationValue = this.mapSliderValueToUserFacing(timeAccelerationSlider, timeAccelerationSlider.value);
     this.simMain.setTimeAccelerationFactor(timeAccelerationValue);
-    this.simMain.setCosts(this.getGroupsConfig(["costs"]));
+    this.simMain.setCosts(this.getGroupsConfig(["economics"]));
     this.simMain.setSatellitesConfig(
-      this.getGroupsConfig([
-        "capability",
-        "simulation",
-        "current_technology_performance",
-        "technology_improvement",
-        "ring_mars",
-        "circular_rings",
-        "eccentric_rings",
-        "ring_earth",
-      ])
+      this.getGroupsConfig(["economics", "simulation", "laser_technology", "ring_mars", "circular_rings", "eccentric_rings", "ring_earth"])
     );
-    console.log("Initial satellitesConfig set, improvement-factor:", this.simMain.satellitesConfig ? this.simMain.satellitesConfig["technology_improvement.improvement-factor"] : "not set yet");
+    console.log(
+      "Initial satellitesConfig set, improvement-factor:",
+      this.simMain.satellitesConfig ? this.simMain.satellitesConfig["laser_technology.improvement-factor"] : "not set yet"
+    );
     // Set the initial display type
     const linksColors = this.slidersData.simulation["links-colors"].value;
     this.simMain.setLinksColors(linksColors);
@@ -204,14 +198,13 @@ export class SimUi {
 
           // Get base configuration (excluding overridden parameters)
           const baseConfig = this.getGroupsConfig([
-            "capability",
+            "economics",
             "simulation",
-            "current_technology_performance",
+            "laser_technology",
             "ring_mars",
             "circular_rings",
             "eccentric_rings",
             "ring_earth",
-            "costs",
           ]);
 
           // Remove parameters that are overridden by the simulation
@@ -219,13 +212,13 @@ export class SimUi {
           delete baseConfig["circular_rings.requiredmbpsbetweensats"];
           delete baseConfig["eccentric_rings.ringcount"];
           delete baseConfig["simulation.calctimeSec"];
-          delete baseConfig["technology_improvement.improvement-factor"];
+          delete baseConfig["laser_technology.improvement-factor"];
 
           // Initialize satellitesConfig
           const satellitesConfig = this.getGroupsConfig([
-            "capability",
+            "economics",
             "simulation",
-            "current_technology_performance",
+            "laser_technology",
             "ring_mars",
             "circular_rings",
             "eccentric_rings",
@@ -244,9 +237,14 @@ export class SimUi {
                   satellitesConfig["circular_rings.requiredmbpsbetweensats"] = throughput;
                   satellitesConfig["eccentric_rings.ringcount"] = 0;
                   satellitesConfig["simulation.calctimeSec"] = 100; // No limit
-                  satellitesConfig["technology_improvement.improvement-factor"] = Math.log2(improvementScore) + 1;
-                  console.log("Setting improvement-factor in full run:", satellitesConfig["technology_improvement.improvement-factor"], "for improvementScore:", improvementScore);
-                  console.log("////", "improvementScore", improvementScore, satellitesConfig["technology_improvement.improvement-factor"]);
+                  satellitesConfig["laser_technology.improvement-factor"] = Math.log2(improvementScore);
+                  console.log(
+                    "Setting improvement-factor in full run:",
+                    satellitesConfig["laser_technology.improvement-factor"],
+                    "for improvementScore:",
+                    improvementScore
+                  );
+                  console.log("////", "improvementScore", improvementScore, satellitesConfig["laser_technology.improvement-factor"]);
                   console.log("Running simulation with config:", satellitesConfig);
 
                   // Set simTime to the date for deployment
@@ -311,15 +309,9 @@ export class SimUi {
    */
   mapSliderValueToUserFacing(slider, sliderValue = slider.value) {
     if (slider.scale === "pow2") {
-      if (sliderValue === 0) return 0;
-      const absValue = Math.abs(sliderValue - 1);
-      const result = Math.pow(2, absValue);
-      return result * Math.sign(sliderValue);
+      return Math.pow(2, sliderValue);
     } else if (slider.scale === "pow10") {
-      if (sliderValue === 0) return 0;
-      const absValue = Math.abs(sliderValue - 1);
-      const result = Math.pow(10, absValue);
-      return result * Math.sign(sliderValue);
+      return Math.pow(10, sliderValue);
     } else {
       return sliderValue;
     }
@@ -385,13 +377,14 @@ export class SimUi {
         let step = slider.step;
 
         if (slider.scale === "pow2") {
-          const steps = slider.steps || 101;
-          if (slider.min < 0 && slider.max > 0) {
+          if (slider.min < 0) {
+            const steps = slider.steps || 101;
             min = -Math.floor(steps / 2);
             max = Math.floor(steps / 2);
-          } else if (slider.min >= 0) {
-            min = 0;
-            max = steps - 1;
+          } else {
+            // use the min max from data
+            min = slider.min;
+            max = slider.max;
           }
           step = 1;
         } else if (slider.scale === "pow10") {
@@ -427,7 +420,7 @@ export class SimUi {
               }
             }
           }
-          if (validSavedValue === null && fullSliderId === "technology_improvement.improvement-factor") {
+          if (validSavedValue === null && fullSliderId === "laser_technology.improvement-factor") {
             console.log("Invalid saved value for improvement-factor:", savedValue, "resetting to default");
           }
         }
@@ -438,8 +431,17 @@ export class SimUi {
               : parseFloat(validSavedValue)
             : slider.value;
 
-        if (fullSliderId === "technology_improvement.improvement-factor") {
-          console.log("Creating slider for improvement-factor, savedValue:", savedValue, "validSavedValue:", validSavedValue, "sliderValue:", sliderValue, "slider.value from data:", slider.value);
+        if (fullSliderId === "laser_technology.improvement-factor") {
+          console.log(
+            "Creating slider for improvement-factor, savedValue:",
+            savedValue,
+            "validSavedValue:",
+            validSavedValue,
+            "sliderValue:",
+            sliderValue,
+            "slider.value from data:",
+            slider.value
+          );
         }
 
         const sliderContainer = document.createElement("div");
@@ -560,7 +562,7 @@ export class SimUi {
         slider.value =
           slider.type === "select" || slider.type === "dropdown" || slider.type === "radio" ? sliderValue : parseFloat(sliderValue);
 
-        if (fullSliderId === "technology_improvement.improvement-factor") {
+        if (fullSliderId === "laser_technology.improvement-factor") {
           console.log("After setting slider.value for improvement-factor:", slider.value);
         }
       }
@@ -613,17 +615,24 @@ export class SimUi {
         case "simulation.time-acceleration-slider":
           this.simMain.setTimeAccelerationFactor(newValue);
           break;
+        case "simulation.sun-size-factor":
+          this.simMain.setSunSizeFactor(newValue);
+          break;
+        case "simulation.planets-size-factor":
+          this.simMain.setPlanetsSizeFactor(newValue);
+          break;
 
-        case "current_technology_performance.current-throughput-gbps":
-        case "current_technology_performance.current-distance-km":
-        case "technology_improvement.improvement-factor":
-          if (sliderId === "technology_improvement.improvement-factor") {
+        case "laser_technology.current-throughput-gbps":
+        case "laser_technology.current-distance-km":
+        case "laser_technology.improvement-factor":
+          if (sliderId === "laser_technology.improvement-factor") {
             console.log("Dispatching update for improvement-factor, newValue:", newValue);
           }
-        case "capability.laser-ports-per-satellite":
-        case "capability.satellite-empty-mass":
-        case "capability.laser-terminal-mass":
+        case "laser_technology.laser-ports-per-satellite":
+        case "economics.satellite-empty-mass":
+        case "laser_technology.laser-terminal-mass":
         case "simulation.maxDistanceAU":
+        case "simulation.maxSatCount":
         case "simulation.calctimeSec":
         case "simulation.failed-satellites-slider":
         case "ring_mars.match-circular-rings":
@@ -646,10 +655,9 @@ export class SimUi {
         case "ring_earth.requiredmbpsbetweensats":
           this.simMain.setSatellitesConfig(
             this.getGroupsConfig([
-              "capability",
+              "economics",
               "simulation",
-              "current_technology_performance",
-              "technology_improvement",
+              "laser_technology",
               "ring_mars",
               "circular_rings",
               "eccentric_rings",
@@ -658,10 +666,11 @@ export class SimUi {
           );
           break;
 
-        case "costs.satellite-cost-slider":
-        case "costs.launch-cost-slider":
-        case "costs.laser-terminal-cost-slider":
-          this.simMain.setCosts(this.getGroupsConfig(["costs"]));
+        case "economics.satellite-cost-slider":
+        case "economics.launch-cost-slider":
+        case "economics.laser-terminal-cost-slider":
+        case "economics.satellite-empty-mass":
+          this.simMain.setCosts(this.getGroupsConfig(["economics"]));
           break;
 
         default:
@@ -679,8 +688,15 @@ export class SimUi {
         const value =
           this.sliders?.[categoryKey]?.[sliderKey]?.value !== undefined ? this.sliders[categoryKey][sliderKey].value : sliderData.value;
 
-        if (categoryKey === "technology_improvement" && sliderKey === "improvement-factor") {
-          console.log("Getting config for improvement-factor, value:", value, "from sliders:", this.sliders?.[categoryKey]?.[sliderKey]?.value, "from data:", sliderData.value);
+        if (categoryKey === "laser_technology" && sliderKey === "improvement-factor") {
+          console.log(
+            "Getting config for improvement-factor, value:",
+            value,
+            "from sliders:",
+            this.sliders?.[categoryKey]?.[sliderKey]?.value,
+            "from data:",
+            sliderData.value
+          );
         }
 
         // Check the type from slidersData to determine how to handle the value

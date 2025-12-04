@@ -45,8 +45,8 @@ export function kmTo3D(km) {
  * though 2D display might not rely on them exactly
  * in the same way).
  */
-export const sunScaleFactor = 50000;
-export const planetScaleFactor = 1000000;
+export let sunScaleFactor = 1;
+export let planetScaleFactor = 1;
 
 export class SimDisplay {
   /**
@@ -294,6 +294,17 @@ export class SimDisplay {
   setLinksColors(type) {
     // Set the links material based on the type
     this.linksColorsType = type;
+  }
+
+  /**
+   * Sets the size factors for sun and planets.
+   *
+   * @param {number} sunFactor - Multiplier for sun size.
+   * @param {number} planetsFactor - Multiplier for planets size.
+   */
+  setSizeFactors(sunFactor, planetsFactor) {
+    sunScaleFactor = 1 * sunFactor;
+    planetScaleFactor = 1 * planetsFactor;
   }
 
   /**

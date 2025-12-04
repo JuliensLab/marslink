@@ -1,20 +1,24 @@
+// simLinkBudget.js
+
+import { SIM_CONSTANTS } from "./simConstants.js";
+
 export class SimLinkBudget {
   constructor() {
-    this.baseGbps = 100;
-    this.baseDistanceKm = 5400;
+    this.baseGbps = SIM_CONSTANTS.DEFAULT_BASE_GBPS;
+    this.baseDistanceKm = SIM_CONSTANTS.DEFAULT_BASE_DISTANCE_KM;
     this.techImprovementFactor = 1;
-    this.AU_IN_KM = 149597871; // 1 AU in kilometers
-    this.SPEED_OF_LIGHT_KM_S = 299792; // Speed of light in km/s
+    this.AU_IN_KM = SIM_CONSTANTS.AU_IN_KM;
+    this.SPEED_OF_LIGHT_KM_S = SIM_CONSTANTS.SPEED_OF_LIGHT_KM_S;
   }
 
   setTechnologyConfig(technologyConfig) {
-    this.baseGbps = technologyConfig["current_technology_performance.current-throughput-gbps"];
-    this.baseDistanceKm = technologyConfig["current_technology_performance.current-distance-km"];
+    this.baseGbps = technologyConfig["laser_technology.current-throughput-gbps"];
+    this.baseDistanceKm = technologyConfig["laser_technology.current-distance-km"];
     this.maxDistanceAU = technologyConfig["simulation.maxDistanceAU"];
     this.calctimeMs = technologyConfig["simulation.calctimeSec"] * 1000;
-    this.maxLinksPerSatellite = technologyConfig["capability.laser-ports-per-satellite"];
+    this.maxLinksPerSatellite = technologyConfig["laser_technology.laser-ports-per-satellite"];
 
-    this.techImprovementFactor = Math.pow(2, technologyConfig["technology_improvement.improvement-factor"] - 1);
+    this.techImprovementFactor = Math.pow(2, technologyConfig["laser_technology.improvement-factor"]);
     console.log("//// this.techImprovementFactor", this.techImprovementFactor);
   }
 

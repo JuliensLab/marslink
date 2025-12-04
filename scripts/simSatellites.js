@@ -7,6 +7,7 @@ export class SimSatellites {
     this.simLinkBudget = simLinkBudget;
     this.satellites = [];
     this.orbitalElements = [];
+    this.maxSatCount = 20000; // Default high limit
   }
 
   calculateGbps = (distanceKm) => {
@@ -21,11 +22,15 @@ export class SimSatellites {
     return this.simLinkBudget.convertAUtoKM(distanceAU);
   };
 
+  setMaxSatCount(maxSatCount) {
+    this.maxSatCount = maxSatCount;
+  }
+
   setSatellitesConfig(satellitesConfig) {
     this.satellites = [];
     const newSatellites = [];
     for (let config of satellitesConfig) newSatellites.push(...this.generateSatellites(config));
-    this.satellites = newSatellites; //.slice(0, 2000);
+    this.satellites = newSatellites.slice(0, this.maxSatCount);
     // console.log(`${this.satellites.length} SATELLITES`);
   }
 
