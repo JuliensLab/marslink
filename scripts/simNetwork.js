@@ -41,67 +41,6 @@ export class SimNetwork {
     this.simSatellites = simSatellites;
   }
 
-  // Helper: counts how many crossing points are to the left (CCW) of the current angle
-  countCrossingsLeftOf(angle, crossingList) {
-    if (crossingList.length === 0) return 0;
-    let count = 0;
-    for (const c of crossingList) {
-      const cn = ((c % 360) + 360) % 360;
-      if (cn < angle || cn + 360 < angle) count++;
-    }
-    return count;
-  }
-
-  // Get radial zone for a satellite
-  getRadialZone(satellite, ringName) {
-    if (!this.simSatellites.ringCrossings.has(ringName)) return "ALLOWED";
-    const crossings = this.simSatellites.ringCrossings.get(ringName);
-    if (!crossings) return "ALLOWED";
-
-    // If there are no Earth or Mars crossings (no Earth/Mars rings), allow all
-    if ((!crossings.earth || crossings.earth.crossings.length === 0) && (!crossings.mars || crossings.mars.crossings.length === 0)) {
-      return "ALLOWED";
-    }
-
-    const solarAngle = satellite.position.solarAngle;
-    const angle = ((solarAngle % 360) + 360) % 360;
-
-    const outsideEarth =
-      crossings.earth && crossings.earth.crossings.length > 0
-        ? this.countCrossingsLeftOf(angle, crossings.earth.crossings) % 2 === 1
-        : false;
-    const outsideMars =
-      crossings.mars && crossings.mars.crossings.length > 0 ? this.countCrossingsLeftOf(angle, crossings.mars.crossings) % 2 === 1 : false;
-
-    if (!outsideEarth) return "INSIDE_EARTH";
-    if (outsideEarth && !outsideMars) return "BETWEEN_EARTH_AND_MARS";
-    if (outsideMars) return "OUTSIDE_MARS";
-
-    return "UNKNOWN";
-  }
-
-  // Function to calculate Euclidean distance in 2D AU between two satellites
-  calculateDistance2DAU = (pos1, pos2) => {
-    const dx = pos1.x - pos2.x;
-    const dy = pos1.y - pos2.y;
-    return Math.sqrt(dx * dx + dy * dy);
-  };
-
-  // Function to calculate Euclidean distance in 3D AU between two satellites
-  calculateDistance3DAU = (pos1, pos2) => {
-    const dx = pos1.x - pos2.x;
-    const dy = pos1.y - pos2.y;
-    const dz = pos1.z - pos2.z;
-    return Math.sqrt(dx * dx + dy * dy + dz * dz);
-  };
-
-  // Function to determin if a satellite is inside or outside an orbit (inside meaning inside the circle of the orbit, so between the orbit and the sun).
-  // For eccentric orbits, use precomputed crossing points for accurate radial zone detection.
-  calculateIfInsideOrbitRing = (satellite, ringOrbitalElements) => {
-    // Use the general radial zone detection
-    return this.getRadialZone(satellite, satellite.ringName);
-  };
-
   // Helper Functions
   calculateDistanceAU = (a, b) => {
     return Math.sqrt(Math.pow(a.x - b.x, 2) + Math.pow(a.y - b.y, 2) + Math.pow(a.z - b.z, 2));
@@ -533,8 +472,8 @@ export class SimNetwork {
           for (const candidate of candidates) {
             if (linkCounts[candidate.satellite.name] < this.simLinkBudget.getMaxLinksPerRing(candidate.satellite.ringName)) {
               // Check radial zones for inter-ring connection allowance
-              const zoneCurrent = this.getRadialZone(currentSatellite, currentRingName);
-              const zoneTarget = this.getRadialZone(candidate.satellite, nextRingName);
+              const zoneCurrent = currentSatellite.orbitalZone;
+              const zoneTarget = candidate.orbitalZone;
               if (
                 zoneCurrent === "INSIDE_EARTH" ||
                 zoneCurrent === "OUTSIDE_MARS" ||
@@ -702,6 +641,10 @@ export class SimNetwork {
               const distanceAU = this.calculateDistanceAU(positions[satellite.name], positions[targetSat.name]);
               if (distanceAU > this.simLinkBudget.maxDistanceAU) return; // Skip if distance exceeds max
 
+              // Check radial zone for inter-ring connection allowance
+              const zone = targetSat.orbitalZone;
+              if (zone === "INSIDE_EARTH" || zone === "OUTSIDE_MARS") return;
+
               // Track the nearest satellite
               if (distanceAU < nearestDistanceAU) {
                 nearestSatellite = targetSat;
@@ -712,10 +655,6 @@ export class SimNetwork {
         });
 
         if (nearestSatellite) {
-          // Check radial zone for inter-ring connection allowance
-          const zone = this.getRadialZone(nearestSatellite, nearestSatellite.ringName);
-          if (zone === "INSIDE_EARTH" || zone === "OUTSIDE_MARS") return;
-
           const distanceKm = nearestDistanceAU * this.AU_IN_KM;
           const gbpsCapacity = this.calculateGbps(distanceKm);
           const latencySeconds = this.calculateLatency(distanceKm);

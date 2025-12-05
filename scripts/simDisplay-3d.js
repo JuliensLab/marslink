@@ -394,7 +394,6 @@ export class SimDisplay {
     const colorGroups = Array.from({ length: numGroups }, () => []);
     satellites.forEach((satellite, index) => {
       const colorIndex = this.getSatelliteColorIndex(satellite);
-      console.log("Satellite", satellite, "color index:", colorIndex);
       colorGroups[colorIndex].push({ satellite, originalIndex: index });
     });
 

@@ -759,7 +759,7 @@ export class SimSatellites {
     else if (ringType == "Circular")
       return {
         i: this.calculateInclination(a, earthMarsInclinationPct),
-        o: 0, //RAAN
+        o: 49.5664, //RAAN
         p: 0, // arg perigee
         a: a,
         n: n,
@@ -771,7 +771,7 @@ export class SimSatellites {
     else if (ringType == "Eccentric")
       return {
         i: this.calculateInclination(a, earthMarsInclinationPct),
-        o: 0, //RAAN
+        o: 49.5664, //RAAN
         p: argPeri, // arg perigee
         a: a,
         n: n,
