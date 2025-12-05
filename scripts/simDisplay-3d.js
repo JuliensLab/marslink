@@ -56,6 +56,7 @@ export class SimDisplay {
     this.planetSizeFactor = 1;
     this.satelliteSizeFactor = 1;
     this.currentSatelliteScale = 100; // Default scale to make satellites visible initially
+    this.satelliteColorMode = "Orbital zone"; // Default color mode
     // === Styles ===
     this.styles = {
       links: {
@@ -252,6 +253,37 @@ export class SimDisplay {
     this.linksColorsType = type;
   }
 
+  setSatelliteColorMode(mode) {
+    this.satelliteColorMode = mode;
+  }
+
+  getSatelliteColorIndex(satellite) {
+    if (this.satelliteColorMode === "Quadrants") {
+      const solarAngle = ((satellite.position.solarAngle % 360) + 360) % 360;
+      return Math.floor(solarAngle / 90);
+    } else if (this.satelliteColorMode === "Orbital zone") {
+      if (satellite.orbitalZone === "INSIDE_EARTH") return 0;
+      if (satellite.orbitalZone === "BETWEEN_EARTH_AND_MARS") return 1;
+      if (satellite.orbitalZone === "OUTSIDE_MARS") return 2;
+      if (satellite.orbitalZone === "EARTH_RING") return 4;
+      if (satellite.orbitalZone === "MARS_RING") return 5;
+      return 3; // Unknown zone
+    } else {
+      // Normal
+      return 0; // all same
+    }
+  }
+
+  getEmissiveColors() {
+    if (this.satelliteColorMode === "Quadrants") {
+      return this.quadrantEmissives;
+    } else if (this.satelliteColorMode === "Orbital zone") {
+      return this.orbitalZoneEmissives;
+    } else {
+      return [this.normalEmissive];
+    }
+  }
+
   /**
    * Creates a sprite with text for displaying link capacity.
    *
@@ -322,12 +354,25 @@ export class SimDisplay {
     new THREE.Color(0x666666), // 270-360 degrees
   ];
 
+  // Define emissive colors for orbital zones
+  orbitalZoneEmissives = [
+    new THREE.Color(0xdd2222), // Orange for inside earth
+    new THREE.Color(0x22dd22), // Cyan for between earth and mars
+    new THREE.Color(0x2222dd), // Purple for outside mars
+    new THREE.Color(0x333333), // Black for unknown
+    new THREE.Color(0x0066ff), // Yellow for earth ring
+    new THREE.Color(0xff6600), // Magenta for mars ring
+  ];
+
+  // Normal color
+  normalEmissive = new THREE.Color(0x777777);
+
   /**
-   * Sets up satellites using instanced meshes for efficiency, grouped by solar angle quadrant.
+   * Sets up satellites using instanced meshes for efficiency, grouped by color mode.
    * Cleans up any previous instanced objects if needed.
    *
    * @param {Array} satellites - Array of satellite objects with properties:
-   *                             { position: { vpo } }.
+   *                             { position: { x, y, z, solarAngle } }.
    */
   setSatellites(satellites) {
     // Cleanup existing satellites group
@@ -344,40 +389,42 @@ export class SimDisplay {
       6 // Number of segments (hexagonal cylinder)
     );
 
-    // Group satellites by quadrant
-    const quadrantSatellites = [[], [], [], []];
+    // Group satellites by color index
+    const numGroups = this.satelliteColorMode === "Quadrants" ? 4 : this.satelliteColorMode === "Orbital zone" ? 6 : 1;
+    const colorGroups = Array.from({ length: numGroups }, () => []);
     satellites.forEach((satellite, index) => {
-      const solarAngle = ((satellite.position.solarAngle % 360) + 360) % 360;
-      const quadrant = Math.floor(solarAngle / 90);
-      quadrantSatellites[quadrant].push({ satellite, originalIndex: index });
+      const colorIndex = this.getSatelliteColorIndex(satellite);
+      console.log("Satellite", satellite, "color index:", colorIndex);
+      colorGroups[colorIndex].push({ satellite, originalIndex: index });
     });
 
-    // Create instanced meshes for each quadrant
+    // Create instanced meshes for each group
     this.satelliteMeshes = [];
     this.satelliteQuadrantIndices = [];
-    quadrantSatellites.forEach((quadSats, quadIndex) => {
-      if (quadSats.length === 0) return;
+    const emissives = this.getEmissiveColors();
+    colorGroups.forEach((groupSats, groupIndex) => {
+      if (groupSats.length === 0) return;
 
-      // Satellite material: Emissive color based on quadrant
+      // Satellite material: Emissive color based on group
       const material = new THREE.MeshPhongMaterial({
         color: 0xffffff, // Default white color
         shininess: 10, // Adds a subtle shine to the satellites
         specular: new THREE.Color(0x333333), // Specular reflection color
-        emissive: this.quadrantEmissives[quadIndex], // Emissive color based on quadrant
+        emissive: emissives[groupIndex], // Emissive color based on group
         emissiveIntensity: 0.5, // Adjust emissive intensity
         transparent: false, // No transparency for now
         opacity: 1.0, // Fully opaque
       });
 
       // Create Instanced Mesh
-      const instancedMesh = new THREE.InstancedMesh(geometry, material, quadSats.length);
+      const instancedMesh = new THREE.InstancedMesh(geometry, material, groupSats.length);
       instancedMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage); // Optimized for frequent updates
       instancedMesh.castShadow = false; // Satellites do not cast shadows
       instancedMesh.receiveShadow = true; // Satellites receive shadows
 
       // Set initial transformations
       const dummy = new THREE.Object3D();
-      quadSats.forEach((item, localIndex) => {
+      groupSats.forEach((item, localIndex) => {
         const position = item.satellite.position;
         dummy.position.set(
           auTo3D(position.x),
@@ -391,7 +438,7 @@ export class SimDisplay {
       // Add to scene
       this.satellitesGroup.add(instancedMesh);
       this.satelliteMeshes.push(instancedMesh);
-      this.satelliteQuadrantIndices.push(quadSats.map((item) => item.originalIndex));
+      this.satelliteQuadrantIndices.push(groupSats.map((item) => item.originalIndex));
     });
 
     // Geometry scaling is handled in updatePositions
@@ -438,42 +485,43 @@ export class SimDisplay {
 
     // === Update Satellite Positions ===
     this.satellitePositions = {};
-    // Recreate satellite meshes grouped by current solar angle quadrants
+    // Recreate satellite meshes grouped by color mode
     this.clearGroup(this.satellitesGroup);
     if (satellites.length > 0) {
       const scale = 0.0001;
       const geometry = new THREE.CylinderGeometry(scale, scale, scale * 2, 6);
       geometry.scale(this.currentSatelliteScale, this.currentSatelliteScale, this.currentSatelliteScale);
 
-      // Group satellites by current quadrant
-      const quadrantSatellites = [[], [], [], []];
+      // Group satellites by color index
+      const numGroups = this.satelliteColorMode === "Quadrants" ? 4 : this.satelliteColorMode === "Orbital zone" ? 6 : 1;
+      const colorGroups = Array.from({ length: numGroups }, () => []);
       satellites.forEach((satellite, index) => {
-        const solarAngle = ((satellite.position.solarAngle % 360) + 360) % 360;
-        const quadrant = Math.floor(solarAngle / 90);
-        quadrantSatellites[quadrant].push({ satellite, index });
+        const colorIndex = this.getSatelliteColorIndex(satellite);
+        colorGroups[colorIndex].push({ satellite, index });
       });
 
-      // Create instanced meshes for each quadrant
-      quadrantSatellites.forEach((quadSats, quadIndex) => {
-        if (quadSats.length === 0) return;
+      // Create instanced meshes for each group
+      const emissives = this.getEmissiveColors();
+      colorGroups.forEach((groupSats, groupIndex) => {
+        if (groupSats.length === 0) return;
 
         const material = new THREE.MeshPhongMaterial({
           color: 0xffffff,
           shininess: 10,
           specular: new THREE.Color(0x333333),
-          emissive: this.quadrantEmissives[quadIndex],
+          emissive: emissives[groupIndex],
           emissiveIntensity: 0.5,
           transparent: false,
           opacity: 1.0,
         });
 
-        const instancedMesh = new THREE.InstancedMesh(geometry, material, quadSats.length);
+        const instancedMesh = new THREE.InstancedMesh(geometry, material, groupSats.length);
         instancedMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
         instancedMesh.castShadow = false;
         instancedMesh.receiveShadow = true;
 
         const dummy = new THREE.Object3D();
-        quadSats.forEach((item, localIndex) => {
+        groupSats.forEach((item, localIndex) => {
           const position = item.satellite.position;
           dummy.position.set(auTo3D(position.x), auTo3D(position.z), -auTo3D(position.y));
           if (position.rotation) {

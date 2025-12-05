@@ -28,10 +28,11 @@ export class SimMain {
     this.simLinkBudget = new SimLinkBudget();
     this.simDeployment = new SimDeployment(this.simSolarSystem.getSolarSystemData().planets);
     this.simSatellites = new SimSatellites(this.simLinkBudget);
-    this.simNetwork = new SimNetwork(this.simLinkBudget);
+    this.simNetwork = new SimNetwork(this.simLinkBudget, this.simSatellites);
     // Do not instantiate simDisplay here; it will be set by setDisplayType
     this.simDisplay = null;
     this.linksColors = null;
+    this.satelliteColorMode = "Quadrants";
     this.sunSizeFactor = 1;
     this.planetsSizeFactor = 1;
     this.satelliteSizeFactor = 1;
@@ -69,6 +70,7 @@ export class SimMain {
     }
     this.simDisplay.setLinksColors(this.linksColors);
     this.simDisplay.setSizeFactors(this.sunSizeFactor, this.planetsSizeFactor);
+    this.simDisplay.setSatelliteColorMode(this.satelliteColorMode);
 
     this.requestLinksUpdate = true;
   }
@@ -80,6 +82,13 @@ export class SimMain {
     }
     this.linksColors = type;
     if (this.simDisplay) this.simDisplay.setLinksColors(type);
+  }
+
+  setSatelliteColorMode(mode) {
+    this.satelliteColorMode = mode;
+    if (this.simDisplay) this.simDisplay.setSatelliteColorMode(mode);
+    this.displayChanged = true;
+    this.requestSatellitesUpdate = true;
   }
 
   /**
@@ -765,7 +774,7 @@ export class SimMain {
       satellites = this.simSatellites.updateSatellitesPositions(simDate);
       this.satellitesCount = satellites.length;
       console.log("Total satellites on main page:", this.satellitesCount);
-      const possibleLinks = this.simNetwork.getPossibleLinks(planets, satellites, this.simSatellites.getOrbitalElements());
+      const possibleLinks = this.simNetwork.getPossibleLinks(planets, satellites);
       this.capacityInfo = this.calculateCapacityInfo(possibleLinks);
       this.requestLinksUpdate = true;
       this.configChanged = true;
@@ -778,7 +787,7 @@ export class SimMain {
       this.previousLinkUpdateSimDate = simDate;
 
       let perf = performance.now();
-      const possibleLinks = this.simNetwork.getPossibleLinks(planets, satellites, this.simSatellites.getOrbitalElements());
+      const possibleLinks = this.simNetwork.getPossibleLinks(planets, satellites);
       console.log(`Possible links: ${Math.round(performance.now() - perf)} ms`);
 
       this.removeLinks();
@@ -812,6 +821,11 @@ export class SimMain {
       this.displayChanged = false;
     } else {
       this.simDisplay.updatePositions(planets, satellites);
+    }
+
+    if (this.requestSatellitesUpdate) {
+      this.simDisplay.setSatellites(satellites);
+      this.requestSatellitesUpdate = false;
     }
   }
 
@@ -875,7 +889,7 @@ export class SimMain {
           const satellites = this.simSatellites.updateSatellitesPositions(simDate);
 
           // Get possible links based on current positions
-          const possibleLinks = this.simNetwork.getPossibleLinks(planets, satellites, this.simSatellites.getOrbitalElements());
+          const possibleLinks = this.simNetwork.getPossibleLinks(planets, satellites);
 
           // Retrieve network data
           networkData = this.simNetwork.getNetworkData(planets, satellites, possibleLinks, calctimeMs);

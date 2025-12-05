@@ -34,171 +34,11 @@ We keep going until all circular rings are connected. We don't need to connect S
 */
 
 export class SimNetwork {
-  constructor(simLinkBudget) {
+  constructor(simLinkBudget, simSatellites) {
     this.AU_IN_KM = SIM_CONSTANTS.AU_IN_KM; // 1 AU in kilometers
     this.SPEED_OF_LIGHT_KM_S = SIM_CONSTANTS.SPEED_OF_LIGHT_KM_S; // Speed of light in km/s
     this.simLinkBudget = simLinkBudget;
-
-    this.ringCrossings = new Map(); // ringName -> { earth: [...], mars: [...] }
-  }
-
-  // Find crossings between two orbits by comparing distances to sun
-  distanceToSunAtSolarAngle(sourceEle, targetEle) {
-    const crossings = [];
-    const sourcePositions = sourceEle.precomputedPositions;
-    const targetPositions = targetEle.precomputedPositions;
-
-    if (!sourcePositions || !targetPositions) return crossings;
-
-    let prevSourceDist = sourcePositions[0].distanceToSun;
-    let prevTargetDist = targetPositions[0].distanceToSun;
-
-    // Iterate through all solar angles
-    for (let i = 1; i < sourcePositions.length; i++) {
-      const sourceDist = sourcePositions[i].distanceToSun;
-      const targetDist = targetPositions[i].distanceToSun;
-
-      // Check for crossing (sign change in distance difference)
-      const prevDiff = prevSourceDist - prevTargetDist;
-      const currDiff = sourceDist - targetDist;
-
-      if (prevDiff * currDiff <= 0) {
-        // Find the exact crossing point using linear interpolation
-        const solarAngle = sourcePositions[i].solarAngle;
-        crossings.push(solarAngle);
-      }
-
-      prevSourceDist = sourceDist;
-      prevTargetDist = targetDist;
-    }
-
-    // Remove duplicates and sort
-    const unique = [];
-    for (const c of crossings) {
-      if (!unique.some((u) => Math.abs(u - c) < 0.01)) unique.push(c);
-    }
-    unique.sort((a, b) => a - b);
-
-    return unique;
-  }
-
-  // Find all radial crossing solar angle angles (on source orbit) with target orbit
-  findAllRadialCrossings(sourceEle, targetEle) {
-    // Handle case where source or target orbit doesn't exist (no Earth/Mars rings)
-    if (!sourceEle || !targetEle) {
-      if (!sourceEle) console.warn("Source orbit is missing, no crossings.");
-      if (!targetEle) console.warn("Target orbit is missing, no crossings.");
-      return { crossings: [], inside: null, outside: null };
-    }
-
-    const crossings = [];
-    const sourcePositions = sourceEle.precomputedPositions;
-    const targetPositions = targetEle.precomputedPositions;
-
-    if (!sourcePositions || !targetPositions || sourcePositions.length < 2 || targetPositions.length < 2) {
-      console.warn("Insufficient precomputed positions for crossing calculation.");
-      return { crossings: [], inside: null, outside: null };
-    }
-
-    // Find crossings between line segments of the two orbits
-    for (let i = 0; i < sourcePositions.length; i++) {
-      const source1 = sourcePositions[i];
-      const source2 = sourcePositions[(i + 1) % sourcePositions.length];
-
-      for (let j = 0; j < targetPositions.length; j++) {
-        const target1 = targetPositions[j];
-        const target2 = targetPositions[(j + 1) % targetPositions.length];
-
-        // Check if line segments intersect (using XY coordinates only)
-        const intersection = this.lineSegmentIntersection(
-          { x: source1.x, y: source1.y },
-          { x: source2.x, y: source2.y },
-          { x: target1.x, y: target1.y },
-          { x: target2.x, y: target2.y }
-        );
-
-        if (intersection) {
-          // Calculate solar angle at intersection point
-          // Interpolate between the two solar angles based on position along the line
-          const solarAngle = this.interpolateSolarAngle(source1, source2, intersection);
-          crossings.push(solarAngle % 360);
-        }
-      }
-    }
-
-    // Remove duplicates and sort
-    const unique = [];
-    for (const c of crossings) {
-      if (!unique.some((u) => Math.abs(u - c) < 0.01)) unique.push(c);
-    }
-    unique.sort((a, b) => a - b);
-
-    // Determine inside and outside ranges (simplified version)
-    let inside = null;
-    let outside = null;
-
-    if (unique.length === 0) {
-      // No crossings - determine based on distance at solar angle 0
-      const sourceDist = sourcePositions[0].distanceToSun;
-      const targetDist = targetPositions[0].distanceToSun;
-      if (sourceDist > targetDist) {
-        console.log(`No crossings. Source (${sourceDist}) > Target (${targetDist}). Outside.`);
-        outside = [0, 360];
-      } else {
-        console.log(`No crossings. Source (${sourceDist}) <= Target (${targetDist}). Inside.`);
-        inside = [0, 360];
-      }
-    } else if (unique.length >= 2) {
-      console.log(`Multiple crossings found: ${unique.length} crossings.`);
-      inside = [unique[0], unique[1]];
-      outside = [unique[1], unique[0] + 360];
-    }
-
-    return { crossings: unique, inside, outside };
-  }
-
-  // Line segment intersection using XY coordinates
-  lineSegmentIntersection(p1, p2, p3, p4) {
-    const denom = (p1.x - p2.x) * (p3.y - p4.y) - (p1.y - p2.y) * (p3.x - p4.x);
-    if (Math.abs(denom) < 1e-10) return null; // Parallel lines
-
-    const t = ((p1.x - p3.x) * (p3.y - p4.y) - (p1.y - p3.y) * (p3.x - p4.x)) / denom;
-    const u = -((p1.x - p2.x) * (p1.y - p3.y) - (p1.y - p2.y) * (p1.x - p3.x)) / denom;
-
-    if (t >= 0 && t <= 1 && u >= 0 && u <= 1) {
-      // Intersection point
-      return {
-        x: p1.x + t * (p2.x - p1.x),
-        y: p1.y + t * (p2.y - p1.y),
-      };
-    }
-
-    return null;
-  }
-
-  // Interpolate solar angle between two positions
-  interpolateSolarAngle(pos1, pos2, intersectionPoint) {
-    // Calculate parameter t along the line from pos1 to pos2
-    const dx = pos2.x - pos1.x;
-    const dy = pos2.y - pos1.y;
-    const length = Math.sqrt(dx * dx + dy * dy);
-
-    if (length < 1e-10) return pos1.solarAngle;
-
-    const dxIntersect = intersectionPoint.x - pos1.x;
-    const dyIntersect = intersectionPoint.y - pos1.y;
-    const distAlongLine = Math.sqrt(dxIntersect * dxIntersect + dyIntersect * dyIntersect);
-
-    const t = distAlongLine / length;
-    const solarAngleDiff = pos2.solarAngle - pos1.solarAngle;
-
-    // Handle wrap-around at 360 degrees
-    let adjustedDiff = solarAngleDiff;
-    if (Math.abs(solarAngleDiff) > 180) {
-      adjustedDiff = solarAngleDiff > 0 ? solarAngleDiff - 360 : solarAngleDiff + 360;
-    }
-
-    return (pos1.solarAngle + t * adjustedDiff) % 360;
+    this.simSatellites = simSatellites;
   }
 
   // Helper: counts how many crossing points are to the left (CCW) of the current angle
@@ -214,8 +54,8 @@ export class SimNetwork {
 
   // Get radial zone for a satellite
   getRadialZone(satellite, ringName) {
-    if (!this.ringCrossings.has(ringName)) return "ALLOWED";
-    const crossings = this.ringCrossings.get(ringName);
+    if (!this.simSatellites.ringCrossings.has(ringName)) return "ALLOWED";
+    const crossings = this.simSatellites.ringCrossings.get(ringName);
     if (!crossings) return "ALLOWED";
 
     // If there are no Earth or Mars crossings (no Earth/Mars rings), allow all
@@ -275,7 +115,7 @@ export class SimNetwork {
     return distanceKm / this.SPEED_OF_LIGHT_KM_S;
   };
 
-  calculateDistanceToSun = (position) => {
+  calculateDistanceToSunAU = (position) => {
     return Math.sqrt(Math.pow(position.x, 2) + Math.pow(position.y, 2) + Math.pow(position.z, 2));
   };
 
@@ -295,23 +135,8 @@ export class SimNetwork {
    *                            gbpsCapacity
    *                          }
    */
-  getPossibleLinks(planets, satellites, ringsOrbitalElements) {
-    console.log(ringsOrbitalElements);
-    // Map orbital elements by ringName
-    this.ringCrossings = new Map();
-    const orbitalElementsMap = new Map();
-    if (Array.isArray(ringsOrbitalElements)) ringsOrbitalElements.forEach((ele) => orbitalElementsMap.set(ele.ringName, ele));
-    else {
-      console.error("ringsOrbitalElements should be an array");
-      return;
-    }
-
-    // Set Earth and Mars orbital elements
-    this.earthOrbit = orbitalElementsMap.get("ring_earth");
-    this.marsOrbit = orbitalElementsMap.get("ring_mars");
-
-    console.log(orbitalElementsMap);
-
+  getPossibleLinks(planets, satellites) {
+    console.log(satellites);
     // Group satellites by ringName
     const rings = {}; // { ringName: [satellite1, satellite2, ...] }
 
@@ -321,17 +146,7 @@ export class SimNetwork {
       rings[ringName].push(satellite);
     });
 
-    // Precompute crossings for each ring
-    for (const ringName in rings) {
-      if (ringName == "ring_earth" || ringName == "ring_mars") continue;
-      if (!this.ringCrossings.has(ringName)) {
-        const ringEle = orbitalElementsMap.get(ringName);
-        const earthCrossings = this.findAllRadialCrossings(ringEle, this.earthOrbit);
-        const marsCrossings = this.findAllRadialCrossings(ringEle, this.marsOrbit);
-        this.ringCrossings.set(ringName, { earth: earthCrossings, mars: marsCrossings });
-      }
-    }
-    console.log(this.ringCrossings);
+    // Ring crossings are precomputed in simSatellites
 
     // Positions mapping
     const positions = {};

@@ -37,6 +37,8 @@ export class SimUi {
     this.simMain.setLinksColors(linksColors);
     const displayType = this.slidersData.display["display-type"].value;
     this.simMain.setDisplayType(displayType);
+    const satelliteColors = this.slidersData.display["satellite-colors"].value;
+    this.simMain.setSatelliteColorMode(satelliteColors);
 
     // Set initial size factors
     const sunSizeSlider = this.slidersData.display["sun-size-factor"];
@@ -613,6 +615,9 @@ export class SimUi {
           break;
         case "display.links-colors":
           this.simMain.setLinksColors(newValue);
+          break;
+        case "display.satellite-colors":
+          this.simMain.setSatelliteColorMode(newValue);
           break;
         case "simulation.time-acceleration-slider":
           this.simMain.setTimeAccelerationFactor(newValue);

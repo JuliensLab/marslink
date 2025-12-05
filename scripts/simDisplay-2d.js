@@ -297,6 +297,10 @@ export class SimDisplay {
     this.linksColorsType = type;
   }
 
+  setSatelliteColorMode(mode) {
+    // 2D display doesn't use satellite colors
+  }
+
   /**
    * Sets the size factors for sun and planets.
    *

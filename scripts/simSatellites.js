@@ -9,6 +9,7 @@ export class SimSatellites {
     this.orbitalElements = [];
     this.maxSatCount = 20000; // Default high limit
     this.solarAngleStep = 1.0; // Degrees for precomputing positions along orbit
+    this.ringCrossings = new Map(); // ringName -> { earth: [...], mars: [...] }
   }
 
   calculateGbps = (distanceKm) => {
@@ -57,6 +58,19 @@ export class SimSatellites {
     }
     this.orbitalElements = newOrbitalElements;
     console.log(this.orbitalElements);
+
+    // Precompute ring crossings
+    this.ringCrossings = new Map();
+    const earthOrbit = this.orbitalElements.find((ele) => ele.ringName === "ring_earth");
+    const marsOrbit = this.orbitalElements.find((ele) => ele.ringName === "ring_mars");
+    for (const orbitalElement of this.orbitalElements) {
+      const ringName = orbitalElement.ringName;
+      if (ringName === "ring_earth" || ringName === "ring_mars") continue;
+      const earthCrossings = this.findAllRadialCrossings(orbitalElement, earthOrbit);
+      const marsCrossings = this.findAllRadialCrossings(orbitalElement, marsOrbit);
+      this.ringCrossings.set(ringName, { earth: earthCrossings, mars: marsCrossings });
+    }
+    console.log(this.ringCrossings);
   }
 
   precomputeOrbitPositions(orbitalElement) {
@@ -95,8 +109,266 @@ export class SimSatellites {
   }
 
   updateSatellitesPositions(simDaysSinceStart) {
-    for (const satellite of this.satellites) satellite.position = helioCoords(satellite, simDaysSinceStart);
+    for (const satellite of this.satellites) {
+      satellite.position = helioCoords(satellite, simDaysSinceStart);
+      satellite.orbitalZone = this.getRadialZone(satellite, satellite.ringName);
+    }
     return this.satellites;
+  }
+
+  // Find crossings between two orbits by comparing distances to sun
+  distanceToSunAtSolarAngle(sourceEle, targetEle) {
+    const crossings = [];
+    const sourcePositions = sourceEle.precomputedPositions;
+    const targetPositions = targetEle.precomputedPositions;
+
+    if (!sourcePositions || !targetPositions) return crossings;
+
+    let prevSourceDist = sourcePositions[0].distanceToSun;
+    let prevTargetDist = targetPositions[0].distanceToSun;
+
+    // Iterate through all solar angles
+    for (let i = 1; i < sourcePositions.length; i++) {
+      const sourceDist = sourcePositions[i].distanceToSun;
+      const targetDist = targetPositions[i].distanceToSun;
+
+      // Check for crossing (sign change in distance difference)
+      const prevDiff = prevSourceDist - prevTargetDist;
+      const currDiff = sourceDist - targetDist;
+
+      if (prevDiff * currDiff <= 0) {
+        // Find the exact crossing point using linear interpolation
+        const solarAngle = sourcePositions[i].solarAngle;
+        crossings.push(solarAngle);
+      }
+
+      prevSourceDist = sourceDist;
+      prevTargetDist = targetDist;
+    }
+
+    // Remove duplicates and sort
+    const unique = [];
+    for (const c of crossings) {
+      if (!unique.some((u) => Math.abs(u - c) < 0.01)) unique.push(c);
+    }
+    unique.sort((a, b) => a - b);
+
+    return unique;
+  }
+
+  // Find all radial crossing solar angle angles (on source orbit) with target orbit
+  findAllRadialCrossings(sourceEle, targetEle) {
+    // Handle case where source or target orbit doesn't exist (no Earth/Mars rings)
+    if (!sourceEle || !targetEle) {
+      if (!sourceEle) console.warn("Source orbit is missing, no crossings.");
+      if (!targetEle) console.warn("Target orbit is missing, no crossings.");
+      return { crossings: [], inside: null, outside: null };
+    }
+
+    const crossings = [];
+    const sourcePositions = sourceEle.precomputedPositions;
+    const targetPositions = targetEle.precomputedPositions;
+
+    if (!sourcePositions || !targetPositions || sourcePositions.length < 2 || targetPositions.length < 2) {
+      console.warn("Insufficient precomputed positions for crossing calculation.");
+      return { crossings: [], inside: null, outside: null };
+    }
+
+    // Find crossings between line segments of the two orbits
+    for (let i = 0; i < sourcePositions.length; i++) {
+      const source1 = sourcePositions[i];
+      const source2 = sourcePositions[(i + 1) % sourcePositions.length];
+
+      for (let j = 0; j < targetPositions.length; j++) {
+        const target1 = targetPositions[j];
+        const target2 = targetPositions[(j + 1) % targetPositions.length];
+
+        // Check if line segments intersect (using XY coordinates only)
+        const intersection = this.lineSegmentIntersection(
+          { x: source1.x, y: source1.y },
+          { x: source2.x, y: source2.y },
+          { x: target1.x, y: target1.y },
+          { x: target2.x, y: target2.y }
+        );
+
+        if (intersection) {
+          // Calculate solar angle at intersection point
+          // Interpolate between the two solar angles based on position along the line
+          const solarAngle = this.interpolateSolarAngle(source1, source2, intersection);
+          crossings.push(solarAngle % 360);
+        }
+      }
+    }
+
+    // Remove duplicates and sort
+    const unique = [];
+    for (const c of crossings) {
+      if (!unique.some((u) => Math.abs(u - c) < 0.01)) unique.push(c);
+    }
+    unique.sort((a, b) => a - b);
+
+    // Determine inside and outside ranges (simplified version)
+    let inside = null;
+    let outside = null;
+
+    if (unique.length === 0) {
+      // No crossings - determine based on distance at solar angle 0
+      const sourceDist = sourcePositions[0].distanceToSun;
+      const targetDist = targetPositions[0].distanceToSun;
+      if (sourceDist > targetDist) {
+        console.log(`No crossings. Source (${sourceDist}) > Target (${targetDist}). Outside.`);
+        outside = [0, 360];
+      } else {
+        console.log(`No crossings. Source (${sourceDist}) <= Target (${targetDist}). Inside.`);
+        inside = [0, 360];
+      }
+    } else if (unique.length >= 2) {
+      console.log(`Multiple crossings found: ${unique.length} crossings.`);
+      // Determine which range is inside by checking distance at midpoint
+      const midAngle = (unique[0] + unique[1]) / 2;
+      const sourceDist = this.getOrbitDistanceAtAngle(sourceEle, midAngle);
+      const targetDist = this.getOrbitDistanceAtAngle(targetEle, midAngle);
+      if (sourceDist < targetDist) {
+        // Source is closer to sun, so inside
+        inside = [unique[0], unique[1]];
+        outside = [unique[1], unique[0] + 360];
+      } else {
+        // Source is farther, so outside
+        inside = [unique[1], unique[0] + 360];
+        outside = [unique[0], unique[1]];
+      }
+    }
+
+    return { crossings: unique, inside, outside };
+  }
+
+  // Line segment intersection using XY coordinates
+  lineSegmentIntersection(p1, p2, p3, p4) {
+    const denom = (p1.x - p2.x) * (p3.y - p4.y) - (p1.y - p2.y) * (p3.x - p4.x);
+    if (Math.abs(denom) < 1e-10) return null; // Parallel lines
+
+    const t = ((p1.x - p3.x) * (p3.y - p4.y) - (p1.y - p3.y) * (p3.x - p4.x)) / denom;
+    const u = -((p1.x - p2.x) * (p1.y - p3.y) - (p1.y - p2.y) * (p1.x - p3.x)) / denom;
+
+    if (t >= 0 && t <= 1 && u >= 0 && u <= 1) {
+      // Intersection point
+      return {
+        x: p1.x + t * (p2.x - p1.x),
+        y: p1.y + t * (p2.y - p1.y),
+      };
+    }
+
+    return null;
+  }
+
+  // Interpolate solar angle between two positions
+  interpolateSolarAngle(pos1, pos2, intersectionPoint) {
+    // Calculate parameter t along the line from pos1 to pos2
+    const dx = pos2.x - pos1.x;
+    const dy = pos2.y - pos1.y;
+    const length = Math.sqrt(dx * dx + dy * dy);
+
+    if (length < 1e-10) return pos1.solarAngle;
+
+    const dxIntersect = intersectionPoint.x - pos1.x;
+    const dyIntersect = intersectionPoint.y - pos1.y;
+    const distAlongLine = Math.sqrt(dxIntersect * dxIntersect + dyIntersect * dyIntersect);
+
+    const t = distAlongLine / length;
+    const solarAngleDiff = pos2.solarAngle - pos1.solarAngle;
+
+    // Handle wrap-around at 360 degrees
+    let adjustedDiff = solarAngleDiff;
+    if (Math.abs(solarAngleDiff) > 180) {
+      adjustedDiff = solarAngleDiff > 0 ? solarAngleDiff - 360 : solarAngleDiff + 360;
+    }
+
+    return (pos1.solarAngle + t * adjustedDiff) % 360;
+  }
+
+  // Helper: Check if angle is within a range, handling wrap-around
+  isAngleInRange(angle, range) {
+    if (!range) return false;
+    let [start, end] = range;
+    angle = ((angle % 360) + 360) % 360;
+    if (end <= 360) {
+      return angle >= start && angle <= end;
+    } else {
+      // Wrap-around case
+      return angle >= start || angle <= end - 360;
+    }
+  }
+
+  // Helper: Get distance to sun for a specific orbital element at a specific solar angle
+  getOrbitDistanceAtAngle(orbitalElement, targetAngle) {
+    if (!orbitalElement || !orbitalElement.precomputedPositions) return null;
+
+    const positions = orbitalElement.precomputedPositions;
+    // Normalize angle to 0-360
+    let angle = ((targetAngle % 360) + 360) % 360;
+
+    // optimization: since we know solarAngleStep is 1.0 and array is sorted,
+    // we can guess the index. But to be safe and robust against changing step sizes:
+    // specific implementation for finding the two surrounding points.
+
+    // Find index where positions[i].solarAngle <= angle
+    // Since it's sorted, we could use binary search, but linear is fine for <1000 items
+    // or simplified index mapping if step is fixed.
+
+    let index = -1;
+    // Assuming sorted array from precomputeOrbitPositions
+    if (this.solarAngleStep === 1.0 && positions.length >= 360) {
+      // Fast lookup if step is 1 degree
+      index = Math.floor(angle);
+      // Safety clamp in case of float weirdness or array length mismatch
+      if (index >= positions.length) index = positions.length - 1;
+    } else {
+      // Fallback search
+      for (let i = 0; i < positions.length; i++) {
+        if (positions[i].solarAngle <= angle) {
+          index = i;
+        } else {
+          break;
+        }
+      }
+    }
+
+    if (index === -1) index = positions.length - 1; // Wrap around case handled below
+
+    const p1 = positions[index];
+    const p2 = positions[(index + 1) % positions.length];
+
+    // Handle wrap around for interpolation (e.g. angle 359.5 to 0.5)
+    let ang1 = p1.solarAngle;
+    let ang2 = p2.solarAngle;
+    if (ang2 < ang1) ang2 += 360;
+    let calcAngle = angle;
+    if (calcAngle < ang1) calcAngle += 360;
+
+    // Linear Interpolation of distance
+    const t = ang2 - ang1 === 0 ? 0 : (calcAngle - ang1) / (ang2 - ang1);
+
+    return p1.distanceToSun + t * (p2.distanceToSun - p1.distanceToSun);
+  }
+
+  // Get radial zone for a satellite
+  getRadialZone(satellite, ringName) {
+    if (ringName === "ring_earth") return "EARTH_RING";
+    if (ringName === "ring_mars") return "MARS_RING";
+
+    if (!this.ringCrossings.has(ringName)) return "ALLOWED 1";
+    const crossings = this.ringCrossings.get(ringName);
+    if (!crossings) return "ALLOWED 2";
+
+    const solarAngle = satellite.position.solarAngle;
+    const angle = ((solarAngle % 360) + 360) % 360;
+
+    const insideEarth = this.isAngleInRange(angle, crossings.earth.inside);
+    const outsideMars = this.isAngleInRange(angle, crossings.mars.outside);
+
+    if (insideEarth) return "INSIDE_EARTH";
+    if (outsideMars) return "OUTSIDE_MARS";
+    return "BETWEEN_EARTH_AND_MARS";
   }
 
   generateSatellites(config) {
