@@ -759,14 +759,13 @@ export class SimMain {
     let satellites;
     if (this.newSatellitesConfig) {
       this.simSatellites.setSatellitesConfig(this.newSatellitesConfig);
-      this.simSatellites.setOrbitalElements(this.newSatellitesConfig);
-      this.missionProfiles = this.simDeployment.getMissionProfile(this.simSatellites.orbitalElements);
+      this.missionProfiles = this.simDeployment.getMissionProfile(this.simSatellites.getOrbitalElements());
       this.resultTrees = new SimMissionValidator(this.missionProfiles);
       // if (!new SimMissionValidator(this.missionProfiles)) throw new Error("Mission validation failed");
       satellites = this.simSatellites.updateSatellitesPositions(simDate);
       this.satellitesCount = satellites.length;
       console.log("Total satellites on main page:", this.satellitesCount);
-      const possibleLinks = this.simNetwork.getPossibleLinks(planets, satellites);
+      const possibleLinks = this.simNetwork.getPossibleLinks(planets, satellites, this.simSatellites.getOrbitalElements());
       this.capacityInfo = this.calculateCapacityInfo(possibleLinks);
       this.requestLinksUpdate = true;
       this.configChanged = true;
@@ -779,7 +778,7 @@ export class SimMain {
       this.previousLinkUpdateSimDate = simDate;
 
       let perf = performance.now();
-      const possibleLinks = this.simNetwork.getPossibleLinks(planets, satellites);
+      const possibleLinks = this.simNetwork.getPossibleLinks(planets, satellites, this.simSatellites.getOrbitalElements());
       console.log(`Possible links: ${Math.round(performance.now() - perf)} ms`);
 
       this.removeLinks();
@@ -872,10 +871,11 @@ export class SimMain {
         try {
           // Update positions of planets and satellites for the current simulation date
           const planets = this.simSolarSystem.updatePlanetsPositions(simDate);
+
           const satellites = this.simSatellites.updateSatellitesPositions(simDate);
 
           // Get possible links based on current positions
-          const possibleLinks = this.simNetwork.getPossibleLinks(planets, satellites);
+          const possibleLinks = this.simNetwork.getPossibleLinks(planets, satellites, this.simSatellites.getOrbitalElements());
 
           // Retrieve network data
           networkData = this.simNetwork.getNetworkData(planets, satellites, possibleLinks, calctimeMs);
@@ -995,7 +995,7 @@ export class SimMain {
       costPerLaserTerminalMillionUSD: this.costPerLaserTerminal,
       laserPortsPerSatellite: this.simLinkBudget.maxLinksPerSatellite,
     };
-    generateReport(this.missionProfiles, this.resultTrees, costs, this.simSatellites.satellites);
+    generateReport(this.missionProfiles, this.resultTrees, costs, this.simSatellites.getSatellites());
   }
 }
 // Initialize the simulation once the DOM is fully loaded

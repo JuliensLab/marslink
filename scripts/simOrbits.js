@@ -80,6 +80,10 @@ export function helioCoords(ele, date) {
   let vpo = (trueAnomaly + p - o) % 360;
   if (vpo < 0) vpo += 360; // Ensure vpo is positive
 
+  // Calculate the solar angle (true longitude) in degrees
+  let solarAngle = (vpo + o) % 360;
+  if (solarAngle < 0) solarAngle += 360; // Ensure solarAngle is positive
+
   // Convert angles from degrees to radians for trigonometric functions
   const oRad = o * DEG_TO_RAD;
   const iRad = i * DEG_TO_RAD;
@@ -122,5 +126,80 @@ export function helioCoords(ele, date) {
     if (ele.rotationHours.z) rotation.z = computeRotationAngle(ele.rotationHours.z, elapsedSeconds);
   }
 
-  return { x, y, z, rotation, vpo };
+  return { x, y, z, rotation, vpo, solarAngle };
+}
+
+/**
+ * Returns heliocentric Cartesian coordinates (x,y,z in AU) for a given
+ * solarAngle (true ecliptic longitude in degrees, 0–360).
+ *
+ * The solarAngle is measured from the vernal equinox, exactly the same
+ * value that helioCoords() returns as `solarAngle`.
+ *
+ * @param {Object} ele          Orbital elements (same format you already use)
+ * @param {number} solarAngle   Desired true ecliptic longitude (degrees)
+ * @returns {{x:number, y:number, z:number, r:number, trueAnomaly:number}}
+ */
+export function positionFromSolarAngle(ele, solarAngle) {
+  const DEG_TO_RAD = Math.PI / 180;
+  const RAD_TO_DEG = 180 / Math.PI;
+
+  // Normalise the requested angle
+  let L = ((solarAngle % 360) + 360) % 360;
+
+  // ------------------------------------------------------------------
+  // 1. Fixed elements (we ignore secular rates – they are tiny for this use)
+  // ------------------------------------------------------------------
+  const a = ele.a; // semi-major axis (AU)
+  const e = ele.e; // eccentricity
+  const i = ele.i; // inclination (deg)
+  const Ω = ele.o; // longitude of ascending node (deg)
+  const ϖ = ele.p; // longitude of perihelion ϖ = Ω + ω (deg)
+
+  // ------------------------------------------------------------------
+  // 2. True anomaly v from the solar angle
+  //    L  =  Ω + ω + v   →   v = L - ϖ
+  // ------------------------------------------------------------------
+  let v = L - ϖ; // true anomaly (degrees)
+  v = ((v % 360) + 360) % 360; // bring into 0–360 range
+
+  const v_rad = v * DEG_TO_RAD;
+
+  // ------------------------------------------------------------------
+  // 3. Radius in the orbital plane
+  // ------------------------------------------------------------------
+  const cosv = Math.cos(v_rad);
+  const r = (a * (1 - e * e)) / (1 + e * cosv); // AU
+
+  // ------------------------------------------------------------------
+  // 4. Argument of latitude θ = ω + v  (often called vpo in your code)
+  // ------------------------------------------------------------------
+  let θ = ϖ - Ω + v; // ϖ - Ω = argument of perihelion ω
+  θ = ((θ % 360) + 360) % 360;
+  const θ_rad = θ * DEG_TO_RAD;
+
+  // ------------------------------------------------------------------
+  // 5. Convert to ecliptic Cartesian coordinates
+  // ------------------------------------------------------------------
+  const Ω_rad = Ω * DEG_TO_RAD;
+  const i_rad = i * DEG_TO_RAD;
+
+  const cosΩ = Math.cos(Ω_rad);
+  const sinΩ = Math.sin(Ω_rad);
+  const cosθ = Math.cos(θ_rad);
+  const sinθ = Math.sin(θ_rad);
+  const cosi = Math.cos(i_rad);
+  const sini = Math.sin(i_rad);
+
+  const x = r * (cosΩ * cosθ - sinΩ * sinθ * cosi);
+  const y = r * (sinΩ * cosθ + cosΩ * sinθ * cosi);
+  const z = r * (sinθ * sini);
+
+  return {
+    x: x, // AU, ecliptic
+    y: y,
+    z: z,
+    r: r, // distance from Sun
+    trueAnomaly: v, // for debugging / visualisation
+  };
 }

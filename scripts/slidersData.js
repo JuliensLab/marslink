@@ -18,6 +18,13 @@ export const slidersData = {
       value: "actual", // Default to 3D
       unit: "",
     },
+    "satellite-colors": {
+      type: "radio",
+      label: "Satellite Colors",
+      options: ["Quadrants", "Orbital zone", "Normal"],
+      value: "Quadrants",
+      unit: "",
+    },
     "sun-size-factor": {
       label: "Sun Size Factor",
       min: 0,

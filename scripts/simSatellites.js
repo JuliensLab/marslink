@@ -8,6 +8,7 @@ export class SimSatellites {
     this.satellites = [];
     this.orbitalElements = [];
     this.maxSatCount = 20000; // Default high limit
+    this.solarAngleStep = 1.0; // Degrees for precomputing positions along orbit
   }
 
   calculateGbps = (distanceKm) => {
@@ -26,20 +27,71 @@ export class SimSatellites {
     this.maxSatCount = maxSatCount;
   }
 
+  getSatellites() {
+    return this.satellites;
+  }
+
+  getOrbitalElements() {
+    return this.orbitalElements;
+  }
+
   setSatellitesConfig(satellitesConfig) {
     this.satellites = [];
     const newSatellites = [];
     for (let config of satellitesConfig) newSatellites.push(...this.generateSatellites(config));
     this.satellites = newSatellites.slice(0, this.maxSatCount);
+    this.setOrbitalElements(satellitesConfig);
     // console.log(`${this.satellites.length} SATELLITES`);
   }
 
   setOrbitalElements(satellitesConfig) {
     this.orbitalElements = [];
     const newOrbitalElements = [];
-    for (let config of satellitesConfig) newOrbitalElements.push(this.generateOrbitalElements(config));
+    for (let config of satellitesConfig) {
+      const orbitalElement = this.generateOrbitalElements(config);
+      if (orbitalElement) {
+        // Precompute positions along the orbit at solar angle steps
+        orbitalElement.precomputedPositions = this.precomputeOrbitPositions(orbitalElement);
+        newOrbitalElements.push(orbitalElement);
+      }
+    }
     this.orbitalElements = newOrbitalElements;
-    // console.log(this.orbitalElements);
+    console.log(this.orbitalElements);
+  }
+
+  precomputeOrbitPositions(orbitalElement) {
+    const positions = [];
+    const steps = 360 / this.solarAngleStep; // Number of steps around the orbit
+
+    // Use J2000 epoch as reference date
+    const baseDate = new Date("2000-01-01T12:00:00Z");
+
+    // Vary the mean longitude to get positions at different solar angles
+    for (let step = 0; step < steps; step++) {
+      const meanLongitude = (step * this.solarAngleStep) % 360;
+
+      // Create a dummy satellite object with modified mean longitude
+      const dummySatellite = {
+        ...orbitalElement,
+        l: meanLongitude,
+      };
+
+      const position = helioCoords(dummySatellite, baseDate);
+      const distanceToSun = Math.sqrt(position.x * position.x + position.y * position.y + position.z * position.z);
+
+      positions.push({
+        solarAngle: position.solarAngle,
+        distanceToSun: distanceToSun,
+        x: position.x,
+        y: position.y,
+        z: position.z,
+      });
+    }
+
+    // Sort by solar angle
+    positions.sort((a, b) => a.solarAngle - b.solarAngle);
+
+    return positions;
   }
 
   updateSatellitesPositions(simDaysSinceStart) {
@@ -104,28 +156,6 @@ export class SimSatellites {
         let perInterringLinkMbps = gradientOneSideStartMbps ? gradientOneSideStartMbps / (satCountIfFullRing / 2) : null;
         let requiredThroughputMbps = gradientOneSideStartMbps;
 
-        // console.log(
-        //   ringType,
-        //   "satCountOneSide",
-        //   satCountOneSide,
-        //   "satCountIfFullRing",
-        //   satCountIfFullRing,
-        //   "orbitCircumferenceKm",
-        //   orbitCircumferenceKm,
-        //   "sideExtensionDeg",
-        //   sideExtensionDeg,
-        //   "longIncrement",
-        //   longIncrement,
-        //   "gradientOneSideStartMbps",
-        //   gradientOneSideStartMbps,
-        //   "inringAvgDistKm",
-        //   inringAvgDistKm,
-        //   "inringAvgMbps",
-        //   inringAvgMbps,
-        //   "requiredThroughputMbps",
-        //   requiredThroughputMbps
-        // );
-
         let satId = 0;
         let longiDeg = 0;
         while (longiDeg < sideExtensionDeg - longIncrement) {
@@ -136,17 +166,6 @@ export class SimSatellites {
           const longIncrementGradient = (360 * nextDistKm) / orbitCircumferenceKm;
           const selectedIncrement = Math.min(longIncrementGradient, longIncrement);
           longiDeg += selectedIncrement;
-
-          // console.log(
-          //   "nextDistKm",
-          //   nextDistKm,
-          //   "longIncrementGradient",
-          //   longIncrementGradient,
-          //   "selectedIncrement",
-          //   selectedIncrement,
-          //   "longiDeg",
-          //   longiDeg
-          // );
 
           satellites.push(
             this.generateSatellite(
@@ -333,8 +352,8 @@ export class SimSatellites {
           satId++;
         }
       }
-      console.log(ringType, satellites);
     }
+    console.log(ringName, satellites);
     return satellites;
   }
 
@@ -450,6 +469,7 @@ export class SimSatellites {
         n: n ? n : 0.5240613,
         e: 0.0934231,
         l: (262.42784 + long + 360) % 360,
+        Dele: 2450680.5, // J2000 epoch
         apsides,
       };
     else if (ringType == "Earth")
@@ -461,28 +481,31 @@ export class SimSatellites {
         n: n ? n : 0.9855796,
         e: 0.0166967,
         l: (328.40353 + long + 360) % 360,
+        Dele: 2450680.5, // J2000 epoch
         apsides,
       };
     else if (ringType == "Circular")
       return {
         i: this.calculateInclination(a, earthMarsInclinationPct),
-        o: 49.5664, //RAAN
+        o: 0, //RAAN
         p: 0, // arg perigee
         a: a,
         n: n,
         e: eccentricity,
         l: long,
+        Dele: 2450680.5, // J2000 epoch
         apsides,
       };
     else if (ringType == "Eccentric")
       return {
         i: this.calculateInclination(a, earthMarsInclinationPct),
-        o: 49.5664, //RAAN
+        o: 0, //RAAN
         p: argPeri, // arg perigee
         a: a,
         n: n,
         e: eccentricity,
         l: long,
+        Dele: 2450680.5, // J2000 epoch
         apsides,
       };
   }

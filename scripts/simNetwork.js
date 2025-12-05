@@ -1,5 +1,7 @@
 // simNetwork.js
 
+import { SIM_CONSTANTS } from "./simConstants.js";
+
 /*
 We need to rework this. We start over.
 
@@ -13,18 +15,18 @@ If circular rings have 2 or 4+ laser terminals per satellite, then mark all as o
 We're assigning ports to satellites and keeping track of direction facing and used or not.
 Going through circular rings, we mark all satellites that are SEO or BMO as unused (for now at least).
 
-Then, we take the first circular ring (nearest to the sun). For each satellite, we check if it has unused sun facing ports. If so, we find the nearest satellite in the earth ring and mark the vpo range that is covered.
-The vpo range is: we look at the preceeding and following satellites in the same ring (which have sun facing ports, might be N+1 or N+2 (if 3 ports). If the N-1 (or N-2) sat has a vpo of 30 and the N+1 (or N+2) sat has a vpo of 50, 
-then the vpo range covered by our satellite is 35 to 45 (midpoint between neighbors). 
-We mark this range as covered. We connect this satellite to the nearest earth ring satellite (may use vpo to find it quickly, keep in mind its modulo 360).
-Any uncovered vpo range after exhausting all satellites of the first circular ring requires to move to the next circular ring. Once all vpo ranges are covered 
+Then, we take the first circular ring (nearest to the sun). For each satellite, we check if it has unused sun facing ports. If so, we find the nearest satellite in the earth ring and mark the solar angle range that is covered.
+The solar angle range is: we look at the preceeding and following satellites in the same ring (which have sun facing ports, might be N+1 or N+2 (if 3 ports). If the N-1 (or N-2) sat has a solar angle of 30 and the N+1 (or N+2) sat has a solar angle of 50, 
+then the solar angle range covered by our satellite is 35 to 45 (midpoint between neighbors). 
+We mark this range as covered. We connect this satellite to the nearest earth ring satellite (may use solar angle to find it quickly, keep in mind its modulo 360).
+Any uncovered solar angle range after exhausting all satellites of the first circular ring requires to move to the next circular ring. Once all solar angle ranges are covered 
 (be careful about the value precision, we don't want 45.001 to be uncovered because of rounding errors), we move to the next step.
 After we achieve this part, we should have the earth ring connected to the sun facing satellites of the nearest out satellites.
 
 We do the same for Mars but in reverse. We start with the furthest circular ring from the sun, and connect its out facing satellites to Mars ring satellites.
 In all these steps, we ensure an out-facing port connects to a sun-facing port.
 
-Finally, we need to connect circular rings together. We take the ring that has the least number of satellites, and connect it to the nearest ring, using vpo to find the nearest satellite in the next ring.
+Finally, we need to connect circular rings together. We take the ring that has the least number of satellites, and connect it to the nearest ring, using solar angle to find the nearest satellite in the next ring.
 We keep going until all circular rings are connected. We don't need to connect SEO or BMO satellites (but we still want to have their intra-ring connections if more than 2 ports).
 
 
@@ -33,32 +35,231 @@ We keep going until all circular rings are connected. We don't need to connect S
 
 export class SimNetwork {
   constructor(simLinkBudget) {
-    this.AU_IN_KM = 149597871; // 1 AU in kilometers
-    this.SPEED_OF_LIGHT_KM_S = 299792; // Speed of light in km/s}
+    this.AU_IN_KM = SIM_CONSTANTS.AU_IN_KM; // 1 AU in kilometers
+    this.SPEED_OF_LIGHT_KM_S = SIM_CONSTANTS.SPEED_OF_LIGHT_KM_S; // Speed of light in km/s
     this.simLinkBudget = simLinkBudget;
+
+    this.ringCrossings = new Map(); // ringName -> { earth: [...], mars: [...] }
   }
 
-  /**
-   * Generates all possible links between planets and satellites.
-   *
-   * @param {Array} planets - Array of planet objects, each with properties { name, position: { x, y, z } }.
-   * @param {Array} satellites - Array of satellite objects with properties { name, position: { x, y, z } }.
-   * @returns {Array} links - Array of link objects with properties:
-   *                          {
-   *                            fromId: string,
-   *                            toId: string,
-   *                            distanceAU,
-   *                            distanceKm,
-   *                            latencySeconds,
-   *                            gbpsCapacity
-   *                          }
-   */
+  // Find crossings between two orbits by comparing distances to sun
+  distanceToSunAtSolarAngle(sourceEle, targetEle) {
+    const crossings = [];
+    const sourcePositions = sourceEle.precomputedPositions;
+    const targetPositions = targetEle.precomputedPositions;
 
-  // Function to calculate Euclidean distance in AU between two satellites
+    if (!sourcePositions || !targetPositions) return crossings;
+
+    let prevSourceDist = sourcePositions[0].distanceToSun;
+    let prevTargetDist = targetPositions[0].distanceToSun;
+
+    // Iterate through all solar angles
+    for (let i = 1; i < sourcePositions.length; i++) {
+      const sourceDist = sourcePositions[i].distanceToSun;
+      const targetDist = targetPositions[i].distanceToSun;
+
+      // Check for crossing (sign change in distance difference)
+      const prevDiff = prevSourceDist - prevTargetDist;
+      const currDiff = sourceDist - targetDist;
+
+      if (prevDiff * currDiff <= 0) {
+        // Find the exact crossing point using linear interpolation
+        const solarAngle = sourcePositions[i].solarAngle;
+        crossings.push(solarAngle);
+      }
+
+      prevSourceDist = sourceDist;
+      prevTargetDist = targetDist;
+    }
+
+    // Remove duplicates and sort
+    const unique = [];
+    for (const c of crossings) {
+      if (!unique.some((u) => Math.abs(u - c) < 0.01)) unique.push(c);
+    }
+    unique.sort((a, b) => a - b);
+
+    return unique;
+  }
+
+  // Find all radial crossing solar angle angles (on source orbit) with target orbit
+  findAllRadialCrossings(sourceEle, targetEle) {
+    // Handle case where source or target orbit doesn't exist (no Earth/Mars rings)
+    if (!sourceEle || !targetEle) {
+      if (!sourceEle) console.warn("Source orbit is missing, no crossings.");
+      if (!targetEle) console.warn("Target orbit is missing, no crossings.");
+      return { crossings: [], inside: null, outside: null };
+    }
+
+    const crossings = [];
+    const sourcePositions = sourceEle.precomputedPositions;
+    const targetPositions = targetEle.precomputedPositions;
+
+    if (!sourcePositions || !targetPositions || sourcePositions.length < 2 || targetPositions.length < 2) {
+      console.warn("Insufficient precomputed positions for crossing calculation.");
+      return { crossings: [], inside: null, outside: null };
+    }
+
+    // Find crossings between line segments of the two orbits
+    for (let i = 0; i < sourcePositions.length; i++) {
+      const source1 = sourcePositions[i];
+      const source2 = sourcePositions[(i + 1) % sourcePositions.length];
+
+      for (let j = 0; j < targetPositions.length; j++) {
+        const target1 = targetPositions[j];
+        const target2 = targetPositions[(j + 1) % targetPositions.length];
+
+        // Check if line segments intersect (using XY coordinates only)
+        const intersection = this.lineSegmentIntersection(
+          { x: source1.x, y: source1.y },
+          { x: source2.x, y: source2.y },
+          { x: target1.x, y: target1.y },
+          { x: target2.x, y: target2.y }
+        );
+
+        if (intersection) {
+          // Calculate solar angle at intersection point
+          // Interpolate between the two solar angles based on position along the line
+          const solarAngle = this.interpolateSolarAngle(source1, source2, intersection);
+          crossings.push(solarAngle % 360);
+        }
+      }
+    }
+
+    // Remove duplicates and sort
+    const unique = [];
+    for (const c of crossings) {
+      if (!unique.some((u) => Math.abs(u - c) < 0.01)) unique.push(c);
+    }
+    unique.sort((a, b) => a - b);
+
+    // Determine inside and outside ranges (simplified version)
+    let inside = null;
+    let outside = null;
+
+    if (unique.length === 0) {
+      // No crossings - determine based on distance at solar angle 0
+      const sourceDist = sourcePositions[0].distanceToSun;
+      const targetDist = targetPositions[0].distanceToSun;
+      if (sourceDist > targetDist) {
+        console.log(`No crossings. Source (${sourceDist}) > Target (${targetDist}). Outside.`);
+        outside = [0, 360];
+      } else {
+        console.log(`No crossings. Source (${sourceDist}) <= Target (${targetDist}). Inside.`);
+        inside = [0, 360];
+      }
+    } else if (unique.length >= 2) {
+      console.log(`Multiple crossings found: ${unique.length} crossings.`);
+      inside = [unique[0], unique[1]];
+      outside = [unique[1], unique[0] + 360];
+    }
+
+    return { crossings: unique, inside, outside };
+  }
+
+  // Line segment intersection using XY coordinates
+  lineSegmentIntersection(p1, p2, p3, p4) {
+    const denom = (p1.x - p2.x) * (p3.y - p4.y) - (p1.y - p2.y) * (p3.x - p4.x);
+    if (Math.abs(denom) < 1e-10) return null; // Parallel lines
+
+    const t = ((p1.x - p3.x) * (p3.y - p4.y) - (p1.y - p3.y) * (p3.x - p4.x)) / denom;
+    const u = -((p1.x - p2.x) * (p1.y - p3.y) - (p1.y - p2.y) * (p1.x - p3.x)) / denom;
+
+    if (t >= 0 && t <= 1 && u >= 0 && u <= 1) {
+      // Intersection point
+      return {
+        x: p1.x + t * (p2.x - p1.x),
+        y: p1.y + t * (p2.y - p1.y),
+      };
+    }
+
+    return null;
+  }
+
+  // Interpolate solar angle between two positions
+  interpolateSolarAngle(pos1, pos2, intersectionPoint) {
+    // Calculate parameter t along the line from pos1 to pos2
+    const dx = pos2.x - pos1.x;
+    const dy = pos2.y - pos1.y;
+    const length = Math.sqrt(dx * dx + dy * dy);
+
+    if (length < 1e-10) return pos1.solarAngle;
+
+    const dxIntersect = intersectionPoint.x - pos1.x;
+    const dyIntersect = intersectionPoint.y - pos1.y;
+    const distAlongLine = Math.sqrt(dxIntersect * dxIntersect + dyIntersect * dyIntersect);
+
+    const t = distAlongLine / length;
+    const solarAngleDiff = pos2.solarAngle - pos1.solarAngle;
+
+    // Handle wrap-around at 360 degrees
+    let adjustedDiff = solarAngleDiff;
+    if (Math.abs(solarAngleDiff) > 180) {
+      adjustedDiff = solarAngleDiff > 0 ? solarAngleDiff - 360 : solarAngleDiff + 360;
+    }
+
+    return (pos1.solarAngle + t * adjustedDiff) % 360;
+  }
+
+  // Helper: counts how many crossing points are to the left (CCW) of the current angle
+  countCrossingsLeftOf(angle, crossingList) {
+    if (crossingList.length === 0) return 0;
+    let count = 0;
+    for (const c of crossingList) {
+      const cn = ((c % 360) + 360) % 360;
+      if (cn < angle || cn + 360 < angle) count++;
+    }
+    return count;
+  }
+
+  // Get radial zone for a satellite
+  getRadialZone(satellite, ringName) {
+    if (!this.ringCrossings.has(ringName)) return "ALLOWED";
+    const crossings = this.ringCrossings.get(ringName);
+    if (!crossings) return "ALLOWED";
+
+    // If there are no Earth or Mars crossings (no Earth/Mars rings), allow all
+    if ((!crossings.earth || crossings.earth.crossings.length === 0) && (!crossings.mars || crossings.mars.crossings.length === 0)) {
+      return "ALLOWED";
+    }
+
+    const solarAngle = satellite.position.solarAngle;
+    const angle = ((solarAngle % 360) + 360) % 360;
+
+    const outsideEarth =
+      crossings.earth && crossings.earth.crossings.length > 0
+        ? this.countCrossingsLeftOf(angle, crossings.earth.crossings) % 2 === 1
+        : false;
+    const outsideMars =
+      crossings.mars && crossings.mars.crossings.length > 0 ? this.countCrossingsLeftOf(angle, crossings.mars.crossings) % 2 === 1 : false;
+
+    if (!outsideEarth) return "INSIDE_EARTH";
+    if (outsideEarth && !outsideMars) return "BETWEEN_EARTH_AND_MARS";
+    if (outsideMars) return "OUTSIDE_MARS";
+
+    return "UNKNOWN";
+  }
+
+  // Function to calculate Euclidean distance in 2D AU between two satellites
   calculateDistance2DAU = (pos1, pos2) => {
     const dx = pos1.x - pos2.x;
     const dy = pos1.y - pos2.y;
     return Math.sqrt(dx * dx + dy * dy);
+  };
+
+  // Function to calculate Euclidean distance in 3D AU between two satellites
+  calculateDistance3DAU = (pos1, pos2) => {
+    const dx = pos1.x - pos2.x;
+    const dy = pos1.y - pos2.y;
+    const dz = pos1.z - pos2.z;
+    return Math.sqrt(dx * dx + dy * dy + dz * dz);
+  };
+
+  // Function to determin if a satellite is inside or outside an orbit (inside meaning inside the circle of the orbit, so between the orbit and the sun).
+  // For eccentric orbits, use precomputed crossing points for accurate radial zone detection.
+  calculateIfInsideOrbitRing = (satellite, ringOrbitalElements) => {
+    // Use the general radial zone detection
+    return this.getRadialZone(satellite, satellite.ringName);
   };
 
   // Helper Functions
@@ -78,7 +279,39 @@ export class SimNetwork {
     return Math.sqrt(Math.pow(position.x, 2) + Math.pow(position.y, 2) + Math.pow(position.z, 2));
   };
 
-  getPossibleLinks(planets, satellites) {
+  /**
+   * Generates all possible links between planets and satellites.
+   *
+   * @param {Array} planets - Array of planet objects, each with properties { name, position: { x, y, z } }.
+   * @param {Array} satellites - Array of satellite objects with properties { name, position: { x, y, z } }.
+   * @param {Array|Object} ringsOrbitalElements - Array of orbital elements objects for each ring, or object with planet names as keys.
+   * @returns {Array} links - Array of link objects with properties:
+   *                          {
+   *                            fromId: string,
+   *                            toId: string,
+   *                            distanceAU,
+   *                            distanceKm,
+   *                            latencySeconds,
+   *                            gbpsCapacity
+   *                          }
+   */
+  getPossibleLinks(planets, satellites, ringsOrbitalElements) {
+    console.log(ringsOrbitalElements);
+    // Map orbital elements by ringName
+    this.ringCrossings = new Map();
+    const orbitalElementsMap = new Map();
+    if (Array.isArray(ringsOrbitalElements)) ringsOrbitalElements.forEach((ele) => orbitalElementsMap.set(ele.ringName, ele));
+    else {
+      console.error("ringsOrbitalElements should be an array");
+      return;
+    }
+
+    // Set Earth and Mars orbital elements
+    this.earthOrbit = orbitalElementsMap.get("ring_earth");
+    this.marsOrbit = orbitalElementsMap.get("ring_mars");
+
+    console.log(orbitalElementsMap);
+
     // Group satellites by ringName
     const rings = {}; // { ringName: [satellite1, satellite2, ...] }
 
@@ -87,6 +320,18 @@ export class SimNetwork {
       if (!rings[ringName]) rings[ringName] = [];
       rings[ringName].push(satellite);
     });
+
+    // Precompute crossings for each ring
+    for (const ringName in rings) {
+      if (ringName == "ring_earth" || ringName == "ring_mars") continue;
+      if (!this.ringCrossings.has(ringName)) {
+        const ringEle = orbitalElementsMap.get(ringName);
+        const earthCrossings = this.findAllRadialCrossings(ringEle, this.earthOrbit);
+        const marsCrossings = this.findAllRadialCrossings(ringEle, this.marsOrbit);
+        this.ringCrossings.set(ringName, { earth: earthCrossings, mars: marsCrossings });
+      }
+    }
+    console.log(this.ringCrossings);
 
     // Positions mapping
     const positions = {};
@@ -246,6 +491,12 @@ export class SimNetwork {
             // Exclude the same satellite
             if (eccSatellite.name === targetSatellite.name) continue;
 
+            // Check radial zones for inter-ring connection allowance
+            const zoneEcc = this.getRadialZone(eccSatellite, eccentricRingName);
+            const zoneTarget = this.getRadialZone(targetSatellite, targetRingName);
+            if (zoneEcc === "INSIDE_EARTH" || zoneEcc === "OUTSIDE_MARS" || zoneTarget === "INSIDE_EARTH" || zoneTarget === "OUTSIDE_MARS")
+              continue;
+
             // Calculate distanceAU
             const distanceAU = this.calculateDistanceAU(positions[eccSatellite.name], positions[targetSatellite.name]);
 
@@ -355,21 +606,21 @@ export class SimNetwork {
   }
 
   /**
-   * Finds the indices of the nearest lower and higher VPO satellites relative to a given VPO.
-   * @param {number[]} sortedVpoList - A sorted array of VPO values in ascending order.
-   * @param {number} targetVpo - The VPO value to find neighbors for.
+   * Finds the indices of the nearest lower and higher solar angle satellites relative to a given solar angle.
+   * @param {number[]} sortedSolarAngleList - A sorted array of solar angle values in ascending order.
+   * @param {number} targetSolarAngle - The solar angle value to find neighbors for.
    * @returns {Object} An object containing the indices of the nearest lower and higher satellites.
    */
-  findNearestVpoIndices(sortedVpoList, targetVpo) {
+  findNearestSolarAngleIndices(sortedSolarAngleList, targetSolarAngle) {
     let left = 0;
-    let right = sortedVpoList.length - 1;
+    let right = sortedSolarAngleList.length - 1;
     let mid;
-    let lower = sortedVpoList.length - 1; // Default to the last index (wrap-around)
+    let lower = sortedSolarAngleList.length - 1; // Default to the last index (wrap-around)
     let higher = 0; // Default to the first index (wrap-around)
 
     while (left <= right) {
       mid = Math.floor((left + right) / 2);
-      if (sortedVpoList[mid] <= targetVpo) {
+      if (sortedSolarAngleList[mid] <= targetSolarAngle) {
         lower = mid;
         left = mid + 1;
       } else {
@@ -378,13 +629,13 @@ export class SimNetwork {
     }
 
     // The higher index is the next one after lower, with wrap-around
-    higher = (lower + 1) % sortedVpoList.length;
+    higher = (lower + 1) % sortedSolarAngleList.length;
 
     return { lower, higher };
   }
 
   interCircularRings(rings, positions, linkCounts, finalLinks) {
-    // Step 2: Add Links for Circular Rings Based on `a` and `vpo` (Excluding Mars and Earth Rings)
+    // Step 2: Add Links for Circular Rings Based on `a` and `solar angle` (Excluding Mars and Earth Rings)
 
     // Identify circular rings (exclude 'ring_mars' and 'ring_earth')
     const circularRingNames = Object.keys(rings).filter((ringName) => ringName.startsWith("ring_circ"));
@@ -405,7 +656,7 @@ export class SimNetwork {
     // Precompute sorted satellites for each ring
     const ringSatellites = {};
     sortedCircularRings.forEach((ringName) => {
-      ringSatellites[ringName] = rings[ringName].slice().sort((a, b) => a.position.vpo - b.position.vpo);
+      ringSatellites[ringName] = rings[ringName].slice().sort((a, b) => a.position.solarAngle - b.position.solarAngle);
     });
 
     // Iterate through each circular ring
@@ -438,19 +689,19 @@ export class SimNetwork {
           const nextRingIndex = i + 1;
           const nextRingName = sortedCircularRings[nextRingIndex];
           const nextRingSatellites = ringSatellites[nextRingName];
-          const sortedNextVpoList = nextRingSatellites.map((sat) => sat.position.vpo);
+          const sortedNextSolarAngleList = nextRingSatellites.map((sat) => sat.position.solarAngle);
 
-          const currentVpo = currentSatellite.position.vpo % 360; // Ensure vpo is within [0, 360)
+          const currentSolarAngle = currentSatellite.position.solarAngle % 360; // Ensure solar angle is within [0, 360)
 
-          // Sweep to find the nearest higher vpo satellite
+          // Sweep to find the nearest higher solar angle satellite
           let nextIndex = 0;
-          while (nextIndex < sortedNextVpoList.length && sortedNextVpoList[nextIndex] < currentVpo) {
+          while (nextIndex < sortedNextSolarAngleList.length && sortedNextSolarAngleList[nextIndex] < currentSolarAngle) {
             nextIndex++;
           }
 
           // Determine nearest lower and higher satellites with wrap-around
-          const nearestHigher = nextRingSatellites[nextIndex % sortedNextVpoList.length];
-          const nearestLower = nextRingSatellites[(nextIndex - 1 + sortedNextVpoList.length) % sortedNextVpoList.length];
+          const nearestHigher = nextRingSatellites[nextIndex % sortedNextSolarAngleList.length];
+          const nearestLower = nextRingSatellites[(nextIndex - 1 + sortedNextSolarAngleList.length) % sortedNextSolarAngleList.length];
 
           // Calculate distances
           const distanceAULower = this.calculateDistanceAU(positions[currentSatellite.name], positions[nearestLower.name]);
@@ -466,6 +717,16 @@ export class SimNetwork {
           let targetSatellite = null;
           for (const candidate of candidates) {
             if (linkCounts[candidate.satellite.name] < this.simLinkBudget.getMaxLinksPerRing(candidate.satellite.ringName)) {
+              // Check radial zones for inter-ring connection allowance
+              const zoneCurrent = this.getRadialZone(currentSatellite, currentRingName);
+              const zoneTarget = this.getRadialZone(candidate.satellite, nextRingName);
+              if (
+                zoneCurrent === "INSIDE_EARTH" ||
+                zoneCurrent === "OUTSIDE_MARS" ||
+                zoneTarget === "INSIDE_EARTH" ||
+                zoneTarget === "OUTSIDE_MARS"
+              )
+                continue;
               targetSatellite = candidate;
               break;
             }
@@ -636,6 +897,10 @@ export class SimNetwork {
         });
 
         if (nearestSatellite) {
+          // Check radial zone for inter-ring connection allowance
+          const zone = this.getRadialZone(nearestSatellite, nearestSatellite.ringName);
+          if (zone === "INSIDE_EARTH" || zone === "OUTSIDE_MARS") return;
+
           const distanceKm = nearestDistanceAU * this.AU_IN_KM;
           const gbpsCapacity = this.calculateGbps(distanceKm);
           const latencySeconds = this.calculateLatency(distanceKm);
@@ -791,6 +1056,13 @@ export class SimNetwork {
         nearbySatellites.forEach((circSatellite) => {
           // Exclude the satellite itself
           if (circSatellite.name === eccSatellite.name) return;
+
+          // Check radial zones for inter-ring connection allowance
+          const zoneEcc = this.getRadialZone(eccSatellite, ecceRingName);
+          const circRingName = circularRingNames.find((r) => rings[r].includes(circSatellite));
+          const zoneCirc = this.getRadialZone(circSatellite, circRingName);
+          if (zoneEcc === "INSIDE_EARTH" || zoneEcc === "OUTSIDE_MARS" || zoneCirc === "INSIDE_EARTH" || zoneCirc === "OUTSIDE_MARS")
+            return;
 
           const distanceAU = this.calculateDistanceAU(positions[eccSatellite.name], positions[circSatellite.name]);
           // Enforce maximum distance constraint

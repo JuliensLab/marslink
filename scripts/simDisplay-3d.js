@@ -55,7 +55,7 @@ export class SimDisplay {
     this.sunSizeFactor = 1;
     this.planetSizeFactor = 1;
     this.satelliteSizeFactor = 1;
-    this.currentSatelliteScale = 1;
+    this.currentSatelliteScale = 100; // Default scale to make satellites visible initially
     // === Styles ===
     this.styles = {
       links: {
@@ -310,19 +310,24 @@ export class SimDisplay {
       }
     }
     // Update satellites geometry scale
-    if (this.satelliteMesh) {
-      const ratio = satelliteScaleFactor / this.currentSatelliteScale;
-      this.satelliteMesh.geometry.scale(ratio, ratio, ratio);
-      this.currentSatelliteScale = satelliteScaleFactor;
-    }
+    // Scaling is handled in updatePositions when recreating meshes
+    this.currentSatelliteScale = satelliteScaleFactor;
   }
 
+  // Define emissive colors for solar angle quadrants
+  quadrantEmissives = [
+    new THREE.Color(0xdd2222), // 0-90 degrees
+    new THREE.Color(0x22dd22), // 90-180 degrees
+    new THREE.Color(0x2222dd), // 180-270 degrees
+    new THREE.Color(0x666666), // 270-360 degrees
+  ];
+
   /**
-   * Sets up satellites using instanced meshes for efficiency.
+   * Sets up satellites using instanced meshes for efficiency, grouped by solar angle quadrant.
    * Cleans up any previous instanced objects if needed.
    *
    * @param {Array} satellites - Array of satellite objects with properties:
-   *                             { color } (only color is used here).
+   *                             { position: { vpo } }.
    */
   setSatellites(satellites) {
     // Cleanup existing satellites group
@@ -339,48 +344,57 @@ export class SimDisplay {
       6 // Number of segments (hexagonal cylinder)
     );
 
-    // Satellite material: Supports per-instance colors
-    const material = new THREE.MeshPhongMaterial({
-      color: 0xffffff, // Default white color
-      shininess: 10, // Adds a subtle shine to the satellites
-      specular: new THREE.Color(0x333333), // Specular reflection color
-      vertexColors: true, // Enable per-instance coloring
-      emissive: new THREE.Color(0x444444), // Add an emissive color
-      emissiveIntensity: 0.5, // Adjust emissive intensity as needed
-      transparent: false, // No transparency for now
-      opacity: 1.0, // Fully opaque
-    });
-
-    // Create Instanced Mesh: Shared geometry and material for all satellites
-    const instancedMesh = new THREE.InstancedMesh(geometry, material, satellites.length);
-    instancedMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage); // Optimized for frequent updates
-    instancedMesh.castShadow = false; // Satellites do not cast shadows
-    instancedMesh.receiveShadow = true; // Satellites receive shadows
-
-    // Set instance color and initialize transformations
-    const dummy = new THREE.Object3D(); // Temporary object for matrix transformations
+    // Group satellites by quadrant
+    const quadrantSatellites = [[], [], [], []];
     satellites.forEach((satellite, index) => {
-      // Set a grey color for all instances
-      const color = new THREE.Color(0.9, 0.9, 0.9);
-      instancedMesh.setColorAt(index, color);
-
-      // Initial position (to be updated in updateData)
-      const position = satellite.position;
-      dummy.position.set(
-        auTo3D(position.x),
-        auTo3D(position.z), // Swap y and z axes if needed
-        -auTo3D(position.y)
-      ); // Default position
-      dummy.updateMatrix();
-      instancedMesh.setMatrixAt(index, dummy.matrix); // Save initial transformation matrix
+      const solarAngle = ((satellite.position.solarAngle % 360) + 360) % 360;
+      const quadrant = Math.floor(solarAngle / 90);
+      quadrantSatellites[quadrant].push({ satellite, originalIndex: index });
     });
 
-    // Add the instanced mesh to the scene
-    this.satellitesGroup.add(instancedMesh);
-    this.satelliteMesh = instancedMesh; // Save reference for later updates
+    // Create instanced meshes for each quadrant
+    this.satelliteMeshes = [];
+    this.satelliteQuadrantIndices = [];
+    quadrantSatellites.forEach((quadSats, quadIndex) => {
+      if (quadSats.length === 0) return;
 
-    // Initial scale is already applied to geometry
-    this.currentSatelliteScale = 1;
+      // Satellite material: Emissive color based on quadrant
+      const material = new THREE.MeshPhongMaterial({
+        color: 0xffffff, // Default white color
+        shininess: 10, // Adds a subtle shine to the satellites
+        specular: new THREE.Color(0x333333), // Specular reflection color
+        emissive: this.quadrantEmissives[quadIndex], // Emissive color based on quadrant
+        emissiveIntensity: 0.5, // Adjust emissive intensity
+        transparent: false, // No transparency for now
+        opacity: 1.0, // Fully opaque
+      });
+
+      // Create Instanced Mesh
+      const instancedMesh = new THREE.InstancedMesh(geometry, material, quadSats.length);
+      instancedMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage); // Optimized for frequent updates
+      instancedMesh.castShadow = false; // Satellites do not cast shadows
+      instancedMesh.receiveShadow = true; // Satellites receive shadows
+
+      // Set initial transformations
+      const dummy = new THREE.Object3D();
+      quadSats.forEach((item, localIndex) => {
+        const position = item.satellite.position;
+        dummy.position.set(
+          auTo3D(position.x),
+          auTo3D(position.z), // Swap y and z axes if needed
+          -auTo3D(position.y)
+        );
+        dummy.updateMatrix();
+        instancedMesh.setMatrixAt(localIndex, dummy.matrix);
+      });
+
+      // Add to scene
+      this.satellitesGroup.add(instancedMesh);
+      this.satelliteMeshes.push(instancedMesh);
+      this.satelliteQuadrantIndices.push(quadSats.map((item) => item.originalIndex));
+    });
+
+    // Geometry scaling is handled in updatePositions
   }
 
   /**
@@ -424,33 +438,62 @@ export class SimDisplay {
 
     // === Update Satellite Positions ===
     this.satellitePositions = {};
-    if (this.satelliteMesh && satellites.length > 0) {
-      const dummy = new THREE.Object3D();
-      satellites.forEach((satellite, index) => {
-        const position = satellite.position;
-        dummy.position.set(
-          auTo3D(position.x),
-          auTo3D(position.z), // Swap y and z axes if needed
-          -auTo3D(position.y)
-        );
-        // Update rotation if provided
-        if (position.rotation) {
-          dummy.rotation.set(position.rotation.x || 0, position.rotation.y || 0, position.rotation.z || 0);
-        } else {
-          // Reset rotation if not provided
-          dummy.rotation.set(0, 0, 0);
-        }
-        dummy.updateMatrix();
-        this.satelliteMesh.setMatrixAt(index, dummy.matrix); // Update matrix
+    // Recreate satellite meshes grouped by current solar angle quadrants
+    this.clearGroup(this.satellitesGroup);
+    if (satellites.length > 0) {
+      const scale = 0.0001;
+      const geometry = new THREE.CylinderGeometry(scale, scale, scale * 2, 6);
+      geometry.scale(this.currentSatelliteScale, this.currentSatelliteScale, this.currentSatelliteScale);
 
-        // Store position
-        this.satellitePositions[satellite.name] = {
-          x: dummy.position.x,
-          y: dummy.position.y,
-          z: dummy.position.z,
-        };
+      // Group satellites by current quadrant
+      const quadrantSatellites = [[], [], [], []];
+      satellites.forEach((satellite, index) => {
+        const solarAngle = ((satellite.position.solarAngle % 360) + 360) % 360;
+        const quadrant = Math.floor(solarAngle / 90);
+        quadrantSatellites[quadrant].push({ satellite, index });
       });
-      this.satelliteMesh.instanceMatrix.needsUpdate = true; // Notify Three.js of the update
+
+      // Create instanced meshes for each quadrant
+      quadrantSatellites.forEach((quadSats, quadIndex) => {
+        if (quadSats.length === 0) return;
+
+        const material = new THREE.MeshPhongMaterial({
+          color: 0xffffff,
+          shininess: 10,
+          specular: new THREE.Color(0x333333),
+          emissive: this.quadrantEmissives[quadIndex],
+          emissiveIntensity: 0.5,
+          transparent: false,
+          opacity: 1.0,
+        });
+
+        const instancedMesh = new THREE.InstancedMesh(geometry, material, quadSats.length);
+        instancedMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+        instancedMesh.castShadow = false;
+        instancedMesh.receiveShadow = true;
+
+        const dummy = new THREE.Object3D();
+        quadSats.forEach((item, localIndex) => {
+          const position = item.satellite.position;
+          dummy.position.set(auTo3D(position.x), auTo3D(position.z), -auTo3D(position.y));
+          if (position.rotation) {
+            dummy.rotation.set(position.rotation.x || 0, position.rotation.y || 0, position.rotation.z || 0);
+          } else {
+            dummy.rotation.set(0, 0, 0);
+          }
+          dummy.updateMatrix();
+          instancedMesh.setMatrixAt(localIndex, dummy.matrix);
+
+          // Store position
+          this.satellitePositions[item.satellite.name] = {
+            x: dummy.position.x,
+            y: dummy.position.y,
+            z: dummy.position.z,
+          };
+        });
+        instancedMesh.instanceMatrix.needsUpdate = true;
+        this.satellitesGroup.add(instancedMesh);
+      });
     }
 
     // === Update Links Positions ===
