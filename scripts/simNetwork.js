@@ -610,13 +610,30 @@ export class SimNetwork {
     // For each circular ring paired with Mars ring
     sortedCircularRings.forEach((circRingName) => {
       const circRingSatellites = rings[circRingName];
+
+      // Sort satellites by solar angle
+      const sortedMarsSats = marsRingSatellites.slice().sort((a, b) => a.position.solarAngle - b.position.solarAngle);
+      const sortedCircSats = circRingSatellites.slice().sort((a, b) => a.position.solarAngle - b.position.solarAngle);
+
       const candidates = [];
 
       // From Mars ring to circular ring
       marsRingSatellites.forEach((marsSat) => {
         if (!portUsage[marsSat.name].inwards) {
-          circRingSatellites.forEach((circSat) => {
-            if (circSat.orbitalZone === "BETWEEN_EARTH_AND_MARS" && !portUsage[circSat.name].outwards) {
+          const marsSolarAngle = marsSat.position.solarAngle % 360;
+
+          // Find insertion index in sortedCircSats
+          let index = 0;
+          while (index < sortedCircSats.length && sortedCircSats[index].position.solarAngle < marsSolarAngle) {
+            index++;
+          }
+
+          const nearestHigher = sortedCircSats[index % sortedCircSats.length];
+          const nearestLower = sortedCircSats[(index - 1 + sortedCircSats.length) % sortedCircSats.length];
+
+          // Add both as candidates if conditions met
+          [nearestLower, nearestHigher].forEach(circSat => {
+            if (circSat && circSat.orbitalZone === "BETWEEN_EARTH_AND_MARS" && !portUsage[circSat.name].outwards) {
               const distanceAU = this.calculateDistanceAU(positions[marsSat.name], positions[circSat.name]);
               candidates.push({ from: marsSat, to: circSat, distanceAU });
             }
@@ -627,8 +644,20 @@ export class SimNetwork {
       // From circular ring to Mars ring
       circRingSatellites.forEach((circSat) => {
         if (circSat.orbitalZone === "BETWEEN_EARTH_AND_MARS" && !portUsage[circSat.name].outwards) {
-          marsRingSatellites.forEach((marsSat) => {
-            if (!portUsage[marsSat.name].inwards) {
+          const circSolarAngle = circSat.position.solarAngle % 360;
+
+          // Find insertion index in sortedMarsSats
+          let index = 0;
+          while (index < sortedMarsSats.length && sortedMarsSats[index].position.solarAngle < circSolarAngle) {
+            index++;
+          }
+
+          const nearestHigher = sortedMarsSats[index % sortedMarsSats.length];
+          const nearestLower = sortedMarsSats[(index - 1 + sortedMarsSats.length) % sortedMarsSats.length];
+
+          // Add both as candidates if conditions met
+          [nearestLower, nearestHigher].forEach(marsSat => {
+            if (marsSat && !portUsage[marsSat.name].inwards) {
               const distanceAU = this.calculateDistanceAU(positions[circSat.name], positions[marsSat.name]);
               candidates.push({ from: circSat, to: marsSat, distanceAU });
             }
