@@ -293,7 +293,7 @@ export class SimDisplay {
   createTextSprite(text) {
     const canvas = document.createElement("canvas");
     const context = canvas.getContext("2d");
-    const fontSize = 24;
+    const fontSize = 48;
     context.font = `${fontSize}px Arial`;
     const textWidth = context.measureText(text).width;
     canvas.width = textWidth + 20;
@@ -303,7 +303,7 @@ export class SimDisplay {
     const texture = new THREE.CanvasTexture(canvas);
     const spriteMaterial = new THREE.SpriteMaterial({ map: texture });
     const sprite = new THREE.Sprite(spriteMaterial);
-    sprite.scale.set(0.01, 0.01, 1); // Adjust scale as needed
+    sprite.scale.set(0.05, 0.05, 1); // Adjust scale as needed
     return sprite;
   }
 
@@ -356,12 +356,12 @@ export class SimDisplay {
 
   // Define emissive colors for orbital zones
   orbitalZoneEmissives = [
-    new THREE.Color(0xdd2222), // Orange for inside earth
-    new THREE.Color(0x22dd22), // Cyan for between earth and mars
-    new THREE.Color(0x2222dd), // Purple for outside mars
-    new THREE.Color(0x333333), // Black for unknown
-    new THREE.Color(0x0066ff), // Yellow for earth ring
-    new THREE.Color(0xff6600), // Magenta for mars ring
+    new THREE.Color(0xdd2222), // Red for inside earth
+    new THREE.Color(0x22dd22), // Green for between earth and mars
+    new THREE.Color(0x2222dd), // Blue for outside mars
+    new THREE.Color(0x333333), // Grey for unknown
+    new THREE.Color(0x0066ff), // Blue green for earth ring
+    new THREE.Color(0xff6600), // Red green for mars ring
   ];
 
   // Normal color
