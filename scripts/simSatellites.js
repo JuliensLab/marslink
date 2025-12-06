@@ -36,6 +36,10 @@ export class SimSatellites {
     return this.orbitalElements;
   }
 
+  getRingCrossings() {
+    return this.ringCrossings;
+  }
+
   setSatellitesConfig(satellitesConfig) {
     this.satellites = [];
     const newSatellites = [];

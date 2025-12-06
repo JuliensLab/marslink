@@ -695,6 +695,10 @@ export class SimNetwork {
   }
 
   earthToCircularRings(rings, positions, linkCounts, finalLinks, portUsage) {
+    // Get orbital elements
+    const orbitalElements = this.simSatellites.getOrbitalElements();
+    console.log('Orbital elements:', orbitalElements);
+
     // Get Earth ring satellites
     const earthRingSatellites = rings["ring_earth"] || [];
 
@@ -708,16 +712,82 @@ export class SimNetwork {
       return aDist - bDist;
     });
 
-    // For each circular ring paired with Earth ring
-    sortedCircularRings.forEach((circRingName) => {
+    // Initialize taken ranges
+    let takenRanges = [];
+    console.log('Starting with taken ranges:', takenRanges);
+
+    // Helper to check if ranges cover full 360 degrees
+    const isFullCoverage = (ranges) => {
+      if (ranges.length === 0) return false;
+      const sorted = ranges.slice().sort((a, b) => a[0] - b[0]);
+      const merged = [sorted[0]];
+      for (let i = 1; i < sorted.length; i++) {
+        const last = merged[merged.length - 1];
+        if (sorted[i][0] <= last[1]) {
+          last[1] = Math.max(last[1], sorted[i][1]);
+        } else {
+          merged.push(sorted[i]);
+        }
+      }
+      return merged.length === 1 && merged[0][0] <= 0 && merged[0][1] >= 360;
+    };
+
+    // Process each ring
+    for (const circRingName of sortedCircularRings) {
+      const crossings = this.simSatellites.getRingCrossings().get(circRingName);
+      if (!crossings || !crossings.earth) {
+        console.log(`No earth crossings for ${circRingName}`);
+        continue;
+      }
+
+      const outsideRange = crossings.earth.outside;
+      if (!outsideRange) {
+        console.log(`No outside range for ${circRingName}`);
+        continue;
+      }
+
+      console.log(`Processing ring ${circRingName}, outside range: ${outsideRange}`);
+
       const circRingSatellites = rings[circRingName];
+
+      // Filter valid satellites: in outside range and not in takenRanges
+      const validSats = circRingSatellites.filter(sat => {
+        const angle = sat.position.solarAngle;
+        const inOutside = angle >= outsideRange[0] && angle <= outsideRange[1];
+        const inTaken = takenRanges.some(range => angle >= range[0] && angle <= range[1]);
+        return inOutside && !inTaken;
+      });
+
+      console.log(`Valid satellites for ${circRingName}: ${validSats.length} out of ${circRingSatellites.length}`);
+
+      if (validSats.length === 0) {
+        console.log(`No valid satellites, skipping`);
+        continue;
+      }
+
+      // Sort satellites by solar angle
+      const sortedEarthSats = earthRingSatellites.slice().sort((a, b) => a.position.solarAngle - b.position.solarAngle);
+      const sortedCircSats = validSats.slice().sort((a, b) => a.position.solarAngle - b.position.solarAngle);
+
       const candidates = [];
 
       // From Earth ring to circular ring
       earthRingSatellites.forEach((earthSat) => {
         if (!portUsage[earthSat.name].outwards) {
-          circRingSatellites.forEach((circSat) => {
-            if (circSat.orbitalZone === "BETWEEN_EARTH_AND_MARS" && !portUsage[circSat.name].inwards) {
+          const earthSolarAngle = earthSat.position.solarAngle % 360;
+
+          // Find insertion index in sortedCircSats
+          let index = 0;
+          while (index < sortedCircSats.length && sortedCircSats[index].position.solarAngle < earthSolarAngle) {
+            index++;
+          }
+
+          const nearestHigher = sortedCircSats[index % sortedCircSats.length];
+          const nearestLower = sortedCircSats[(index - 1 + sortedCircSats.length) % sortedCircSats.length];
+
+          // Add both as candidates if conditions met
+          [nearestLower, nearestHigher].forEach(circSat => {
+            if (circSat && circSat.orbitalZone === "BETWEEN_EARTH_AND_MARS" && !portUsage[circSat.name].inwards) {
               const distanceAU = this.calculateDistanceAU(positions[earthSat.name], positions[circSat.name]);
               candidates.push({ from: earthSat, to: circSat, distanceAU });
             }
@@ -726,10 +796,22 @@ export class SimNetwork {
       });
 
       // From circular ring to Earth ring
-      circRingSatellites.forEach((circSat) => {
+      validSats.forEach((circSat) => {
         if (circSat.orbitalZone === "BETWEEN_EARTH_AND_MARS" && !portUsage[circSat.name].inwards) {
-          earthRingSatellites.forEach((earthSat) => {
-            if (!portUsage[earthSat.name].outwards) {
+          const circSolarAngle = circSat.position.solarAngle % 360;
+
+          // Find insertion index in sortedEarthSats
+          let index = 0;
+          while (index < sortedEarthSats.length && sortedEarthSats[index].position.solarAngle < circSolarAngle) {
+            index++;
+          }
+
+          const nearestHigher = sortedEarthSats[index % sortedEarthSats.length];
+          const nearestLower = sortedEarthSats[(index - 1 + sortedEarthSats.length) % sortedEarthSats.length];
+
+          // Add both as candidates if conditions met
+          [nearestLower, nearestHigher].forEach(earthSat => {
+            if (earthSat && !portUsage[earthSat.name].outwards) {
               const distanceAU = this.calculateDistanceAU(positions[circSat.name], positions[earthSat.name]);
               candidates.push({ from: circSat, to: earthSat, distanceAU });
             }
@@ -792,7 +874,17 @@ export class SimNetwork {
       }
 
       console.log(`Earth ring <-> ${circRingName}: ${linksAdded} connections made`);
-    });
+
+      // Add outsideRange to takenRanges
+      takenRanges.push(outsideRange);
+      console.log(`Taken ranges after adding ${circRingName}:`, takenRanges);
+
+      // Check if takenRanges cover full 360
+      if (isFullCoverage(takenRanges)) {
+        console.log('Full coverage reached, stopping further rings');
+        break;
+      }
+    }
   }
 
   marsEarthRings(rings, positions, linkCounts, finalLinks, portUsage) {
