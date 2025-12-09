@@ -357,6 +357,38 @@ export const slidersData = {
       updateLongTermScore: true,
     },
   },
+  adapted_rings: {
+    "laser-ports-per-satellite": {
+      label: "Laser Terminals per Satellite",
+      min: 2,
+      max: 10,
+      value: 4,
+      step: 1,
+      unit: " ports",
+      scale: "linear",
+      updateLongTermScore: true,
+    },
+    ringcount: {
+      label: "Ring count",
+      min: 0,
+      max: 10,
+      value: 4,
+      step: 1,
+      unit: "",
+      scale: "linear",
+      updateLongTermScore: true,
+    },
+    requiredmbpsbetweensats: {
+      label: "Throughput in ring",
+      min: 1,
+      max: 300,
+      value: 50,
+      step: 1,
+      unit: " Mbps",
+      scale: "linear",
+      updateLongTermScore: true,
+    },
+  },
   eccentric_rings: {
     "laser-ports-per-satellite": {
       label: "Laser Terminals per Satellite",

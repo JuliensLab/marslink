@@ -212,7 +212,9 @@ export class SimNetwork {
   interEccentricRings(rings, positions, linkCounts, finalLinks) {
     // Step 1: Identify valid rings (eccentric and circular rings)
     const eccentricRingNames = Object.keys(rings).filter((ringName) => ringName.startsWith("ring_ecce"));
-    const circularRingNames = Object.keys(rings).filter((ringName) => ringName.startsWith("ring_circ"));
+    const circularRingNames = Object.keys(rings).filter(
+      (ringName) => ringName.startsWith("ring_circ") || ringName.startsWith("ring_adapt")
+    );
     const validRingNames = new Set([...eccentricRingNames, ...circularRingNames]);
 
     // Step 2: Initialize a Set for existing links for O(1) lookup
@@ -359,228 +361,153 @@ export class SimNetwork {
   }
 
   interCircularRings(rings, positions, linkCounts, finalLinks, portUsage, targetDepartureAngle = 0) {
-    // Step 2: Add Links for Circular Rings using Target Departure Angle
+    const circularRingNames = Object.keys(rings).filter(
+      (ringName) => ringName.startsWith("ring_circ_") || ringName.startsWith("ring_adapt_")
+    );
 
-    const circularRingNames = Object.keys(rings).filter((ringName) => ringName.startsWith("ring_circ"));
+    if (circularRingNames.length === 0) return;
 
-    // Sort circular rings from closest to furthest based on 'a' (ascending)
-    const sortedCircularRings = circularRingNames.slice().sort((a, b) => {
-      return rings[a][0].a - rings[b][0].a;
-    });
-
-    const existingLinks = new Set(finalLinks.map((link) => `${link.fromId}-${link.toId}`));
-    const AU_IN_KM = this.AU_IN_KM;
-
-    // Precompute sorted satellites
-    const ringSatellites = {};
-    sortedCircularRings.forEach((ringName) => {
-      ringSatellites[ringName] = rings[ringName].slice().sort((a, b) => a.position.solarAngle - b.position.solarAngle);
-    });
-
-    // Mark unavailable ports for rings with 3 ports
-    sortedCircularRings.forEach((ringName) => {
-      const maxLinks = this.simLinkBudget.getMaxLinksPerRing(ringName);
-      if (maxLinks === 3) {
-        ringSatellites[ringName].forEach((sat, index) => {
-          if (index % 2 === 0) portUsage[sat.name].outwards = true;
-          else portUsage[sat.name].inwards = true;
-        });
-      }
-    });
-
-    // Helper: Normalize angle to 0-360
-    const normalizeAngle = (deg) => ((deg % 360) + 360) % 360;
-
-    // Helper: Get angle difference for sorting neighbors
-    const getAngleDist = (a, b) => {
-      const diff = Math.abs(a - b);
-      return Math.min(diff, 360 - diff);
+    // Extract numeric index from ring name: ring_circ_5 → 5, ring_adapt_12 → 12
+    const parseIndex = (name) => {
+      const match = name.match(/_(\d+)$/);
+      return match ? parseInt(match[1], 10) : -1;
     };
 
-    // Iterate through ring pairs (Inner -> Outer)
-    for (let i = 0; i < sortedCircularRings.length; i++) {
-      if (i + 1 < sortedCircularRings.length) {
-        const innerRingName = sortedCircularRings[i];
-        const outerRingName = sortedCircularRings[i + 1];
+    // Create list of { name, index, radius }
+    const ringList = circularRingNames
+      .map((name) => ({
+        name,
+        index: parseIndex(name),
+        radius: rings[name][0].a, // using semi-major axis as radius proxy
+      }))
+      .filter((r) => r.index >= 0);
 
-        const innerSatellites = ringSatellites[innerRingName];
-        const outerSatellites = ringSatellites[outerRingName];
-        const outerAngles = outerSatellites.map((s) => s.position.solarAngle);
+    // Sort by index (Earth → Mars direction)
+    ringList.sort((a, b) => a.index - b.index);
 
-        // Get Radii for Geometry Calculation (approximate using first sat)
-        // We use 'a' (semi-major axis) as a proxy for radius in circular rings
-        const rInner = rings[innerRingName][0].a;
-        const rOuter = rings[outerRingName][0].a;
+    const existingLinks = new Set(finalLinks.map((l) => `${l.fromId}-${l.toId}`));
+    const AU_IN_KM = this.AU_IN_KM;
 
-        // Pre-calculate the Solar Angle Delta required to achieve the Target Departure Angle
-        // Law of Sines / Triangle Geometry:
-        // We want the link to leave Inner at 'targetDepartureAngle' relative to Inner Radial.
-        // Let gamma = targetDepartureAngle.
-        // By geometry, the angular shift (deltaTheta) in solar angle is derived from the triangle formed by Sun, InnerSat, OuterSat.
-        // However, a robust approximation is to project the vector.
-        //
-        // Better approach per satellite:
-        // 1. Inner Sat Position (Polar: rInner, theta)
-        // 2. Ideal Ray Vector from Inner: Angle = theta + targetDepartureAngle
-        // 3. Intersection of Ray with Outer Radius (rOuter)
-        //
-        // Simplified Approximation for small angles/circular orbits:
-        // The "Ideal" solar angle of the target is NOT innerAngle + constant.
-        // It is the angle where the vector (rInner, theta) + vector(d, theta+departure) hits rOuter.
-        //
-        // We can iterate satellites and calculate the exact "Ideal Solar Angle" for each.
+    // Precompute sorted satellites per ring
+    const ringSatellites = {};
+    ringList.forEach((ring) => {
+      ringSatellites[ring.name] = rings[ring.name].slice().sort((a, b) => a.position.solarAngle - b.position.solarAngle);
+    });
 
-        const candidates = [];
+    // Pre-mark unavailable ports for 3-port rings
+    ringList.forEach((ring) => {
+      const maxLinks = this.simLinkBudget.getMaxLinksPerRing(ring.name);
+      if (maxLinks !== 3) return;
+      ringSatellites[ring.name].forEach((sat, i) => {
+        if (i % 2 === 0) portUsage[sat.name].outwards = true;
+        else portUsage[sat.name].inwards = true;
+      });
+    });
 
-        innerSatellites.forEach((innerSat, j) => {
-          // 1. Check Availability
-          const maxLinks = this.simLinkBudget.getMaxLinksPerRing(innerSat.ringName);
-          let canConnectOut = true;
-          if (i === 0 && maxLinks === 3) canConnectOut = j % 2 === 1;
-          else canConnectOut = linkCounts[innerSat.name] < maxLinks;
+    const normalizeAngle = (deg) => ((deg % 360) + 360) % 360;
 
-          if (!canConnectOut) return;
-          if (portUsage[innerSat.name].outwards) return;
+    // Now: Only connect each ring to its IMMEDIATE NEXT (index +1)
+    for (let i = 0; i < ringList.length - 1; i++) {
+      const inner = ringList[i];
+      const outer = ringList[i + 1];
 
-          // 2. Calculate Ideal Target Solar Angle
-          // Current Position
-          const thetaRad = (innerSat.position.solarAngle * Math.PI) / 180;
-          const r1 = rInner;
-          const r2 = rOuter;
+      // Critical check: Only connect if indices are consecutive!
+      if (outer.index !== inner.index + 1) {
+        console.log(`Skipping non-consecutive rings: ${inner.name} (${inner.index}) → ${outer.name} (${outer.index})`);
+        continue;
+      }
 
-          // Departure angle relative to radial line.
-          // Radial angle is thetaRad. Link angle is thetaRad + departureRad + (PI/2 if we defined tangent, but we defined relative to radial)
-          // Wait, radial is "Vertical". Tangent is "Horizontal".
-          // If departureAngle is 0, we go straight up (radial). Target Theta = Inner Theta.
-          // If departureAngle is != 0, we form a triangle with sides r1, r2, and angle 'departure' at r1.
-          // We need to find the angle at the Sun (deltaTheta).
-          // Using Law of Sines on triangle Sun-Inner-Outer:
-          // Angle at Inner (Internal) = 180 - departureAngle (if departure is "outwards" relative to radial)
-          // Actually, standard Law of Cosines is safer to find the distance 'd', then 'deltaTheta'.
+      console.log(`Connecting consecutive rings: ${inner.name} (#${inner.index}) → ${outer.name} (#${outer.index})`);
 
-          // Let's use vector projection, it's robust.
-          // Inner Pos:
-          const p1x = innerSat.position.x;
-          const p1y = innerSat.position.y;
+      const innerSats = ringSatellites[inner.name];
+      const outerSats = ringSatellites[outer.name];
+      const outerAngles = outerSats.map((s) => s.position.solarAngle);
 
-          // We want a direction vector 'D' rotated 'targetDepartureAngle' relative to Position Vector 'P1'
-          const departureRad = (targetDepartureAngle * Math.PI) / 180;
-          const innerAngleRad = Math.atan2(p1y, p1x);
-          const linkAngleRad = innerAngleRad + departureRad; // Direction of the link
+      const rInner = inner.radius;
+      const rOuter = outer.radius;
+      const departureRad = (targetDepartureAngle * Math.PI) / 180;
 
-          // Ray Casting: P_target = P1 + t * D
-          // We intersect this ray with Circle of radius rOuter (approx).
-          // Or simply: We want a point on Outer Ring (Angle alpha) such that the angle(P_outer - P_inner, P_inner) = departure.
+      const candidates = [];
 
-          // Let's do the simplest geometric heuristic:
-          // We want the target to be physically located at 'linkAngleRad' direction from Inner.
-          // We can't solve exact intersection easily without iteration or quadratic eq,
-          // but we can search the outer ring for the satellite that *best minimizes* the error in departure angle.
+      innerSats.forEach((innerSat) => {
+        // Port & link budget checks
+        const maxLinks = this.simLinkBudget.getMaxLinksPerRing(innerSat.ringName);
+        const isFirstRing = inner.index === ringList[0].index;
+        const canConnectOut = isFirstRing && maxLinks === 3 ? innerSats.indexOf(innerSat) % 2 === 1 : linkCounts[innerSat.name] < maxLinks;
 
-          // OPTIMIZED SEARCH:
-          // Instead of finding "Ideal Solar Angle" analytically, let's just look at the
-          // solar angle sector that corresponds to "Radial + Offset".
-          //
-          // Since rOuter > rInner, a PROGRADE departure (+angle) implies Outer Solar Angle > Inner Solar Angle.
-          // We can scan the neighborhood around Inner Solar Angle.
+        if (!canConnectOut || portUsage[innerSat.name].outwards) return;
 
-          // Find index of same solar angle
-          const innerSolarDeg = innerSat.position.solarAngle;
-          let idx = 0;
-          while (idx < outerAngles.length && outerAngles[idx] < innerSolarDeg) idx++;
+        // Approximate ideal target solar angle using geometry
+        const distEst = rOuter - rInner;
+        const tanOffset = distEst * Math.tan(departureRad);
+        const angularOffsetRad = Math.atan2(tanOffset, rOuter);
+        const idealTargetSolarAngle = normalizeAngle(innerSat.position.solarAngle + (angularOffsetRad * 180) / Math.PI);
 
-          // We look at 1 Left and 1 Right of the matching solar angle?
-          // No, if departure is large (e.g. 45 deg), the target might be far away index-wise.
-          // However, user prompt asked to "revert to original function that takes 1 target left and 1 target right of the TARGET angle".
+        // Binary search for closest satellites
+        let idx = 0;
+        while (idx < outerAngles.length && outerAngles[idx] < idealTargetSolarAngle) idx++;
+        const neighbors = [outerSats[(idx - 1 + outerSats.length) % outerSats.length], outerSats[idx % outerSats.length]];
 
-          // So we DO need the Ideal Target Solar Angle.
-          // Approximation:
-          // The geometric path length d approx = rOuter - rInner (for small angles).
-          // The tangential offset = d * tan(departure).
-          // The angular offset (radians) approx = tangential_offset / rOuter.
-          const distEst = rOuter - rInner;
-          const tanOffset = distEst * Math.tan(departureRad);
-          const angularOffsetRad = Math.atan2(tanOffset, rOuter);
-          const idealTargetSolarAngle = normalizeAngle(innerSolarDeg + (angularOffsetRad * 180) / Math.PI);
+        neighbors.forEach((outerSat) => {
+          if (portUsage[outerSat.name].inwards) return;
+          if (linkCounts[outerSat.name] >= this.simLinkBudget.getMaxLinksPerRing(outerSat.ringName)) return;
 
-          // 3. Find 2 Neighbors Closest to Ideal Target Solar Angle
-          // Binary Search for Ideal Angle
-          let searchIdx = 0;
-          while (searchIdx < outerAngles.length && outerAngles[searchIdx] < idealTargetSolarAngle) searchIdx++;
+          const distanceAU = this.calculateDistanceAU(positions[innerSat.name], positions[outerSat.name]);
+          if (distanceAU > this.simLinkBudget.maxDistanceAU) return;
 
-          const neighborOffsets = [-1, 0]; // The one before and the one after/at insertion
+          const distanceKm = distanceAU * AU_IN_KM;
+          const gbps = this.calculateGbps(distanceKm);
 
-          neighborOffsets.forEach((offset) => {
-            const neighborIndex = (searchIdx + offset + outerSatellites.length) % outerSatellites.length;
-            const outerSat = outerSatellites[neighborIndex];
+          candidates.push({ from: innerSat, to: outerSat, distanceAU, distanceKm, gbps });
+        });
+      });
 
-            if (innerSat.orbitalZone !== "BETWEEN_EARTH_AND_MARS" || outerSat.orbitalZone !== "BETWEEN_EARTH_AND_MARS") return;
-            if (portUsage[outerSat.name].inwards) return;
-            if (linkCounts[outerSat.name] >= this.simLinkBudget.getMaxLinksPerRing(outerSat.ringName)) return;
+      // Sort by distance (shortest = best)
+      candidates.sort((a, b) => a.distanceAU - b.distanceAU);
 
-            const distanceAU = this.calculateDistanceAU(positions[innerSat.name], positions[outerSat.name]);
-            if (distanceAU > this.simLinkBudget.maxDistanceAU) return;
+      // Greedily assign non-conflicting links
+      const used = new Set();
+      let linksAdded = 0;
 
-            const distanceKm = distanceAU * AU_IN_KM;
-            const gbps = this.calculateGbps(distanceKm);
+      for (const { from, to, distanceAU, distanceKm, gbps } of candidates) {
+        if (used.has(from.name) || used.has(to.name)) continue;
+        if (linkCounts[from.name] >= this.simLinkBudget.getMaxLinksPerRing(from.ringName)) continue;
+        if (linkCounts[to.name] >= this.simLinkBudget.getMaxLinksPerRing(to.ringName)) continue;
+        if (portUsage[from.name].outwards || portUsage[to.name].inwards) continue;
 
-            // We add candidate.
-            // Note: We only add valid ones.
-            candidates.push({
-              from: innerSat,
-              to: outerSat,
-              distanceAU,
-              distanceKm,
-              gbps,
-            });
-          });
+        const [fId, tId] = from.name < to.name ? [from.name, to.name] : [to.name, from.name];
+        const key = `${fId}-${tId}`;
+        if (existingLinks.has(key)) continue;
+
+        finalLinks.push({
+          fromId: fId,
+          toId: tId,
+          distanceAU,
+          distanceKm,
+          latencySeconds: this.calculateLatency(distanceKm),
+          gbpsCapacity: gbps,
         });
 
-        // Sort candidates by Distance Ascending (Shortest link wins, because we already filtered for the 'correct' angle neighborhood)
-        candidates.sort((a, b) => a.distanceAU - b.distanceAU);
-
-        // Assign Links
-        const unavailable = new Set();
-        let ringLinksAdded = 0;
-
-        for (const candidate of candidates) {
-          const { from, to, distanceAU, distanceKm, gbps } = candidate;
-
-          if (unavailable.has(from.name) || unavailable.has(to.name)) continue;
-          if (linkCounts[from.name] >= this.simLinkBudget.getMaxLinksPerRing(from.ringName)) continue;
-          if (linkCounts[to.name] >= this.simLinkBudget.getMaxLinksPerRing(to.ringName)) continue;
-
-          const [orderedFromId, orderedToId] = from.name < to.name ? [from.name, to.name] : [to.name, from.name];
-          const linkKey = `${orderedFromId}-${orderedToId}`;
-          if (existingLinks.has(linkKey)) continue;
-          if (portUsage[from.name].outwards || portUsage[to.name].inwards) continue;
-
-          finalLinks.push({
-            fromId: orderedFromId,
-            toId: orderedToId,
-            distanceAU,
-            distanceKm,
-            latencySeconds: this.calculateLatency(distanceKm),
-            gbpsCapacity: gbps,
-          });
-
-          linkCounts[from.name]++;
-          linkCounts[to.name]++;
-          existingLinks.add(linkKey);
-          unavailable.add(from.name);
-          unavailable.add(to.name);
-          portUsage[from.name].outwards = true;
-          portUsage[to.name].inwards = true;
-          ringLinksAdded++;
-        }
-        console.log(`Processing ring pair ${innerRingName} and ${outerRingName}: ${ringLinksAdded} connections made`);
+        linkCounts[from.name]++;
+        linkCounts[to.name]++;
+        existingLinks.add(key);
+        portUsage[from.name].outwards = true;
+        portUsage[to.name].inwards = true;
+        used.add(from.name);
+        used.add(to.name);
+        linksAdded++;
       }
+
+      console.log(`→ ${linksAdded} inter-ring links added between ${inner.name} and ${outer.name}`);
     }
   }
+
   planetToCircularRings(rings, positions, linkCounts, finalLinks, portUsage, planetRingName, targetDepartureAngle = 0) {
     // 1. Setup
     const planetRingSatellites = rings[planetRingName] || [];
-    const circularRingNames = Object.keys(rings).filter((ringName) => ringName.startsWith("ring_circ"));
+    const circularRingNames = Object.keys(rings).filter(
+      (ringName) => ringName.startsWith("ring_circ") || ringName.startsWith("ring_adapt")
+    );
     const sortAscending = planetRingName === "ring_earth";
 
     const sortedCircularRings = circularRingNames.slice().sort((a, b) => {
@@ -772,7 +699,9 @@ export class SimNetwork {
   connectEccentricAndCircularRings(rings, positions, linkCounts, finalLinks) {
     // Step 1: Identify eccentric rings and circular rings
     const eccentricRingNames = Object.keys(rings).filter((ringName) => ringName.startsWith("ring_ecce"));
-    const circularRingNames = Object.keys(rings).filter((ringName) => ringName.startsWith("ring_circ"));
+    const circularRingNames = Object.keys(rings).filter(
+      (ringName) => ringName.startsWith("ring_circ") || ringName.startsWith("ring_adapt")
+    );
 
     // Step 2: Build a spatial matrix for satellites in circular rings
     const BIN_SIZE_AU = 0.1; // Adjust bin size as appropriate

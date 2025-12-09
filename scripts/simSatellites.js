@@ -369,6 +369,7 @@ export class SimSatellites {
     if (!crossings) return "ALLOWED 2";
 
     const solarAngle = satellite.position.solarAngle;
+    if (isNaN(solarAngle)) console.log(`NaN solarAngle in getRadialZone for satellite:`, satellite);
     const angle = ((solarAngle % 360) + 360) % 360;
 
     const insideEarth = this.isAngleInRange(angle, crossings.earth.inside);
@@ -394,6 +395,19 @@ export class SimSatellites {
     if (satCount == 0) return [];
     const satellites = [];
     if (ringType == "Circular") {
+      const a = satDistanceSun;
+      const n = this.meanMotion(a);
+      const orbitdays = 360 / n;
+      const longIncrement = 360 / satCount;
+      for (let i = 0; i < satCount; i++) {
+        const name = `${ringName}-${i}`;
+        const long = i * longIncrement;
+        const neighbors = [`${ringName}-${(i + 1) % satCount}`, `${ringName}-${(i - 1 + satCount) % satCount}`];
+        satellites.push(
+          this.generateSatellite(ringName, ringType, a, n, eccentricity, argPeri, earthMarsInclinationPct, long, orbitdays, name, neighbors)
+        );
+      }
+    } else if (ringType == "Adapted") {
       const a = satDistanceSun;
       const n = this.meanMotion(a);
       const orbitdays = 360 / n;
@@ -650,6 +664,15 @@ export class SimSatellites {
         satCount,
         ...this.getOrbitaElements(ringType, a, n, eccentricity, argPeri, earthMarsInclinationPct, long),
       };
+    } else if (ringType == "Adapted") {
+      const a = satDistanceSun;
+      const n = this.meanMotion(a);
+      const long = 0;
+      orbitalElements = {
+        ringName,
+        satCount,
+        ...this.getOrbitaElements(ringType, a, n, eccentricity, argPeri, earthMarsInclinationPct, long),
+      };
     } else if (ringType == "Eccentric") {
       const a = satDistanceSun;
       const n = this.meanMotion(a);
@@ -703,31 +726,56 @@ export class SimSatellites {
     return satelliteData;
   }
 
-  calculateInclination(a, earthMarsInclinationPct) {
+  interpolateOrbitalElementNonLinear(a, targetElement) {
     const a_min = this.Earth.a;
     const a_max = this.Mars.a;
-    const i_min = this.Earth.i;
-    const i_max = this.Mars.i;
-    let properInclination;
+    const t_min = 0;
+    const t_max = this.Mars[targetElement];
+    let interpolatedElement;
 
-    // Calculate properInclination based on a
+    // Calculate interpolatedElement based on a
     if (a <= a_min) {
-      properInclination = i_min;
+      interpolatedElement = t_min;
     } else if (a >= a_max) {
-      properInclination = i_max;
+      interpolatedElement = t_max;
     } else {
-      properInclination = i_min + ((i_max - i_min) * (a - a_min)) / (a_max - a_min);
+      interpolatedElement = t_min + ((t_max - t_min) * (a - a_min)) / (a_max - a_min);
     }
 
-    // Calculate inclination based on earthMarsInclinationPct
-    let inclination;
-    if (earthMarsInclinationPct <= 50) {
-      inclination = i_min + (properInclination - i_min) * (earthMarsInclinationPct / 50);
+    return interpolatedElement;
+  }
+
+  interpolateOrbitalElement(a, targetElement) {
+    const a_min = this.Earth.a;
+    const a_max = this.Mars.a;
+    const t_min = this.Earth[targetElement];
+    const t_max = this.Mars[targetElement];
+    let interpolatedElement;
+
+    // Calculate interpolatedElement based on a
+    if (a <= a_min) {
+      interpolatedElement = t_min;
+    } else if (a >= a_max) {
+      interpolatedElement = t_max;
     } else {
-      inclination = properInclination + (i_max - properInclination) * ((earthMarsInclinationPct - 50) / 50);
+      interpolatedElement = t_min + ((t_max - t_min) * (a - a_min)) / (a_max - a_min);
     }
 
-    return inclination;
+    return interpolatedElement;
+  }
+
+  addInterpolationBias(interpolatedElement, earthMarsBiasPct, targetElement) {
+    const t_min = this.Earth[targetElement];
+    const t_max = this.Mars[targetElement];
+    // Calculate element value based on earthMarsBiasPct
+    let biasedInterpolatedElement;
+    if (earthMarsBiasPct <= 50) {
+      biasedInterpolatedElement = t_min + (interpolatedElement - t_min) * (earthMarsBiasPct / 50);
+    } else {
+      biasedInterpolatedElement = interpolatedElement + (t_max - interpolatedElement) * ((earthMarsBiasPct - 50) / 50);
+    }
+
+    return biasedInterpolatedElement;
   }
 
   calculateApsides(a, e) {
@@ -765,7 +813,7 @@ export class SimSatellites {
       };
     else if (ringType == "Circular")
       return {
-        i: this.calculateInclination(a, earthMarsInclinationPct),
+        i: this.addInterpolationBias(this.interpolateOrbitalElement(a, "i"), earthMarsInclinationPct, "i"),
         o: this.Mars.o, //RAAN
         p: 0, // arg perigee
         a: a,
@@ -775,9 +823,21 @@ export class SimSatellites {
         Dele: this.Mars.Dele, // J2000 epoch
         apsides,
       };
+    else if (ringType == "Adapted")
+      return {
+        i: this.interpolateOrbitalElement(a, "i"),
+        o: this.interpolateOrbitalElement(a, "o"), //RAAN
+        p: this.Mars.p, //this.interpolateOrbitalElementNonLinear(a, "p"), // arg perigee
+        a: a,
+        n: n,
+        e: this.interpolateOrbitalElementNonLinear(a, "e"),
+        l: long,
+        Dele: this.Mars.Dele, // J2000 epoch
+        apsides,
+      };
     else if (ringType == "Eccentric")
       return {
-        i: this.calculateInclination(a, earthMarsInclinationPct),
+        i: this.addInterpolationBias(this.interpolateOrbitalElement(a, "i"), earthMarsInclinationPct, "i"),
         o: this.Mars.o, //RAAN
         p: argPeri, // arg perigee
         a: a,

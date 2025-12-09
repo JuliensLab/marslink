@@ -213,6 +213,42 @@ export class SimMain {
     return satellitesConfig;
   }
 
+  setAdaptedRingsConfig(uiConfig) {
+    let ringCount = uiConfig["adapted_rings.ringcount"];
+    if (ringCount == 0) return [];
+    ringCount += 2;
+    const mbpsBetweenSats = uiConfig["adapted_rings.requiredmbpsbetweensats"];
+    if (mbpsBetweenSats == 0) return [];
+    const distOuterAu = 1.5236365; // Mars average distance from sun in AU
+    const distInnerAu = 1.00002; // Earth average distance from sun in AU
+    const earthMarsInclinationPct = 0.5;
+    const distanceKmBetweenSats = this.simLinkBudget.calculateKm(mbpsBetweenSats / 1000);
+    const distanceAuBetweenSats = distanceKmBetweenSats / this.km_per_au;
+    const distanceAuBetweenRings = Math.abs(distOuterAu - distInnerAu) / (ringCount - 1);
+    const satellitesConfig = [];
+    for (let ringId = 1; ringId < ringCount - 1; ringId++) {
+      // Determine ring type
+      const ringType = "Adapted";
+      let satDistanceSunAu = distInnerAu + distanceAuBetweenRings * ringId;
+      let satDistanceSunAuBias = distInnerAu;
+      const satCount = Math.ceil(Math.PI / Math.asin(distanceAuBetweenSats / (2 * satDistanceSunAuBias)));
+
+      // Push the satellite configuration for this ring
+      satellitesConfig.push({
+        satCount: satCount,
+        satDistanceSun: satDistanceSunAu,
+        ringName: "ring_adapt_" + ringId,
+        ringType: ringType,
+        sideExtensionDeg: null,
+        eccentricity: null,
+        raan: null,
+        argPeri: null,
+        earthMarsInclinationPct,
+      });
+    }
+    return satellitesConfig;
+  }
+
   /**
    * Generates the satellites configuration array based on current slider values.
    * @returns {Array<Object>} - The satellites configuration array.
@@ -333,12 +369,14 @@ export class SimMain {
         ring_mars: uiConfig["ring_mars.laser-ports-per-satellite"],
         circular_rings: uiConfig["circular_rings.laser-ports-per-satellite"],
         eccentric_rings: uiConfig["eccentric_rings.laser-ports-per-satellite"],
+        adapted_rings: uiConfig["adapted_rings.laser-ports-per-satellite"],
       }
     );
 
     this.simSatellites.setMaxSatCount(uiConfig["simulation.maxSatCount"]);
 
     satellitesConfig.push(...this.setCircularRingsConfig(uiConfig));
+    satellitesConfig.push(...this.setAdaptedRingsConfig(uiConfig));
     satellitesConfig.push(...this.setEccentricRingsConfig(uiConfig));
     if (uiConfig["ring_mars.side-extension-degrees-slider"]) satellitesConfig.push(...this.generateSatellitesConfig(uiConfig, "ring_mars"));
     if (uiConfig["ring_earth.side-extension-degrees-slider"])

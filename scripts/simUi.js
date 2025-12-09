@@ -26,7 +26,16 @@ export class SimUi {
     this.simMain.setTimeAccelerationFactor(timeAccelerationValue);
     this.simMain.setCosts(this.getGroupsConfig(["economics"]));
     this.simMain.setSatellitesConfig(
-      this.getGroupsConfig(["economics", "simulation", "laser_technology", "ring_mars", "circular_rings", "eccentric_rings", "ring_earth"])
+      this.getGroupsConfig([
+        "economics",
+        "simulation",
+        "laser_technology",
+        "ring_mars",
+        "circular_rings",
+        "eccentric_rings",
+        "ring_earth",
+        "adapted_rings",
+      ])
     );
     console.log(
       "Initial satellitesConfig set, improvement-factor:",
@@ -226,6 +235,7 @@ export class SimUi {
             "circular_rings",
             "eccentric_rings",
             "ring_earth",
+            "adapted_rings",
           ]);
 
           // Remove parameters that are overridden by the simulation
@@ -234,6 +244,8 @@ export class SimUi {
           delete baseConfig["eccentric_rings.ringcount"];
           delete baseConfig["simulation.calctimeSec"];
           delete baseConfig["laser_technology.improvement-factor"];
+          delete baseConfig["adapted_rings.ringcount"];
+          delete baseConfig["adapted_rings.requiredmbpsbetweensats"];
 
           // Initialize satellitesConfig
           const satellitesConfig = this.getGroupsConfig([
@@ -244,6 +256,7 @@ export class SimUi {
             "circular_rings",
             "eccentric_rings",
             "ring_earth",
+            "adapted_rings",
           ]);
 
           const resultArray = [];
@@ -657,6 +670,9 @@ export class SimUi {
         case "circular_rings.distance-sun-slider-inner-au":
         case "circular_rings.inring-interring-bias-pct":
         case "circular_rings.earth-mars-orbit-inclination-pct":
+        case "adapted_rings.laser-ports-per-satellite":
+        case "adapted_rings.ringcount":
+        case "adapted_rings.requiredmbpsbetweensats":
         case "eccentric_rings.ringcount":
         case "eccentric_rings.requiredmbpsbetweensats":
         case "eccentric_rings.distance-sun-average-au":
@@ -675,6 +691,7 @@ export class SimUi {
               "circular_rings",
               "eccentric_rings",
               "ring_earth",
+              "adapted_rings",
             ])
           );
           break;
