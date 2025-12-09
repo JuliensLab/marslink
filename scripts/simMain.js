@@ -27,7 +27,7 @@ export class SimMain {
     this.simSolarSystem = new SimSolarSystem();
     this.simLinkBudget = new SimLinkBudget();
     this.simDeployment = new SimDeployment(this.simSolarSystem.getSolarSystemData().planets);
-    this.simSatellites = new SimSatellites(this.simLinkBudget);
+    this.simSatellites = new SimSatellites(this.simLinkBudget, this.simSolarSystem.getSolarSystemData().planets);
     this.simNetwork = new SimNetwork(this.simLinkBudget, this.simSatellites);
     // Do not instantiate simDisplay here; it will be set by setDisplayType
     this.simDisplay = null;
@@ -769,7 +769,12 @@ export class SimMain {
     if (this.newSatellitesConfig) {
       this.simSatellites.setSatellitesConfig(this.newSatellitesConfig);
       this.missionProfiles = this.simDeployment.getMissionProfile(this.simSatellites.getOrbitalElements());
-      this.resultTrees = new SimMissionValidator(this.missionProfiles);
+      this.resultTrees = new SimMissionValidator(this.missionProfiles, {
+        costPerLaunch: this.costPerLaunch,
+        costPerSatellite: this.costPerSatellite,
+        costPerLaserTerminal: this.costPerLaserTerminal,
+        laserPortsPerSatellite: this.simLinkBudget.maxLinksPerSatellite,
+      });
       // if (!new SimMissionValidator(this.missionProfiles)) throw new Error("Mission validation failed");
       satellites = this.simSatellites.updateSatellitesPositions(simDate);
       this.satellitesCount = satellites.length;

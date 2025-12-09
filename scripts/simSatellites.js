@@ -3,8 +3,12 @@
 import { helioCoords } from "./simOrbits.js?v=4.3";
 
 export class SimSatellites {
-  constructor(simLinkBudget) {
+  constructor(simLinkBudget, planets) {
     this.simLinkBudget = simLinkBudget;
+    this.Earth = planets.find((p) => p.name === "Earth");
+    this.Mars = planets.find((p) => p.name === "Mars");
+    this.apsidesEarth = this.calculateApsides(this.Earth.a, this.Earth.e);
+
     this.satellites = [];
     this.orbitalElements = [];
     this.maxSatCount = 20000; // Default high limit
@@ -672,11 +676,11 @@ export class SimSatellites {
   getParams_a_n(ringType) {
     let a, n;
     if (ringType == "Mars") {
-      a = 1.5236365;
-      n = 0.5240613;
+      a = this.Mars.a;
+      n = this.Mars.n;
     } else if (ringType == "Earth") {
-      a = 1.00002;
-      n = 0.9855796;
+      a = this.Earth.a;
+      n = this.Earth.n;
     }
     return { a, n };
   }
@@ -689,7 +693,7 @@ export class SimSatellites {
       diameterKm: 10000,
       orbitdays: orbitdays,
       rotationHours: 0,
-      Dele: 2450680.5,
+      Dele: this.Mars.Dele,
       color: [255, 255, 255],
       long,
       ringName,
@@ -700,10 +704,10 @@ export class SimSatellites {
   }
 
   calculateInclination(a, earthMarsInclinationPct) {
-    const a_min = 1.00002;
-    const a_max = 1.5236365;
-    const i_min = 0.00041;
-    const i_max = 1.84992;
+    const a_min = this.Earth.a;
+    const a_max = this.Mars.a;
+    const i_min = this.Earth.i;
+    const i_max = this.Mars.i;
     let properInclination;
 
     // Calculate properInclination based on a
@@ -731,57 +735,56 @@ export class SimSatellites {
     const apoapsis = a * (1 + e);
     return { periapsis, apoapsis };
   }
-  apsidesEarth = this.calculateApsides(1.00002, 0.0166967);
 
   getOrbitaElements(ringType, a, n, eccentricity, argPeri, earthMarsInclinationPct, long) {
     const apsides = this.calculateApsides(a, eccentricity);
     apsides.apo_pctEarth = apsides.apoapsis / this.apsidesEarth.apoapsis;
     if (ringType == "Mars")
       return {
-        i: 1.84992,
-        o: 49.5664,
-        p: 336.0882,
-        a: a ? a : 1.5236365,
-        n: n ? n : 0.5240613,
-        e: 0.0934231,
-        l: (262.42784 + long + 360) % 360,
-        Dele: 2450680.5, // J2000 epoch
+        i: this.Mars.i,
+        o: this.Mars.o,
+        p: this.Mars.p,
+        a: a ? a : this.Mars.a,
+        n: n ? n : this.Mars.n,
+        e: this.Mars.e,
+        l: (this.Mars.l + long + 360) % 360,
+        Dele: this.Mars.Dele, // J2000 epoch
         apsides,
       };
     else if (ringType == "Earth")
       return {
-        i: 0.00041,
-        o: 349.2,
-        p: 102.8517,
-        a: a ? a : 1.00002,
-        n: n ? n : 0.9855796,
-        e: 0.0166967,
-        l: (328.40353 + long + 360) % 360,
-        Dele: 2450680.5, // J2000 epoch
+        i: this.Earth.i,
+        o: this.Earth.o,
+        p: this.Earth.p,
+        a: a ? a : this.Earth.a,
+        n: n ? n : this.Earth.n,
+        e: this.Earth.e,
+        l: (this.Earth.l + long + 360) % 360,
+        Dele: this.Earth.Dele, // J2000 epoch
         apsides,
       };
     else if (ringType == "Circular")
       return {
         i: this.calculateInclination(a, earthMarsInclinationPct),
-        o: 49.5664, //RAAN
+        o: this.Mars.o, //RAAN
         p: 0, // arg perigee
         a: a,
         n: n,
         e: eccentricity,
         l: long,
-        Dele: 2450680.5, // J2000 epoch
+        Dele: this.Mars.Dele, // J2000 epoch
         apsides,
       };
     else if (ringType == "Eccentric")
       return {
         i: this.calculateInclination(a, earthMarsInclinationPct),
-        o: 49.5664, //RAAN
+        o: this.Mars.o, //RAAN
         p: argPeri, // arg perigee
         a: a,
         n: n,
         e: eccentricity,
         l: long,
-        Dele: 2450680.5, // J2000 epoch
+        Dele: this.Mars.Dele, // J2000 epoch
         apsides,
       };
   }

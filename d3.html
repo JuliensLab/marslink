@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Solar System Data Flow (Interactive)</title>
+    <style>
+        body {
+            margin: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background: #050510;
+            color: #ccc;
+            font-family: 'Segoe UI', sans-serif;
+            overflow: hidden;
+        }
+
+        .label {
+            position: absolute;
+            top: 20px;
+            text-align: center;
+            width: 100%;
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        .legend {
+            position: absolute;
+            bottom: 30px;
+            left: 30px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid #333;
+            font-size: 14px;
+        }
+
+        .line-sample {
+            display: inline-block;
+            vertical-align: middle;
+            margin-right: 8px;
+            background: currentColor;
+            border-radius: 2px;
+        }
+
+        /* Play/Pause Button Style */
+        #playPauseBtn {
+            position: absolute;
+            bottom: 30px;
+            right: 30px;
+            background: rgba(255, 255, 255, 0.1);
+            color: #fff;
+            border: 1px solid #555;
+            padding: 10px 20px;
+            font-size: 16px;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background 0.3s;
+            z-index: 100;
+        }
+
+        #playPauseBtn:hover {
+            background: rgba(255, 255, 255, 0.25);
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="label">
+        <h3>Interplanetary Data Flow Network</h3>
+        <p>Physical Bodies vs Network Traffic</p>
+    </div>
+
+    <div class="legend">
+        <div style="margin-bottom: 8px; color: #ff0040;">
+            <span class="line-sample" style="width: 20px; height: 7px;"></span>
+            <strong>180 Mbps</strong> (High Traffic)
+        </div>
+        <div style="color: #0060cc;">
+            <span class="line-sample" style="width: 20px; height: 3px;"></span>
+            <strong>1 Mbps</strong> (Low Traffic)
+        </div>
+    </div>
+
+    <button id="playPauseBtn">Pause</button>
+
+    <canvas id="space"></canvas>
+
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script>
+        const canvas = document.getElementById("space");
+        const context = canvas.getContext("2d");
+        const btn = document.getElementById("playPauseBtn");
+
+        let width = window.innerWidth;
+        let height = window.innerHeight;
+        canvas.width = width;
+        canvas.height = height;
+
+        // --- Configuration ---
+        const AU = 150;
+        const MarsDist = 228;
+        const zoomStart = 1.9;
+        const zoomEnd = 1.7;
+        const sunBaseX = width / 2;
+        const sunBaseY = height / 2;
+
+        // --- State Management ---
+        let isPlaying = true;
+        let animationTime = 0; // Tracks total active time
+        let lastFrameTime = 0; // Tracks the raw timestamp of the previous frame
+
+        // --- Scales ---
+        const colorScale = d3.scaleLinear()
+            .domain([0, 180])
+            .range(["#0060cc", "#ff0040"])
+            .interpolate(d3.interpolateRgb);
+
+        const widthScale = d3.scaleLinear()
+            .domain([0, 180])
+            .range([1, 2]);
+
+        // --- Button Logic ---
+        btn.addEventListener("click", () => {
+            isPlaying = !isPlaying;
+            btn.innerText = isPlaying ? "Pause" : "Play";
+        });
+
+        // --- Core Math ---
+        function getCoordinate(angle, r, t, currentScale) {
+            // Circular State
+            const xCircle = r * Math.sin(angle);
+            const yCircle = r * Math.cos(angle);
+
+            // Linear State
+            const xLine = AU * angle;
+            const yLine = r;
+
+            // Interpolate
+            const xRaw = (1 - t) * xCircle + t * xLine;
+            const yRaw = (1 - t) * yCircle + t * yLine;
+
+            // Transform
+            const x = sunBaseX + xRaw * currentScale;
+            const y = sunBaseY + yRaw * currentScale;
+
+            return { x, y };
+        }
+
+        // --- Animation Loop ---
+        const duration = 5000;
+
+        // We use d3.timer which passes the elapsed time since the timer started.
+        d3.timer((now) => {
+            // Calculate the time difference (delta) since the last frame
+            const dt = now - lastFrameTime;
+            lastFrameTime = now;
+
+            // Only advance the internal animation timer if playing
+            if (isPlaying) {
+                animationTime += dt;
+            }
+
+            // Calculate cycle based on our custom 'animationTime'
+            const cycle = (animationTime % (duration * 2)) / duration;
+            const rawT = cycle <= 1 ? cycle : 2 - cycle;
+            const t = d3.easeCubicInOut(rawT);
+            const currentScale = d3.interpolateNumber(zoomStart, zoomEnd)(t);
+
+            // --- DRAWING ---
+            context.clearRect(0, 0, width, height);
+
+            // 1. Connector Lines (Blue Streams)
+            context.globalCompositeOperation = "screen";
+            context.lineWidth = 3 * currentScale;
+            context.strokeStyle = "#0060cc";
+            context.globalAlpha = 0.4;
+
+            context.beginPath();
+            for (let i = -180; i < 180; i += 2) {
+                const angle = (i * Math.PI) / 180;
+                const p1 = getCoordinate(angle, AU, t, currentScale);
+                const p2 = getCoordinate(angle, MarsDist, t, currentScale);
+
+                context.moveTo(p1.x, p1.y);
+                context.lineTo(p2.x, p2.y);
+            }
+            context.stroke();
+            context.globalAlpha = 1.0;
+
+            // 2. Variable Rate Orbits
+            drawFlowOrbit(AU, t, currentScale);
+            drawFlowOrbit(MarsDist, t, currentScale);
+
+            // 3. Planets & Sun
+            context.globalCompositeOperation = "source-over";
+
+            // Sun
+            const sunPos = getCoordinate(0, 0, t, currentScale);
+            context.beginPath();
+            context.arc(sunPos.x, sunPos.y, 12 * currentScale, 0, 2 * Math.PI);
+            context.fillStyle = "#fdb813";
+            context.shadowBlur = 30;
+            context.shadowColor = "#fdb813";
+            context.fill();
+            context.shadowBlur = 0;
+
+            // Earth
+            drawPlanet(0, AU, t, currentScale, "#2b90d9");
+
+            // Mars
+            drawPlanet(0, MarsDist, t, currentScale, "#e25a26");
+        });
+
+        function drawFlowOrbit(radius, t, scale) {
+            context.lineCap = "round";
+            for (let i = 0; i < 180; i += 2) {
+                const flowRate = 180 - i;
+                const color = colorScale(flowRate);
+                const lineWidth = widthScale(flowRate);
+
+                context.strokeStyle = color;
+                context.lineWidth = lineWidth * scale;
+
+                drawSegment(i, i + 2.5, radius, t, scale, flowRate);
+                drawSegment(-i, -(i + 2.5), radius, t, scale, flowRate);
+            }
+        }
+
+        function drawSegment(degStart, degEnd, radius, t, scale, flowRate) {
+            const radStart = (degStart * Math.PI) / 180;
+            const radEnd = (degEnd * Math.PI) / 180;
+            const pStart = getCoordinate(radStart, radius, t, scale);
+            const pEnd = getCoordinate(radEnd, radius, t, scale);
+            const lineWidth = widthScale(flowRate);
+            context.lineWidth = lineWidth * scale;
+
+            context.beginPath();
+            context.moveTo(pStart.x, pStart.y);
+            context.lineTo(pEnd.x, pEnd.y);
+            context.stroke();
+        }
+
+        function drawPlanet(angle, radius, t, scale, color) {
+            const p = getCoordinate(angle, radius, t, scale);
+
+            context.beginPath();
+            context.arc(p.x, p.y, 8 * scale, 0, 2 * Math.PI);
+            context.fillStyle = color;
+            context.fill();
+
+            context.shadowBlur = 15;
+            context.shadowColor = color;
+            context.beginPath();
+            context.lineWidth = 2;
+            context.strokeStyle = "rgba(255,255,255,0.5)";
+            context.arc(p.x, p.y, 8 * scale, 0, 2 * Math.PI);
+            context.stroke();
+            context.shadowBlur = 0;
+        }
+
+        window.addEventListener('resize', () => {
+            width = window.innerWidth;
+            height = window.innerHeight;
+            canvas.width = width;
+            canvas.height = height;
+        });
+
+    </script>
+</body>
+
+</html>

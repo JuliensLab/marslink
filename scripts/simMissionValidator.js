@@ -1,20 +1,48 @@
 export class SimMissionValidator {
-  constructor(missionProfiles) {
+  constructor(missionProfiles, costs) {
     const resultTrees = [];
+    const propellantCostsPerKg = {
+      "CH4/O2": 0.3, // $0.3 per kg
+      Argon: 0.5, // $0.5 per kg
+    };
     for (const missionProfile of missionProfiles.byOrbit) {
       const vehicles = missionProfile.vehicles;
       this.vehicles = vehicles;
       const rootVehicles = this.getRootVehicles(vehicles);
       const trees = this.buildTrees(vehicles, rootVehicles);
       // this.displayTrees(this.vehicles, trees);
-      resultTrees.push({
+      const orbit = {
         ringName: missionProfile.ringName,
         deploymentFlights_count: missionProfile.deploymentFlights_count,
         satCountPerDeploymentFlight: missionProfile.satCountPerDeploymentFlight,
         satCount: missionProfile.satCount,
         vehicles,
         trees,
-      });
+      };
+      // Calculate costs
+      orbit.launchCost = missionProfile.deploymentFlights_count * costs.costPerLaunch * 1000000;
+      orbit.satellitesCost = missionProfile.satCount * costs.costPerSatellite * 1000000;
+      orbit.laserTerminalsCost = missionProfile.satCount * costs.laserPortsPerSatellite * costs.costPerLaserTerminal * 1000000;
+      // Calculate propellant cost
+      let propellantCost = 0;
+      const propellantCostBreakdown = {};
+      for (const vehicle of Object.values(vehicles)) {
+        const propellantType = vehicle.propellantType;
+        const costPerKg = propellantCostsPerKg[propellantType] || 0;
+        const massKg =
+          (vehicle.count ? vehicle.count * vehicle.propellantLoaded_kg : vehicle.propellantLoaded_kg) +
+          (vehicle.count ? vehicle.count * vehicle.tankerPropellant_kg : vehicle.tankerPropellant_kg);
+        const cost = (massKg * costPerKg) / 1000000; // in million $
+        propellantCost += cost;
+        if (!propellantCostBreakdown[propellantType]) propellantCostBreakdown[propellantType] = 0;
+        propellantCostBreakdown[propellantType] += cost;
+      }
+      orbit.propellantCost = propellantCost * missionProfile.deploymentFlights_count; // since vehicles are per flight
+      orbit.propellantCostBreakdown = {};
+      for (const [type, cost] of Object.entries(propellantCostBreakdown)) {
+        orbit.propellantCostBreakdown[type] = cost * missionProfile.deploymentFlights_count;
+      }
+      resultTrees.push(orbit);
     }
     return resultTrees;
   }

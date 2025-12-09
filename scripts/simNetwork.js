@@ -2,37 +2,6 @@
 
 import { SIM_CONSTANTS } from "./simConstants.js";
 
-/*
-We need to rework this. We start over.
-
-Start with creating a function that checks if a satellite is between sun and earth orbit (SEO), between earth and mars orbits (EMO) or beyond Mars orbit (BMO).
-
-Create links between satellites of the same ring (one on either side), only if the number of laser terminals on the ring is > 2.
-
-Next, go through Earth ring satellites, and mark them all as out facing. Next, go through each Mars ring satellite, and mark them all as sun facing.
-Next, if the circular rings have exactly 3 laser terminals per satellite, then go through each cicular ring, go through each satellite, and mark every other as sun facing (the others as out facing).
-If circular rings have 2 or 4+ laser terminals per satellite, then mark all as out facing and sun facing (two ports dedicated to that, one for out facing and one for sun facing).
-We're assigning ports to satellites and keeping track of direction facing and used or not.
-Going through circular rings, we mark all satellites that are SEO or BMO as unused (for now at least).
-
-Then, we take the first circular ring (nearest to the sun). For each satellite, we check if it has unused sun facing ports. If so, we find the nearest satellite in the earth ring and mark the solar angle range that is covered.
-The solar angle range is: we look at the preceeding and following satellites in the same ring (which have sun facing ports, might be N+1 or N+2 (if 3 ports). If the N-1 (or N-2) sat has a solar angle of 30 and the N+1 (or N+2) sat has a solar angle of 50, 
-then the solar angle range covered by our satellite is 35 to 45 (midpoint between neighbors). 
-We mark this range as covered. We connect this satellite to the nearest earth ring satellite (may use solar angle to find it quickly, keep in mind its modulo 360).
-Any uncovered solar angle range after exhausting all satellites of the first circular ring requires to move to the next circular ring. Once all solar angle ranges are covered 
-(be careful about the value precision, we don't want 45.001 to be uncovered because of rounding errors), we move to the next step.
-After we achieve this part, we should have the earth ring connected to the sun facing satellites of the nearest out satellites.
-
-We do the same for Mars but in reverse. We start with the furthest circular ring from the sun, and connect its out facing satellites to Mars ring satellites.
-In all these steps, we ensure an out-facing port connects to a sun-facing port.
-
-Finally, we need to connect circular rings together. We take the ring that has the least number of satellites, and connect it to the nearest ring, using solar angle to find the nearest satellite in the next ring.
-We keep going until all circular rings are connected. We don't need to connect SEO or BMO satellites (but we still want to have their intra-ring connections if more than 2 ports).
-
-
-
-*/
-
 export class SimNetwork {
   constructor(simLinkBudget, simSatellites) {
     this.AU_IN_KM = SIM_CONSTANTS.AU_IN_KM; // 1 AU in kilometers
@@ -123,15 +92,15 @@ export class SimNetwork {
     });
 
     const finalLinks = []; // Final list of links to return
+    const targetDepartureAngle = 0; // Bias for geometric angle in inter-ring connections
 
     this.intraRing(rings, positions, linkCounts, finalLinks, portUsage);
 
     // this.marsEarthRings(rings, positions, linkCounts, finalLinks);
 
-    this.interCircularRings(rings, positions, linkCounts, finalLinks, portUsage);
-    this.planetToCircularRings(rings, positions, linkCounts, finalLinks, portUsage, "ring_mars");
-    this.planetToCircularRings(rings, positions, linkCounts, finalLinks, portUsage, "ring_earth");
-
+    this.interCircularRings(rings, positions, linkCounts, finalLinks, portUsage, targetDepartureAngle);
+    this.planetToCircularRings(rings, positions, linkCounts, finalLinks, portUsage, "ring_mars", targetDepartureAngle);
+    this.planetToCircularRings(rings, positions, linkCounts, finalLinks, portUsage, "ring_earth", targetDepartureAngle);
     // this.interEccentricRings(rings, positions, linkCounts, finalLinks);
 
     // this.connectEccentricAndCircularRings(rings, positions, linkCounts, finalLinks);
@@ -389,191 +358,210 @@ export class SimNetwork {
     );
   }
 
-  /**
-   * Finds the indices of the nearest lower and higher solar angle satellites relative to a given solar angle.
-   * @param {number[]} sortedSolarAngleList - A sorted array of solar angle values in ascending order.
-   * @param {number} targetSolarAngle - The solar angle value to find neighbors for.
-   * @returns {Object} An object containing the indices of the nearest lower and higher satellites.
-   */
-  findNearestSolarAngleIndices(sortedSolarAngleList, targetSolarAngle) {
-    let left = 0;
-    let right = sortedSolarAngleList.length - 1;
-    let mid;
-    let lower = sortedSolarAngleList.length - 1; // Default to the last index (wrap-around)
-    let higher = 0; // Default to the first index (wrap-around)
+  interCircularRings(rings, positions, linkCounts, finalLinks, portUsage, targetDepartureAngle = 0) {
+    // Step 2: Add Links for Circular Rings using Target Departure Angle
 
-    while (left <= right) {
-      mid = Math.floor((left + right) / 2);
-      if (sortedSolarAngleList[mid] <= targetSolarAngle) {
-        lower = mid;
-        left = mid + 1;
-      } else {
-        right = mid - 1;
-      }
-    }
-
-    // The higher index is the next one after lower, with wrap-around
-    higher = (lower + 1) % sortedSolarAngleList.length;
-
-    return { lower, higher };
-  }
-
-  interCircularRings(rings, positions, linkCounts, finalLinks, portUsage) {
-    // Step 2: Add Links for Circular Rings Based on `a` and `solar angle` (Excluding Mars and Earth Rings)
-
-    // Identify circular rings (exclude 'ring_mars' and 'ring_earth')
     const circularRingNames = Object.keys(rings).filter((ringName) => ringName.startsWith("ring_circ"));
 
-    // Sort circular rings from closest to furthest based on 'a' (ascending order)
+    // Sort circular rings from closest to furthest based on 'a' (ascending)
     const sortedCircularRings = circularRingNames.slice().sort((a, b) => {
-      const aDistance = rings[a][0].a; // 'a' is the distance from the sun in AU
-      const bDistance = rings[b][0].a;
-      return aDistance - bDistance; // Ascending order: closest first
+      return rings[a][0].a - rings[b][0].a;
     });
 
-    // Initialize a Set for existing links for O(1) lookup
     const existingLinks = new Set(finalLinks.map((link) => `${link.fromId}-${link.toId}`));
+    const AU_IN_KM = this.AU_IN_KM;
 
-    // Precompute AU to KM conversion if not already done
-    const AU_IN_KM = this.AU_IN_KM; // Assuming this is a constant
-
-    // Precompute sorted satellites for each ring
+    // Precompute sorted satellites
     const ringSatellites = {};
     sortedCircularRings.forEach((ringName) => {
       ringSatellites[ringName] = rings[ringName].slice().sort((a, b) => a.position.solarAngle - b.position.solarAngle);
     });
 
-    // For rings with 3 ports, alternate marking ports as unavailable
+    // Mark unavailable ports for rings with 3 ports
     sortedCircularRings.forEach((ringName) => {
       const maxLinks = this.simLinkBudget.getMaxLinksPerRing(ringName);
       if (maxLinks === 3) {
         ringSatellites[ringName].forEach((sat, index) => {
-          if (index % 2 === 0) {
-            portUsage[sat.name].outwards = true; // mark outwards unavailable
-          } else {
-            portUsage[sat.name].inwards = true; // mark inwards unavailable
-          }
+          if (index % 2 === 0) portUsage[sat.name].outwards = true;
+          else portUsage[sat.name].inwards = true;
         });
       }
     });
 
-    // Iterate through each circular ring
+    // Helper: Normalize angle to 0-360
+    const normalizeAngle = (deg) => ((deg % 360) + 360) % 360;
+
+    // Helper: Get angle difference for sorting neighbors
+    const getAngleDist = (a, b) => {
+      const diff = Math.abs(a - b);
+      return Math.min(diff, 360 - diff);
+    };
+
+    // Iterate through ring pairs (Inner -> Outer)
     for (let i = 0; i < sortedCircularRings.length; i++) {
       if (i + 1 < sortedCircularRings.length) {
-        const currentRingName = sortedCircularRings[i];
-        const nextRingName = sortedCircularRings[i + 1];
-        const currentRingSatellites = ringSatellites[currentRingName];
-        const nextRingSatellites = ringSatellites[nextRingName];
+        const innerRingName = sortedCircularRings[i];
+        const outerRingName = sortedCircularRings[i + 1];
+
+        const innerSatellites = ringSatellites[innerRingName];
+        const outerSatellites = ringSatellites[outerRingName];
+        const outerAngles = outerSatellites.map((s) => s.position.solarAngle);
+
+        // Get Radii for Geometry Calculation (approximate using first sat)
+        // We use 'a' (semi-major axis) as a proxy for radius in circular rings
+        const rInner = rings[innerRingName][0].a;
+        const rOuter = rings[outerRingName][0].a;
+
+        // Pre-calculate the Solar Angle Delta required to achieve the Target Departure Angle
+        // Law of Sines / Triangle Geometry:
+        // We want the link to leave Inner at 'targetDepartureAngle' relative to Inner Radial.
+        // Let gamma = targetDepartureAngle.
+        // By geometry, the angular shift (deltaTheta) in solar angle is derived from the triangle formed by Sun, InnerSat, OuterSat.
+        // However, a robust approximation is to project the vector.
+        //
+        // Better approach per satellite:
+        // 1. Inner Sat Position (Polar: rInner, theta)
+        // 2. Ideal Ray Vector from Inner: Angle = theta + targetDepartureAngle
+        // 3. Intersection of Ray with Outer Radius (rOuter)
+        //
+        // Simplified Approximation for small angles/circular orbits:
+        // The "Ideal" solar angle of the target is NOT innerAngle + constant.
+        // It is the angle where the vector (rInner, theta) + vector(d, theta+departure) hits rOuter.
+        //
+        // We can iterate satellites and calculate the exact "Ideal Solar Angle" for each.
 
         const candidates = [];
 
-        // From current to next
-        currentRingSatellites.forEach((currentSatellite, j) => {
-          let shouldConnectToNext = false;
-          const maxLinks = this.simLinkBudget.getMaxLinksPerRing(currentSatellite.ringName);
-          if (i === 0 && maxLinks === 3) {
-            // For the first ring with 3 ports, only odd satellites connect to n+1
-            shouldConnectToNext = j % 2 === 1;
-          } else {
-            // For other rings or 4 ports, all satellites with ports available connect to n+1
-            shouldConnectToNext = linkCounts[currentSatellite.name] < maxLinks;
-          }
+        innerSatellites.forEach((innerSat, j) => {
+          // 1. Check Availability
+          const maxLinks = this.simLinkBudget.getMaxLinksPerRing(innerSat.ringName);
+          let canConnectOut = true;
+          if (i === 0 && maxLinks === 3) canConnectOut = j % 2 === 1;
+          else canConnectOut = linkCounts[innerSat.name] < maxLinks;
 
-          if (!shouldConnectToNext) return;
+          if (!canConnectOut) return;
+          if (portUsage[innerSat.name].outwards) return;
 
-          const sortedNextSolarAngleList = nextRingSatellites.map((sat) => sat.position.solarAngle);
-          const currentSolarAngle = currentSatellite.position.solarAngle % 360;
+          // 2. Calculate Ideal Target Solar Angle
+          // Current Position
+          const thetaRad = (innerSat.position.solarAngle * Math.PI) / 180;
+          const r1 = rInner;
+          const r2 = rOuter;
 
-          let nextIndex = 0;
-          while (nextIndex < sortedNextSolarAngleList.length && sortedNextSolarAngleList[nextIndex] < currentSolarAngle) {
-            nextIndex++;
-          }
+          // Departure angle relative to radial line.
+          // Radial angle is thetaRad. Link angle is thetaRad + departureRad + (PI/2 if we defined tangent, but we defined relative to radial)
+          // Wait, radial is "Vertical". Tangent is "Horizontal".
+          // If departureAngle is 0, we go straight up (radial). Target Theta = Inner Theta.
+          // If departureAngle is != 0, we form a triangle with sides r1, r2, and angle 'departure' at r1.
+          // We need to find the angle at the Sun (deltaTheta).
+          // Using Law of Sines on triangle Sun-Inner-Outer:
+          // Angle at Inner (Internal) = 180 - departureAngle (if departure is "outwards" relative to radial)
+          // Actually, standard Law of Cosines is safer to find the distance 'd', then 'deltaTheta'.
 
-          const nearestHigher = nextRingSatellites[nextIndex % sortedNextSolarAngleList.length];
-          const nearestLower = nextRingSatellites[(nextIndex - 1 + sortedNextSolarAngleList.length) % sortedNextSolarAngleList.length];
+          // Let's use vector projection, it's robust.
+          // Inner Pos:
+          const p1x = innerSat.position.x;
+          const p1y = innerSat.position.y;
 
-          // Add both as candidates if zones match
-          const zoneCurrent = currentSatellite.orbitalZone;
-          if (zoneCurrent === "BETWEEN_EARTH_AND_MARS") {
-            if (nearestLower.orbitalZone === "BETWEEN_EARTH_AND_MARS") {
-              const distanceAU = this.calculateDistanceAU(positions[currentSatellite.name], positions[nearestLower.name]);
-              candidates.push({ from: currentSatellite, to: nearestLower, distanceAU });
-            }
-            if (nearestHigher.orbitalZone === "BETWEEN_EARTH_AND_MARS") {
-              const distanceAU = this.calculateDistanceAU(positions[currentSatellite.name], positions[nearestHigher.name]);
-              candidates.push({ from: currentSatellite, to: nearestHigher, distanceAU });
-            }
-          }
+          // We want a direction vector 'D' rotated 'targetDepartureAngle' relative to Position Vector 'P1'
+          const departureRad = (targetDepartureAngle * Math.PI) / 180;
+          const innerAngleRad = Math.atan2(p1y, p1x);
+          const linkAngleRad = innerAngleRad + departureRad; // Direction of the link
+
+          // Ray Casting: P_target = P1 + t * D
+          // We intersect this ray with Circle of radius rOuter (approx).
+          // Or simply: We want a point on Outer Ring (Angle alpha) such that the angle(P_outer - P_inner, P_inner) = departure.
+
+          // Let's do the simplest geometric heuristic:
+          // We want the target to be physically located at 'linkAngleRad' direction from Inner.
+          // We can't solve exact intersection easily without iteration or quadratic eq,
+          // but we can search the outer ring for the satellite that *best minimizes* the error in departure angle.
+
+          // OPTIMIZED SEARCH:
+          // Instead of finding "Ideal Solar Angle" analytically, let's just look at the
+          // solar angle sector that corresponds to "Radial + Offset".
+          //
+          // Since rOuter > rInner, a PROGRADE departure (+angle) implies Outer Solar Angle > Inner Solar Angle.
+          // We can scan the neighborhood around Inner Solar Angle.
+
+          // Find index of same solar angle
+          const innerSolarDeg = innerSat.position.solarAngle;
+          let idx = 0;
+          while (idx < outerAngles.length && outerAngles[idx] < innerSolarDeg) idx++;
+
+          // We look at 1 Left and 1 Right of the matching solar angle?
+          // No, if departure is large (e.g. 45 deg), the target might be far away index-wise.
+          // However, user prompt asked to "revert to original function that takes 1 target left and 1 target right of the TARGET angle".
+
+          // So we DO need the Ideal Target Solar Angle.
+          // Approximation:
+          // The geometric path length d approx = rOuter - rInner (for small angles).
+          // The tangential offset = d * tan(departure).
+          // The angular offset (radians) approx = tangential_offset / rOuter.
+          const distEst = rOuter - rInner;
+          const tanOffset = distEst * Math.tan(departureRad);
+          const angularOffsetRad = Math.atan2(tanOffset, rOuter);
+          const idealTargetSolarAngle = normalizeAngle(innerSolarDeg + (angularOffsetRad * 180) / Math.PI);
+
+          // 3. Find 2 Neighbors Closest to Ideal Target Solar Angle
+          // Binary Search for Ideal Angle
+          let searchIdx = 0;
+          while (searchIdx < outerAngles.length && outerAngles[searchIdx] < idealTargetSolarAngle) searchIdx++;
+
+          const neighborOffsets = [-1, 0]; // The one before and the one after/at insertion
+
+          neighborOffsets.forEach((offset) => {
+            const neighborIndex = (searchIdx + offset + outerSatellites.length) % outerSatellites.length;
+            const outerSat = outerSatellites[neighborIndex];
+
+            if (innerSat.orbitalZone !== "BETWEEN_EARTH_AND_MARS" || outerSat.orbitalZone !== "BETWEEN_EARTH_AND_MARS") return;
+            if (portUsage[outerSat.name].inwards) return;
+            if (linkCounts[outerSat.name] >= this.simLinkBudget.getMaxLinksPerRing(outerSat.ringName)) return;
+
+            const distanceAU = this.calculateDistanceAU(positions[innerSat.name], positions[outerSat.name]);
+            if (distanceAU > this.simLinkBudget.maxDistanceAU) return;
+
+            const distanceKm = distanceAU * AU_IN_KM;
+            const gbps = this.calculateGbps(distanceKm);
+
+            // We add candidate.
+            // Note: We only add valid ones.
+            candidates.push({
+              from: innerSat,
+              to: outerSat,
+              distanceAU,
+              distanceKm,
+              gbps,
+            });
+          });
         });
 
-        // From next to current
-        nextRingSatellites.forEach((nextSatellite) => {
-          const sortedCurrentSolarAngleList = currentRingSatellites.map((sat) => sat.position.solarAngle);
-          const nextSolarAngle = nextSatellite.position.solarAngle % 360;
-
-          let currentIndex = 0;
-          while (currentIndex < sortedCurrentSolarAngleList.length && sortedCurrentSolarAngleList[currentIndex] < nextSolarAngle) {
-            currentIndex++;
-          }
-
-          const nearestHigher = currentRingSatellites[currentIndex % sortedCurrentSolarAngleList.length];
-          const nearestLower =
-            currentRingSatellites[(currentIndex - 1 + sortedCurrentSolarAngleList.length) % sortedCurrentSolarAngleList.length];
-
-          // Add both as candidates if zones match
-          const zoneNext = nextSatellite.orbitalZone;
-          if (zoneNext === "BETWEEN_EARTH_AND_MARS") {
-            if (nearestLower.orbitalZone === "BETWEEN_EARTH_AND_MARS") {
-              const distanceAU = this.calculateDistanceAU(positions[nextSatellite.name], positions[nearestLower.name]);
-              candidates.push({ from: nextSatellite, to: nearestLower, distanceAU });
-            }
-            if (nearestHigher.orbitalZone === "BETWEEN_EARTH_AND_MARS") {
-              const distanceAU = this.calculateDistanceAU(positions[nextSatellite.name], positions[nearestHigher.name]);
-              candidates.push({ from: nextSatellite, to: nearestHigher, distanceAU });
-            }
-          }
-        });
-
-        // Sort candidates by distanceAU ascending
+        // Sort candidates by Distance Ascending (Shortest link wins, because we already filtered for the 'correct' angle neighborhood)
         candidates.sort((a, b) => a.distanceAU - b.distanceAU);
 
-        // Assign links
+        // Assign Links
         const unavailable = new Set();
         let ringLinksAdded = 0;
+
         for (const candidate of candidates) {
-          const { from, to, distanceAU } = candidate;
+          const { from, to, distanceAU, distanceKm, gbps } = candidate;
+
           if (unavailable.has(from.name) || unavailable.has(to.name)) continue;
-          if (distanceAU > this.simLinkBudget.maxDistanceAU) continue;
-          if (
-            linkCounts[from.name] >= this.simLinkBudget.getMaxLinksPerRing(from.ringName) ||
-            linkCounts[to.name] >= this.simLinkBudget.getMaxLinksPerRing(to.ringName)
-          )
-            continue;
+          if (linkCounts[from.name] >= this.simLinkBudget.getMaxLinksPerRing(from.ringName)) continue;
+          if (linkCounts[to.name] >= this.simLinkBudget.getMaxLinksPerRing(to.ringName)) continue;
 
           const [orderedFromId, orderedToId] = from.name < to.name ? [from.name, to.name] : [to.name, from.name];
           const linkKey = `${orderedFromId}-${orderedToId}`;
           if (existingLinks.has(linkKey)) continue;
-
-          // Determine directions
-          const fromA = rings[from.ringName][0].a;
-          const toA = rings[to.ringName][0].a;
-          const directionFrom = fromA < toA ? "outwards" : "inwards";
-          const directionTo = toA < fromA ? "outwards" : "inwards";
-
-          // Check if ports are available
-          if (portUsage[from.name][directionFrom] || portUsage[to.name][directionTo]) continue;
-
-          const distanceKm = distanceAU * AU_IN_KM;
-          const gbpsCapacity = this.calculateGbps(distanceKm);
-          const latencySeconds = this.calculateLatency(distanceKm);
+          if (portUsage[from.name].outwards || portUsage[to.name].inwards) continue;
 
           finalLinks.push({
             fromId: orderedFromId,
             toId: orderedToId,
             distanceAU,
             distanceKm,
-            latencySeconds,
-            gbpsCapacity,
+            latencySeconds: this.calculateLatency(distanceKm),
+            gbpsCapacity: gbps,
           });
 
           linkCounts[from.name]++;
@@ -581,190 +569,183 @@ export class SimNetwork {
           existingLinks.add(linkKey);
           unavailable.add(from.name);
           unavailable.add(to.name);
-
-          // Mark ports as used
-          portUsage[from.name][directionFrom] = true;
-          portUsage[to.name][directionTo] = true;
+          portUsage[from.name].outwards = true;
+          portUsage[to.name].inwards = true;
           ringLinksAdded++;
         }
-
-        console.log(`Processing ring pair ${currentRingName} and ${nextRingName}: ${ringLinksAdded} connections made`);
+        console.log(`Processing ring pair ${innerRingName} and ${outerRingName}: ${ringLinksAdded} connections made`);
       }
     }
   }
-
-  planetToCircularRings(rings, positions, linkCounts, finalLinks, portUsage, planetRingName) {
-    // Get planet ring satellites
+  planetToCircularRings(rings, positions, linkCounts, finalLinks, portUsage, planetRingName, targetDepartureAngle = 0) {
+    // 1. Setup
     const planetRingSatellites = rings[planetRingName] || [];
-
-    // Identify circular rings
     const circularRingNames = Object.keys(rings).filter((ringName) => ringName.startsWith("ring_circ"));
-
-    // Sort circular rings
     const sortAscending = planetRingName === "ring_earth";
+
     const sortedCircularRings = circularRingNames.slice().sort((a, b) => {
       const aDist = rings[a][0].a;
       const bDist = rings[b][0].a;
       return sortAscending ? aDist - bDist : bDist - aDist;
     });
 
-    // Determine ports
     const planetPort = planetRingName === "ring_earth" ? "outwards" : "inwards";
     const circularPort = planetRingName === "ring_earth" ? "inwards" : "outwards";
+    const AU_IN_KM = this.AU_IN_KM;
 
-    // For Earth, initialize taken ranges and crossings
+    // Helper: Normalize angle 0-360
+    const normalizeAngle = (deg) => ((deg % 360) + 360) % 360;
+
+    // Earth Logic: Taken Ranges
     let takenRanges = [];
     let crossingsMap = null;
     if (planetRingName === "ring_earth") {
-      console.log("Orbital elements:", this.simSatellites.getOrbitalElements());
       crossingsMap = this.simSatellites.getRingCrossings();
-      console.log("Starting with taken ranges:", takenRanges);
     }
-
-    // Helper to check if ranges cover full 360 degrees
     const isFullCoverage = (ranges) => {
       if (ranges.length === 0) return false;
       const sorted = ranges.slice().sort((a, b) => a[0] - b[0]);
       const merged = [sorted[0]];
       for (let i = 1; i < sorted.length; i++) {
         const last = merged[merged.length - 1];
-        if (sorted[i][0] <= last[1]) {
-          last[1] = Math.max(last[1], sorted[i][1]);
-        } else {
-          merged.push(sorted[i]);
-        }
+        if (sorted[i][0] <= last[1]) last[1] = Math.max(last[1], sorted[i][1]);
+        else merged.push(sorted[i]);
       }
       return merged.length === 1 && merged[0][0] <= 0 && merged[0][1] >= 360;
     };
 
-    // Process each ring
+    // 2. Process Rings
     for (const circRingName of sortedCircularRings) {
-      let validSats = rings[circRingName];
+      let validCircSats = rings[circRingName];
 
+      // Earth Filtering
       if (planetRingName === "ring_earth") {
         const crossings = crossingsMap.get(circRingName);
-        if (!crossings || !crossings.earth) {
-          console.log(`No earth crossings for ${circRingName}`);
-          continue;
-        }
-
+        if (!crossings || !crossings.earth || !crossings.earth.outside) continue;
         const outsideRange = crossings.earth.outside;
-        if (!outsideRange) {
-          console.log(`No outside range for ${circRingName}`);
-          continue;
-        }
-
-        console.log(`Processing ring ${circRingName}, outside range: ${outsideRange}`);
-
-        // Filter valid satellites: in outside range and not in takenRanges
-        validSats = rings[circRingName].filter((sat) => {
+        validCircSats = rings[circRingName].filter((sat) => {
           const angle = sat.position.solarAngle;
           const inOutside = angle >= outsideRange[0] && angle <= outsideRange[1];
           const inTaken = takenRanges.some((range) => angle >= range[0] && angle <= range[1]);
           return inOutside && !inTaken;
         });
-
-        console.log(`Valid satellites for ${circRingName}: ${validSats.length} out of ${rings[circRingName].length}`);
-
-        if (validSats.length === 0) {
-          console.log(`No valid satellites, skipping`);
-          continue;
-        }
+        if (validCircSats.length === 0) continue;
       }
 
-      // Sort satellites by solar angle
-      const sortedPlanetSats = planetRingSatellites.slice().sort((a, b) => a.position.solarAngle - b.position.solarAngle);
-      const sortedCircSats = validSats.slice().sort((a, b) => a.position.solarAngle - b.position.solarAngle);
+      // Define Inner vs Outer
+      // We always iterate Inner -> Outer to calculate the Geometric Projection correctly
+      const isPlanetInner = planetRingName === "ring_earth";
+      const innerSats = isPlanetInner ? planetRingSatellites : validCircSats;
+      const outerSats = isPlanetInner ? validCircSats : planetRingSatellites;
+
+      // Sort
+      const sortedInner = innerSats.slice().sort((a, b) => a.position.solarAngle - b.position.solarAngle);
+      const sortedOuter = outerSats.slice().sort((a, b) => a.position.solarAngle - b.position.solarAngle);
+      const outerAngles = sortedOuter.map((s) => s.position.solarAngle);
 
       const candidates = [];
 
-      // From planet ring to circular ring
-      planetRingSatellites.forEach((planetSat) => {
-        if (!portUsage[planetSat.name][planetPort]) {
-          const planetSolarAngle = planetSat.position.solarAngle % 360;
+      // Determine Approx Radii for projection
+      // Use first sat's position magnitude as proxy for radius
+      const pInner = positions[innerSats[0].name];
+      const pOuter = positions[outerSats[0].name];
+      const rInner = Math.sqrt(pInner.x ** 2 + pInner.y ** 2);
+      const rOuter = Math.sqrt(pOuter.x ** 2 + pOuter.y ** 2);
 
-          // Find insertion index in sortedCircSats
-          let index = 0;
-          while (index < sortedCircSats.length && sortedCircSats[index].position.solarAngle < planetSolarAngle) {
-            index++;
+      // 3. Search Loop
+      sortedInner.forEach((innerSat) => {
+        const portName = isPlanetInner ? planetPort : circularPort;
+        if (portUsage[innerSat.name][portName]) return;
+
+        // --- CALCULATE IDEAL TARGET ANGLE ---
+        // Heuristic:
+        // Tangential Distance = (rOuter - rInner) * tan(DepartureAngle)
+        // Angular Offset = atan(Tangential / rOuter)
+        const departureRad = (targetDepartureAngle * Math.PI) / 180;
+        const distRadial = rOuter - rInner;
+
+        // Note: If rOuter < rInner (impossible here due to sort, but good to know), distRadial is negative.
+        // But we sorted rings, so rOuter is always > rInner.
+
+        const tanOffset = distRadial * Math.tan(departureRad);
+        const angularOffsetRad = Math.atan2(tanOffset, rOuter); // Projection onto outer circumference
+
+        const innerSolarDeg = innerSat.position.solarAngle;
+        const idealTargetSolarAngle = normalizeAngle(innerSolarDeg + (angularOffsetRad * 180) / Math.PI);
+
+        // Binary Search for Ideal Angle, starting with estimation
+        const estimatedIdx = Math.round((idealTargetSolarAngle / 360) * outerAngles.length);
+        const searchRange = outerAngles.length / 10; // +/- 5 indices
+        let low = Math.max(0, estimatedIdx - searchRange / 2); // Narrow search window
+        let high = Math.min(outerAngles.length, estimatedIdx + searchRange / 2);
+        while (low < high) {
+          const mid = Math.floor((low + high) / 2);
+          if (outerAngles[mid] < idealTargetSolarAngle) {
+            low = mid + 1;
+          } else {
+            high = mid;
           }
-
-          const nearestHigher = sortedCircSats[index % sortedCircSats.length];
-          const nearestLower = sortedCircSats[(index - 1 + sortedCircSats.length) % sortedCircSats.length];
-
-          // Add both as candidates if conditions met
-          [nearestLower, nearestHigher].forEach((circSat) => {
-            if (circSat && circSat.orbitalZone === "BETWEEN_EARTH_AND_MARS" && !portUsage[circSat.name][circularPort]) {
-              const distanceAU = this.calculateDistanceAU(positions[planetSat.name], positions[circSat.name]);
-              candidates.push({ from: planetSat, to: circSat, distanceAU });
-            }
-          });
         }
+        let searchIdx = low;
+
+        // Select 1 Before and 1 After the ideal angle
+        const neighborOffsets = [-1, 0];
+
+        neighborOffsets.forEach((offset) => {
+          const neighborIndex = (searchIdx + offset + sortedOuter.length) % sortedOuter.length;
+          const outerSat = sortedOuter[neighborIndex];
+
+          const outerPortName = isPlanetInner ? circularPort : planetPort;
+          if (portUsage[outerSat.name][outerPortName]) return;
+
+          const circSat = isPlanetInner ? outerSat : innerSat;
+          if (circSat.orbitalZone !== "BETWEEN_EARTH_AND_MARS") return;
+
+          const distanceAU = this.calculateDistanceAU(positions[innerSat.name], positions[outerSat.name]);
+          if (distanceAU > this.simLinkBudget.maxDistanceAU) return;
+
+          const distanceKm = distanceAU * AU_IN_KM;
+          const gbps = this.calculateGbps(distanceKm);
+
+          candidates.push({
+            from: isPlanetInner ? innerSat : outerSat,
+            to: isPlanetInner ? outerSat : innerSat,
+            distanceAU,
+            distanceKm,
+            gbps,
+          });
+        });
       });
 
-      // From circular ring to planet ring
-      validSats.forEach((circSat) => {
-        if (circSat.orbitalZone === "BETWEEN_EARTH_AND_MARS" && !portUsage[circSat.name][circularPort]) {
-          const circSolarAngle = circSat.position.solarAngle % 360;
-
-          // Find insertion index in sortedPlanetSats
-          let index = 0;
-          while (index < sortedPlanetSats.length && sortedPlanetSats[index].position.solarAngle < circSolarAngle) {
-            index++;
-          }
-
-          const nearestHigher = sortedPlanetSats[index % sortedPlanetSats.length];
-          const nearestLower = sortedPlanetSats[(index - 1 + sortedPlanetSats.length) % sortedPlanetSats.length];
-
-          // Add both as candidates if conditions met
-          [nearestLower, nearestHigher].forEach((planetSat) => {
-            if (planetSat && !portUsage[planetSat.name][planetPort]) {
-              const distanceAU = this.calculateDistanceAU(positions[circSat.name], positions[planetSat.name]);
-              candidates.push({ from: circSat, to: planetSat, distanceAU });
-            }
-          });
-        }
-      });
-
-      // Sort candidates by distanceAU ascending
+      // 4. Sort by Distance (Shortest wins, as we already targeted the correct angle)
       candidates.sort((a, b) => a.distanceAU - b.distanceAU);
 
-      // Assign links
       const existingLinks = new Set(finalLinks.map((link) => `${link.fromId}-${link.toId}`));
-      const AU_IN_KM = this.AU_IN_KM;
-
       let linksAdded = 0;
       const unavailable = new Set();
+
       for (const candidate of candidates) {
-        const { from, to, distanceAU } = candidate;
+        const { from, to, distanceAU, distanceKm, gbps } = candidate;
+
         if (unavailable.has(from.name) || unavailable.has(to.name)) continue;
-        if (distanceAU > this.simLinkBudget.maxDistanceAU) continue;
-        if (
-          linkCounts[from.name] >= this.simLinkBudget.getMaxLinksPerRing(from.ringName) ||
-          linkCounts[to.name] >= this.simLinkBudget.getMaxLinksPerRing(to.ringName)
-        )
-          continue;
+        if (linkCounts[from.name] >= this.simLinkBudget.getMaxLinksPerRing(from.ringName)) continue;
+        if (linkCounts[to.name] >= this.simLinkBudget.getMaxLinksPerRing(to.ringName)) continue;
 
-        // Check ports
-        const directionFrom = from.ringName === planetRingName ? planetPort : circularPort;
-        const directionTo = to.ringName === planetRingName ? planetPort : circularPort;
-        if (portUsage[from.name][directionFrom] || portUsage[to.name][directionTo]) continue;
+        const dirFrom = from.ringName === planetRingName ? planetPort : circularPort;
+        const dirTo = to.ringName === planetRingName ? planetPort : circularPort;
+        if (portUsage[from.name][dirFrom] || portUsage[to.name][dirTo]) continue;
 
-        const [fromId, toId] = from.name < to.name ? [from.name, to.name] : [to.name, from.name];
-        const linkKey = `${fromId}-${toId}`;
+        const [orderedFromId, orderedToId] = from.name < to.name ? [from.name, to.name] : [to.name, from.name];
+        const linkKey = `${orderedFromId}-${orderedToId}`;
         if (existingLinks.has(linkKey)) continue;
 
-        const distanceKm = distanceAU * AU_IN_KM;
-        const gbpsCapacity = this.calculateGbps(distanceKm);
-        const latencySeconds = this.calculateLatency(distanceKm);
-
         finalLinks.push({
-          fromId,
-          toId,
+          fromId: orderedFromId,
+          toId: orderedToId,
           distanceAU,
           distanceKm,
-          latencySeconds,
-          gbpsCapacity,
+          latencySeconds: this.calculateLatency(distanceKm),
+          gbpsCapacity: gbps,
         });
 
         linkCounts[from.name]++;
@@ -772,265 +753,20 @@ export class SimNetwork {
         existingLinks.add(linkKey);
         unavailable.add(from.name);
         unavailable.add(to.name);
-
-        // Mark ports as used
-        portUsage[from.name][directionFrom] = true;
-        portUsage[to.name][directionTo] = true;
-
+        portUsage[from.name][dirFrom] = true;
+        portUsage[to.name][dirTo] = true;
         linksAdded++;
       }
 
-      console.log(
-        `${
-          planetRingName.replace("ring_", "").charAt(0).toUpperCase() + planetRingName.replace("ring_", "").slice(1)
-        } ring <-> ${circRingName}: ${linksAdded} connections made`
-      );
+      console.log(`${planetRingName} <-> ${circRingName}: ${linksAdded} connections`);
 
+      // Earth: Update Ranges
       if (planetRingName === "ring_earth") {
-        // Add outsideRange to takenRanges
         const crossings = crossingsMap.get(circRingName);
-        const outsideRange = crossings.earth.outside;
-        takenRanges.push(outsideRange);
-        console.log(`Taken ranges after adding ${circRingName}:`, takenRanges);
-
-        // Check if takenRanges cover full 360
-        if (isFullCoverage(takenRanges)) {
-          console.log("Full coverage reached, stopping further rings");
-          break;
-        }
+        takenRanges.push(crossings.earth.outside);
+        if (isFullCoverage(takenRanges)) break;
       }
     }
-  }
-
-  marsEarthRings(rings, positions, linkCounts, finalLinks, portUsage) {
-    const binSizeAU = 0.3;
-    const maxConnectionsPerPlanetarySatellite = 3; // Maximum of 2 links per satellite in planetary rings
-
-    // Identify Mars and Earth rings and add planets to their respective rings
-    const earthMarsRings = ["ring_earth", "ring_mars"].filter((ringName) => rings[ringName]);
-
-    // Add Mars and Earth to their respective rings
-    earthMarsRings.forEach((ringName) => {
-      const planetName = ringName.split("_")[1].charAt(0).toUpperCase() + ringName.split("_")[1].slice(1);
-      if (positions[planetName]) {
-        rings[ringName].push({ name: planetName, position: positions[planetName], a: 0 }); // Assuming 'a' is 0 for planets
-      }
-    });
-
-    // Precompute ring 'a' values for all rings
-    const ringAValues = {};
-    Object.keys(rings).forEach((ringName) => {
-      ringAValues[ringName] = rings[ringName][0].a; // Assume all satellites in a ring have the same 'a'
-    });
-
-    // Spatial binning setup
-    const matrix_coords = {};
-    const getBinIndex = (coordinate) => Math.floor(coordinate / binSizeAU);
-
-    // Populate the spatial matrix with all satellites
-    Object.values(rings)
-      .flat()
-      .forEach((satellite) => {
-        const { x, y } = positions[satellite.name];
-        const binX = getBinIndex(x);
-        const binY = getBinIndex(y);
-
-        if (!matrix_coords[binX]) {
-          matrix_coords[binX] = {};
-        }
-        if (!matrix_coords[binX][binY]) {
-          matrix_coords[binX][binY] = [];
-        }
-
-        matrix_coords[binX][binY].push(satellite);
-      });
-
-    // Track connections for target satellites
-    const targetRingConnectionCounts = {}; // { targetSat.name: count }
-
-    Object.values(rings)
-      .flat()
-      .forEach((satellite) => {
-        targetRingConnectionCounts[satellite.name] = 0;
-      });
-
-    // Collect potential links for Earth and Mars rings
-    let potentialLinks = [];
-
-    earthMarsRings.forEach((targetRingName) => {
-      const targetSatellites = rings[targetRingName];
-      const excludedRing = targetRingName; // Prevent connecting to the same ring
-
-      // For each satellite in the Mars or Earth ring
-      targetSatellites.forEach((satellite) => {
-        const satellitePosition = positions[satellite.name];
-        const binX = getBinIndex(satellitePosition.x);
-        const binY = getBinIndex(satellitePosition.y);
-
-        let nearestSatellite = null;
-        let nearestDistanceAU = Infinity;
-
-        // Explore nearby bins for potential connections
-        const nearbyBins = [
-          [binX - 1, binY - 1],
-          [binX - 1, binY],
-          [binX - 1, binY + 1],
-          [binX, binY - 1],
-          [binX, binY],
-          [binX, binY + 1],
-          [binX + 1, binY - 1],
-          [binX + 1, binY],
-          [binX + 1, binY + 1],
-        ];
-
-        nearbyBins.forEach(([bx, by]) => {
-          if (matrix_coords[bx] && matrix_coords[bx][by]) {
-            const binSatellites = matrix_coords[bx][by];
-
-            binSatellites.forEach((targetSat) => {
-              const targetRing = Object.keys(rings).find((ringName) => rings[ringName].includes(targetSat));
-
-              if (!targetRing || targetRing === excludedRing) {
-                return; // Skip if invalid ring or excluded ring
-              }
-
-              // Check if the target satellite already has too many connections
-              if (targetRingConnectionCounts[targetSat.name] >= this.simLinkBudget.getMaxLinksPerRing(targetSat.ringName)) {
-                return;
-              }
-
-              const distanceAU = this.calculateDistanceAU(positions[satellite.name], positions[targetSat.name]);
-              if (distanceAU > this.simLinkBudget.maxDistanceAU) return; // Skip if distance exceeds max
-
-              // Check radial zone for inter-ring connection allowance
-              const zone = targetSat.orbitalZone;
-              if (zone === "INSIDE_EARTH" || zone === "OUTSIDE_MARS") return;
-
-              // Track the nearest satellite
-              if (distanceAU < nearestDistanceAU) {
-                nearestSatellite = targetSat;
-                nearestDistanceAU = distanceAU;
-              }
-            });
-          }
-        });
-
-        if (nearestSatellite) {
-          const distanceKm = nearestDistanceAU * this.AU_IN_KM;
-          const gbpsCapacity = this.calculateGbps(distanceKm);
-          const latencySeconds = this.calculateLatency(distanceKm);
-
-          // Order IDs lexicographically to avoid duplicates
-          const [orderedFromId, orderedToId] =
-            satellite.name < nearestSatellite.name ? [satellite.name, nearestSatellite.name] : [nearestSatellite.name, satellite.name];
-
-          potentialLinks.push({
-            fromId: orderedFromId,
-            toId: orderedToId,
-            distanceAU: nearestDistanceAU,
-            distanceKm,
-            latencySeconds,
-            gbpsCapacity,
-          });
-
-          // Increment connection count for the target satellite
-          targetRingConnectionCounts[nearestSatellite.name]++;
-        }
-      });
-    });
-
-    // **New Implementation Starts Here**
-
-    // **Step 1: List All Potential Link Options**
-    // The potentialLinks array already contains all possible links between Mars/Earth rings and other rings.
-
-    // **Step 2: Sort Links by Highest Gbps Capacity (Descending Order)**
-    potentialLinks.sort((a, b) => b.gbpsCapacity - a.gbpsCapacity);
-
-    // **Step 3: Assign Links with Constraints**
-    // - Each satellite in planetary rings (Mars and Earth rings) can have a maximum of 2 links.
-    // - Satellites in other rings respect the simLinkBudget.maxLinksPerSatellite.
-
-    // Initialize a Set for existing links for O(1) lookup
-    const existingLinks = new Set(finalLinks.map((link) => `${link.fromId}-${link.toId}`));
-
-    let linksAdded = 0;
-    let marsLinksAdded = 0;
-    let earthLinksAdded = 0;
-    potentialLinks.forEach((link) => {
-      const { fromId, toId, distanceAU, distanceKm, latencySeconds, gbpsCapacity } = link;
-
-      // Check if the link already exists
-      const linkKey = `${fromId}-${toId}`;
-      if (existingLinks.has(linkKey)) return;
-
-      // Check if 'fromId' is part of planetary rings and has reached its maximum of 2 links
-      const fromRing = Object.keys(rings).find((ringName) => rings[ringName].some((sat) => sat.name === fromId));
-      const isFromPlanetaryRing = earthMarsRings.includes(fromRing);
-
-      if (isFromPlanetaryRing && linkCounts[fromId] >= maxConnectionsPerPlanetarySatellite) {
-        return; // Skip if 'fromId' has reached its max links
-      }
-
-      // Determine toRing
-      const toRing = toId === "Earth" ? "ring_earth" : "ring_mars";
-
-      // Check if 'toId' has reached its maximum links as per simLinkBudget // marsEarthRings
-      if (linkCounts[toId] >= this.simLinkBudget.getMaxLinksPerRing(toRing)) {
-        return; // Skip if 'toId' has reached its max links
-      }
-      // Check if 'fromId' has reached its maximum links as per simLinkBudget // marsEarthRings
-      if (linkCounts[fromId] >= this.simLinkBudget.getMaxLinksPerRing(fromRing) - 1) {
-        return; // Skip if 'fromId' has reached its max links
-      }
-
-      // Determine directions
-      const fromA = fromId === "Earth" || fromId === "Mars" ? 0 : rings[fromRing][0].a;
-      const toA = toId === "Earth" || toId === "Mars" ? 0 : rings[toRing][0].a;
-      const directionFrom = fromA < toA ? "outwards" : "inwards";
-      const directionTo = toA < fromA ? "outwards" : "inwards";
-
-      // Check if ports are available
-      if (portUsage[fromId][directionFrom] || portUsage[toId][directionTo]) return;
-
-      // Assign the link
-      finalLinks.push({
-        fromId,
-        toId,
-        distanceAU,
-        distanceKm,
-        latencySeconds,
-        gbpsCapacity,
-      });
-
-      // Increment link counts
-      linkCounts[fromId]++;
-      linkCounts[toId]++;
-
-      // Add the new link to the Set to avoid future duplicates
-      existingLinks.add(linkKey);
-
-      // Mark ports as used
-      portUsage[fromId][directionFrom] = true;
-      portUsage[toId][directionTo] = true;
-
-      linksAdded++;
-
-      // Count Mars and Earth links
-      if (fromId === "Mars") marsLinksAdded++;
-      else if (fromId === "Earth") earthLinksAdded++;
-    });
-
-    // **New Implementation Ends Here**
-
-    // Optionally, log the number of potential links and assigned links
-    // console.log(`Potential Links: ${potentialLinks.length}`);
-    // console.log(`Assigned Links: ${finalLinks.length}`);
-
-    const marsRing = rings["ring_mars"];
-    const earthRing = rings["ring_earth"];
-    console.log(`Mars ring links (${marsRing ? marsRing.length : 0} satellites): ${marsLinksAdded} connections made`);
-    console.log(`Earth ring links (${earthRing ? earthRing.length : 0} satellites): ${earthLinksAdded} connections made`);
   }
 
   connectEccentricAndCircularRings(rings, positions, linkCounts, finalLinks) {
@@ -1216,6 +952,7 @@ export class SimNetwork {
     // Build the Graph
     const graph = {}; // Adjacency list representation
     const capacities = {}; // Edge capacities
+    const latencies = {}; // Edge latencies
     const positions = {}; // Node positions for reference
 
     // Initialize graph nodes
@@ -1233,7 +970,7 @@ export class SimNetwork {
     }
 
     // Helper Function to Add Edges (Bidirectional)
-    const addEdge = (fromId, toId, capacity) => {
+    const addEdge = (fromId, toId, capacity, latency) => {
       if (!graph[fromId].includes(toId)) {
         graph[fromId].push(toId);
       }
@@ -1242,13 +979,15 @@ export class SimNetwork {
       }
       const edgeKey = `${fromId}_${toId}`;
       capacities[edgeKey] = capacity;
+      latencies[edgeKey] = latency;
       const reverseEdgeKey = `${toId}_${fromId}`;
       capacities[reverseEdgeKey] = capacity; // Same capacity in reverse
+      latencies[reverseEdgeKey] = latency; // Same latency in reverse
     };
 
     // Add All Links (Bidirectional)
     finalLinks.forEach((link) => {
-      const { fromId, toId, gbpsCapacity } = link;
+      const { fromId, toId, gbpsCapacity, latencySeconds } = link;
 
       // Validate Node IDs
       if (!nodeIds.has(fromId)) {
@@ -1263,17 +1002,38 @@ export class SimNetwork {
       const fromNodeId = nodeIds.get(fromId);
       const toNodeId = nodeIds.get(toId);
 
-      addEdge(fromNodeId, toNodeId, gbpsCapacity);
+      addEdge(fromNodeId, toNodeId, gbpsCapacity, latencySeconds);
     });
 
-    // console.log("Graph Construction Complete:", graph);
+    console.log("Graph Construction Complete:", graph);
 
     // Implement the Edmonds-Karp Algorithm
     const source = nodeIds.get("Earth");
     const sink = nodeIds.get("Mars");
 
+    // --- STEP 1: SIMPLIFY ---
+    const simplificationStack = []; // Initialize Stack
+    const linksBefore = Object.keys(capacities).length / 2;
+
+    // Pass the stack to the function
+    this.simplifyNetwork(graph, capacities, latencies, source, sink, simplificationStack);
+
+    const linksAfter = Object.keys(capacities).length / 2;
+    console.log(`Graph simplification: ${linksBefore} -> ${linksAfter} links`);
+
+    // --- STEP 2: RUN MAX FLOW ---
+    // Max flow runs on the simplified graph (very fast)
     const maxFlowResult = this.edmondsKarp(graph, capacities, source, sink, perfStart, calctimeMs);
+
     if (maxFlowResult === null) return { links: [], maxFlowGbps: 0, error: "timed out" };
+
+    // --- STEP 3: DESIMPLIFY ---
+    // Restore the graph structure and map flows back to physical satellites
+    this.desimplifyNetwork(graph, maxFlowResult.flows, simplificationStack);
+
+    // --- STEP 4: OUTPUT GENERATION ---
+    // Now graph and flows match the original physical satellites.
+    // calculateLatencies and visualization will work normally.
 
     // Extract the Flows on Each Link
     const flows = maxFlowResult.flows;
@@ -1331,6 +1091,152 @@ export class SimNetwork {
       positions, // Node positions
       error: null,
     };
+  }
+
+  /**
+   * Simplifies the network by merging series nodes and records the history.
+   * @param {Array} simplificationStack - Array to store merge history (passed from getNetworkData).
+   */
+  simplifyNetwork(graph, capacities, latencies, source, sink, simplificationStack) {
+    const nodesBefore = Object.keys(graph).length;
+    const edgesBefore = Object.keys(capacities).length / 2;
+    let changed = true;
+
+    while (changed) {
+      changed = false;
+      const nodes = Object.keys(graph);
+
+      for (const nodeKey of nodes) {
+        const node = parseInt(nodeKey);
+
+        // Safety Checks
+        if (node === source || node === sink) continue;
+        if (!graph[node]) continue;
+
+        const neighbors = graph[node];
+
+        // Identify Series Candidate (Degree 2)
+        if (neighbors.length === 2) {
+          const u = neighbors[0];
+          const v = neighbors[1];
+
+          if (u === v || u === node || v === node) continue;
+
+          // --- DEFINE KEYS ---
+          const u_B = `${u}_${node}`;
+          const B_v = `${node}_${v}`;
+          const v_B = `${v}_${node}`;
+          const B_u = `${node}_${u}`;
+
+          const u_v = `${u}_${v}`; // New Virtual Edge
+          const v_u = `${v}_${u}`;
+
+          // --- 1. RECORD HISTORY (For Desimplification) ---
+          simplificationStack.push({
+            removedNode: node,
+            u: u,
+            v: v,
+            // We only strictly need to know which nodes were involved,
+            // but tracking keys helps debugging.
+            u_v_key: u_v,
+            v_u_key: v_u,
+          });
+
+          // --- 2. CALCULATE NEW ATTRIBUTES ---
+          // U -> V
+          const cap_u_v = Math.min(capacities[u_B] || 0, capacities[B_v] || 0);
+          const lat_u_v = (latencies[u_B] || 0) + (latencies[B_v] || 0);
+
+          // V -> U
+          const cap_v_u = Math.min(capacities[v_B] || 0, capacities[B_u] || 0);
+          const lat_v_u = (latencies[v_B] || 0) + (latencies[B_u] || 0);
+
+          // --- 3. UPDATE TOPOLOGY ---
+
+          // Remove B from U, Add V to U
+          graph[u] = graph[u].filter((n) => n !== node);
+          if (!graph[u].includes(v)) graph[u].push(v);
+
+          // Remove B from V, Add U to V
+          graph[v] = graph[v].filter((n) => n !== node);
+          if (!graph[v].includes(u)) graph[v].push(u);
+
+          // --- 4. UPDATE CAPACITIES/LATENCIES ---
+          capacities[u_v] = (capacities[u_v] || 0) + cap_u_v;
+          latencies[u_v] = lat_u_v;
+
+          capacities[v_u] = (capacities[v_u] || 0) + cap_v_u;
+          latencies[v_u] = lat_v_u;
+
+          // --- 5. CLEANUP ---
+          delete graph[node];
+          delete capacities[u_B];
+          delete capacities[B_v];
+          delete capacities[v_B];
+          delete capacities[B_u];
+          delete latencies[u_B];
+          delete latencies[B_v];
+          delete latencies[v_B];
+          delete latencies[B_u];
+
+          changed = true;
+          // Restart loop is safer to avoid index issues with Object.keys
+          // But purely for performance in JS engines, we can often continue
+          // if we check if graph[node] exists.
+          // For safety in this specific algorithm, break is good.
+          // break;
+        }
+      }
+    }
+  }
+  /**
+   * Restores the graph topology and maps flows from virtual edges back to physical edges.
+   */
+  desimplifyNetwork(graph, flows, simplificationStack) {
+    // Process the stack LIFO (Last In, First Out)
+    while (simplificationStack.length > 0) {
+      const operation = simplificationStack.pop();
+      const { removedNode, u, v, u_v_key, v_u_key } = operation;
+      const b = removedNode;
+
+      // --- 1. GET CALCULATED FLOW ON VIRTUAL EDGE ---
+      const flow_u_v = flows[u_v_key] || 0;
+      const flow_v_u = flows[v_u_key] || 0;
+
+      // --- 2. RESTORE TOPOLOGY ---
+      // Re-add B to graph
+      graph[b] = [u, v];
+
+      // Re-connect U to B, Disconnect U from V
+      // Note: We assume U and V were only connected via B.
+      // If a parallel edge existed, we simply remove the virtual link instance.
+      graph[u] = graph[u].filter((n) => n !== v);
+      graph[u].push(b);
+
+      // Re-connect V to B, Disconnect V from U
+      graph[v] = graph[v].filter((n) => n !== u);
+      graph[v].push(b);
+
+      // --- 3. DISTRIBUTE FLOW ---
+      // The flow that went U -> V must now go U -> B -> V
+
+      // Assign Forward Flow (U -> B -> V)
+      const u_b = `${u}_${b}`;
+      const b_v = `${b}_${v}`;
+      flows[u_b] = (flows[u_b] || 0) + flow_u_v;
+      flows[b_v] = (flows[b_v] || 0) + flow_u_v;
+
+      // Assign Reverse Flow (V -> B -> U)
+      const v_b = `${v}_${b}`;
+      const b_u = `${b}_${u}`;
+      flows[v_b] = (flows[v_b] || 0) + flow_v_u;
+      flows[b_u] = (flows[b_u] || 0) + flow_v_u;
+
+      // --- 4. CLEANUP VIRTUAL FLOW KEYS ---
+      // We remove the flow from the virtual shortcut so the visualizer doesn't draw it
+      delete flows[u_v_key];
+      delete flows[v_u_key];
+    }
   }
 
   /**

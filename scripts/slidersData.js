@@ -194,6 +194,16 @@ export const slidersData = {
       scale: "linear",
       updateLongTermScore: true,
     },
+    "laser-ports-per-satellite": {
+      label: "Laser Ports per Satellite",
+      min: 2,
+      max: 20,
+      value: 4,
+      step: 1,
+      unit: " ports",
+      scale: "linear",
+      updateLongTermScore: true,
+    },
   },
   ring_earth: {
     "laser-ports-per-satellite": {
