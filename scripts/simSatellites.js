@@ -78,6 +78,43 @@ export class SimSatellites {
       const marsCrossings = this.findAllRadialCrossings(orbitalElement, marsOrbit);
       this.ringCrossings.set(ringName, { earth: earthCrossings, mars: marsCrossings });
     }
+
+    // Compute suitable ranges for Earth and Mars connections
+    let suitableEarth = [];
+    let fullEarth = false;
+    const sortedRingsEarth = this.orbitalElements
+      .filter((e) => e.ringName !== "ring_earth" && e.ringName !== "ring_mars")
+      .sort((a, b) => a.a - b.a);
+    for (const ring of sortedRingsEarth) {
+      const crossings = this.ringCrossings.get(ring.ringName).earth;
+      if (!fullEarth && crossings.outside) {
+        suitableEarth = this.aggregateRanges(suitableEarth, crossings.outside);
+        crossings.suitable = suitableEarth[0];
+        if (this.isFullRange(suitableEarth)) {
+          fullEarth = true;
+        }
+      } else {
+        crossings.suitable = null;
+      }
+    }
+
+    let suitableMars = [];
+    let fullMars = false;
+    const sortedRingsMars = this.orbitalElements
+      .filter((e) => e.ringName !== "ring_earth" && e.ringName !== "ring_mars")
+      .sort((a, b) => b.a - a.a);
+    for (const ring of sortedRingsMars) {
+      const crossings = this.ringCrossings.get(ring.ringName).mars;
+      if (!fullMars && crossings.inside) {
+        suitableMars = this.aggregateRanges(suitableMars, crossings.inside);
+        crossings.suitable = suitableMars[0];
+        if (this.isFullRange(suitableMars)) {
+          fullMars = true;
+        }
+      } else {
+        crossings.suitable = null;
+      }
+    }
     console.log(this.ringCrossings);
   }
 
@@ -825,8 +862,8 @@ export class SimSatellites {
       };
     else if (ringType == "Adapted")
       return {
-        i: this.interpolateOrbitalElement(a, "i"),
-        o: this.interpolateOrbitalElement(a, "o"), //RAAN
+        i: this.addInterpolationBias(this.interpolateOrbitalElement(a, "i"), 50, "i"),
+        o: this.Mars.o, //RAAN
         p: this.Mars.p, //this.interpolateOrbitalElementNonLinear(a, "p"), // arg perigee
         a: a,
         n: n,
@@ -900,5 +937,34 @@ export class SimSatellites {
     const n_deg_per_day = n_rad_per_sec * seconds_per_day * radians_to_degrees;
 
     return n_deg_per_day;
+  }
+
+  mergeRanges(ranges) {
+    if (ranges.length === 0) return [];
+    ranges.sort((a, b) => a[0] - b[0]);
+    const merged = [ranges[0].slice()];
+    for (let i = 1; i < ranges.length; i++) {
+      const last = merged[merged.length - 1];
+      const curr = ranges[i];
+      if (curr[0] <= last[1]) {
+        last[1] = Math.max(last[1], curr[1]);
+      } else {
+        merged.push(curr.slice());
+      }
+    }
+    return merged;
+  }
+
+  aggregateRanges(current, newRange) {
+    return this.mergeRanges([...current, newRange]);
+  }
+
+  isFullRange(ranges) {
+    const merged = this.mergeRanges(ranges);
+    let total = 0;
+    for (const r of merged) {
+      total += r[1] - r[0];
+    }
+    return total >= 360;
   }
 }

@@ -245,7 +245,7 @@ export class SimUi {
           delete baseConfig["simulation.calctimeSec"];
           delete baseConfig["laser_technology.improvement-factor"];
           delete baseConfig["adapted_rings.ringcount"];
-          delete baseConfig["adapted_rings.requiredmbpsbetweensats"];
+          delete baseConfig["adapted_rings.satcountperring"];
 
           // Initialize satellitesConfig
           const satellitesConfig = this.getGroupsConfig([
@@ -661,6 +661,9 @@ export class SimUi {
         case "simulation.maxSatCount":
         case "simulation.calctimeSec":
         case "simulation.failed-satellites-slider":
+        case "ring_earth.match-circular-rings":
+        case "ring_earth.side-extension-degrees-slider":
+        case "ring_earth.requiredmbpsbetweensats":
         case "ring_mars.match-circular-rings":
         case "ring_mars.side-extension-degrees-slider":
         case "ring_mars.requiredmbpsbetweensats":
@@ -672,16 +675,13 @@ export class SimUi {
         case "circular_rings.earth-mars-orbit-inclination-pct":
         case "adapted_rings.laser-ports-per-satellite":
         case "adapted_rings.ringcount":
-        case "adapted_rings.requiredmbpsbetweensats":
+        case "adapted_rings.satcountperring":
         case "eccentric_rings.ringcount":
         case "eccentric_rings.requiredmbpsbetweensats":
         case "eccentric_rings.distance-sun-average-au":
         case "eccentric_rings.eccentricity":
         case "eccentric_rings.argument-of-perihelion":
         case "eccentric_rings.earth-mars-orbit-inclination-pct":
-        case "ring_earth.match-circular-rings":
-        case "ring_earth.side-extension-degrees-slider":
-        case "ring_earth.requiredmbpsbetweensats":
           this.simMain.setSatellitesConfig(
             this.getGroupsConfig([
               "economics",

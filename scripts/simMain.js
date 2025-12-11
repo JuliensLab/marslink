@@ -217,30 +217,57 @@ export class SimMain {
     let ringCount = uiConfig["adapted_rings.ringcount"];
     if (ringCount == 0) return [];
     ringCount += 2;
-    const mbpsBetweenSats = uiConfig["adapted_rings.requiredmbpsbetweensats"];
-    if (mbpsBetweenSats == 0) return [];
-    const distOuterAu = 1.5236365; // Mars average distance from sun in AU
-    const distInnerAu = 1.00002; // Earth average distance from sun in AU
+
+    const satCountPerRing = uiConfig["adapted_rings.satcountperring"];
+    if (satCountPerRing == 0) return [];
+
+    const distOuterAu = 1.5236365;
+    const distInnerAu = 0.99;
     const earthMarsInclinationPct = 0.5;
-    const distanceKmBetweenSats = this.simLinkBudget.calculateKm(mbpsBetweenSats / 1000);
-    const distanceAuBetweenSats = distanceKmBetweenSats / this.km_per_au;
-    const distanceAuBetweenRings = Math.abs(distOuterAu - distInnerAu) / (ringCount - 1);
+
+    // 1. Calculate the Periapsis Radius for the start (Earth) and end (Mars)
+    // Note: We use your existing interpolation function to get the 'e' at those points
+    const eInner = this.simSatellites.interpolateOrbitalElementNonLinear(distInnerAu, "e");
+    const eOuter = this.simSatellites.interpolateOrbitalElementNonLinear(distOuterAu, "e");
+
+    const rpInner = distInnerAu * (1 - eInner);
+    const rpOuter = distOuterAu * (1 - eOuter);
+
+    // 2. Determine the linear step size for the Periapsis Radius
+    const rpStep = (rpOuter - rpInner) / (ringCount - 1);
+
     const satellitesConfig = [];
+
     for (let ringId = 1; ringId < ringCount - 1; ringId++) {
-      // Determine ring type
       const ringType = "Adapted";
-      let satDistanceSunAu = distInnerAu + distanceAuBetweenRings * ringId;
-      let satDistanceSunAuBias = distInnerAu;
-      const satCount = Math.ceil(Math.PI / Math.asin(distanceAuBetweenSats / (2 * satDistanceSunAuBias)));
+
+      // 3. Determine the Target Periapsis for this specific ring
+      const targetRp = rpInner + rpStep * ringId;
+
+      // 4. Solve for 'a' (Semi-Major Axis)
+      // We need to find 'a' such that: a * (1 - e(a)) === targetRp
+      // Since e(a) changes with a, we use a simple approximation loop to find the perfect a.
+
+      let a_calc = targetRp; // Initial guess: assume e is 0, so a = rp
+
+      // Iterate 5 times to refine 'a' (Converges very fast)
+      for (let i = 0; i < 5; i++) {
+        let e_current = this.simSatellites.interpolateOrbitalElementNonLinear(a_calc, "e");
+        let rp_current = a_calc * (1 - e_current);
+        let error = targetRp - rp_current;
+        a_calc = a_calc + error; // Apply correction
+      }
+
+      let satDistanceSunAu = a_calc;
 
       // Push the satellite configuration for this ring
       satellitesConfig.push({
-        satCount: satCount,
+        satCount: satCountPerRing,
         satDistanceSun: satDistanceSunAu,
         ringName: "ring_adapt_" + ringId,
         ringType: ringType,
         sideExtensionDeg: null,
-        eccentricity: null,
+        eccentricity: null, // The simulation likely recalculates this from satDistanceSunAu later
         raan: null,
         argPeri: null,
         earthMarsInclinationPct,
