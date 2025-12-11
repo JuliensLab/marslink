@@ -271,8 +271,10 @@ export class SimSatellites {
       console.log(`Multiple crossings found: ${unique.length} crossings.`);
       // Determine which range is inside by checking distance at midpoint
       const midAngle = (unique[0] + unique[1]) / 2;
-      const sourceDist = this.getOrbitDistanceAtAngle(sourceEle, midAngle);
-      const targetDist = this.getOrbitDistanceAtAngle(targetEle, midAngle);
+      const sourcePos = this.getOrbitPositionAtAngle(sourceEle, midAngle);
+      const sourceDist = Math.sqrt(sourcePos.x ** 2 + sourcePos.y ** 2 + sourcePos.z ** 2);
+      const targetPos = this.getOrbitPositionAtAngle(targetEle, midAngle);
+      const targetDist = Math.sqrt(targetPos.x ** 2 + targetPos.y ** 2 + targetPos.z ** 2);
       if (sourceDist < targetDist) {
         // Source is closer to sun, so inside
         inside = [unique[0], unique[1]];
@@ -344,21 +346,13 @@ export class SimSatellites {
     }
   }
 
-  // Helper: Get distance to sun for a specific orbital element at a specific solar angle
-  getOrbitDistanceAtAngle(orbitalElement, targetAngle) {
+  // Helper: Get position (x,y,z) for a specific orbital element at a specific solar angle
+  getOrbitPositionAtAngle(orbitalElement, targetAngle) {
     if (!orbitalElement || !orbitalElement.precomputedPositions) return null;
 
     const positions = orbitalElement.precomputedPositions;
     // Normalize angle to 0-360
     let angle = ((targetAngle % 360) + 360) % 360;
-
-    // optimization: since we know solarAngleStep is 1.0 and array is sorted,
-    // we can guess the index. But to be safe and robust against changing step sizes:
-    // specific implementation for finding the two surrounding points.
-
-    // Find index where positions[i].solarAngle <= angle
-    // Since it's sorted, we could use binary search, but linear is fine for <1000 items
-    // or simplified index mapping if step is fixed.
 
     let index = -1;
     // Assuming sorted array from precomputeOrbitPositions
@@ -390,10 +384,14 @@ export class SimSatellites {
     let calcAngle = angle;
     if (calcAngle < ang1) calcAngle += 360;
 
-    // Linear Interpolation of distance
+    // Linear Interpolation of x, y, z
     const t = ang2 - ang1 === 0 ? 0 : (calcAngle - ang1) / (ang2 - ang1);
 
-    return p1.distanceToSun + t * (p2.distanceToSun - p1.distanceToSun);
+    return {
+      x: p1.x + t * (p2.x - p1.x),
+      y: p1.y + t * (p2.y - p1.y),
+      z: p1.z + t * (p2.z - p1.z),
+    };
   }
 
   // Get radial zone for a satellite

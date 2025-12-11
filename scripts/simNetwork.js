@@ -100,7 +100,7 @@ export class SimNetwork {
 
     this.interAdaptedRings(rings, positions, linkCounts, finalLinks, portUsage, targetDepartureAngle);
     this.planetToCircularRings(rings, positions, linkCounts, finalLinks, portUsage, "ring_mars", targetDepartureAngle);
-    // this.planetToCircularRings(rings, positions, linkCounts, finalLinks, portUsage, "ring_earth", targetDepartureAngle);
+    this.planetToCircularRings(rings, positions, linkCounts, finalLinks, portUsage, "ring_earth", targetDepartureAngle);
     // this.interEccentricRings(rings, positions, linkCounts, finalLinks);
 
     // this.connectEccentricAndCircularRings(rings, positions, linkCounts, finalLinks);
