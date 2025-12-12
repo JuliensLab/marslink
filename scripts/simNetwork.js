@@ -98,9 +98,9 @@ export class SimNetwork {
 
     // this.marsEarthRings(rings, positions, linkCounts, finalLinks);
 
-    this.interAdaptedRings(rings, positions, linkCounts, finalLinks, portUsage, targetDepartureAngle);
-    this.planetToCircularRings(rings, positions, linkCounts, finalLinks, portUsage, "ring_mars", targetDepartureAngle);
-    this.planetToCircularRings(rings, positions, linkCounts, finalLinks, portUsage, "ring_earth", targetDepartureAngle);
+    this.interAdaptedRings(rings, positions, linkCounts, finalLinks, portUsage, targetDepartureAngle, satellites);
+    // this.planetToCircularRings(rings, positions, linkCounts, finalLinks, portUsage, "ring_mars", targetDepartureAngle);
+    // this.planetToCircularRings(rings, positions, linkCounts, finalLinks, portUsage, "ring_earth", targetDepartureAngle);
     // this.interEccentricRings(rings, positions, linkCounts, finalLinks);
 
     // this.connectEccentricAndCircularRings(rings, positions, linkCounts, finalLinks);
@@ -500,7 +500,17 @@ export class SimNetwork {
     }
   }
 
-  interAdaptedRings(rings, positions, linkCounts, finalLinks, portUsage, targetDepartureAngle = 0) {
+  interAdaptedRings(rings, positions, linkCounts, finalLinks, portUsage, targetDepartureAngle = 0, satellites) {
+    /* modify function to keep track of 'routes', which are a series of links going from lower index rings to high index rings. 
+       When a link is created between two satellites of neighbor rings, and if the inward port of the satellite on the lower index ring isn't used, this is the beginning of a route. (we look at the satellite in the lower index ring, so the satellite uses the outward port for this link).
+       We add this to a new route map, with as origin the satellite id or name or object (whatever is used to retrieve them). We look at the other satellite (the inward port is used for this link) of the link
+       and we add this link to the route. We continue by looking at the outward port of the latter satellite, and if there is a link, we follow it in the same way as we just did.
+       This will build a route in the route map. As we build the route, we keep 'metadata' about each route in the route map. This includes the route throughput_mbps and latency_seconds.  
+       The throughput is calculated by taking the throuhgput of lowest link of the route. The latency is calculated by adding the latencies of each link. This should be done during the route building, filling the metadata. The metadata also must contain the origin
+       and destination of the route (satellite id or whatever is used as id), and this is also done during the route building (origin set with the first link, destination set with the last link, when the next satellite has no link with the outward port)
+       Once this is completed, we want to calculate a summary in a new summary dictionnary. This should include the aggregate throughput_mbps (sum of all the individual routes throughputs) and latencies (min, max, average weighted by throuhgput).
+      This summary should be displayed in the new div 'info-area-capacity', preceeded by the words 'Adapted rings'
+    */
     const circularRingNames = Object.keys(rings).filter((ringName) => ringName.startsWith("ring_adapt_"));
 
     if (circularRingNames.length === 0) return;
@@ -558,7 +568,7 @@ export class SimNetwork {
         continue;
       }
 
-      console.log(`Connecting consecutive rings: ${inner.name} (#${inner.index}) → ${outer.name} (#${outer.index})`);
+      // console.log(`Connecting consecutive rings: ${inner.name} (#${inner.index}) → ${outer.name} (#${outer.index})`);
 
       const innerSats = ringSatellites[inner.name];
       const outerSats = ringSatellites[outer.name];
@@ -639,7 +649,57 @@ export class SimNetwork {
         linksAdded++;
       }
 
-      console.log(`→ ${linksAdded} inter-ring links added between ${inner.name} and ${outer.name}`);
+      // console.log(`→ ${linksAdded} inter-ring links added between ${inner.name} and ${outer.name}`);
+    }
+
+    // Build routes
+    const routes = {}; // origin: { links: [linkObj], throughput: minGbps, latency: sum, destination: lastSat }
+    const linkByFrom = {}; // fromId -> linkObj
+    finalLinks.forEach((link) => {
+      if (link.fromId.startsWith("ring_adapt_")) {
+        // only for adapted rings
+        linkByFrom[link.fromId] = link;
+      }
+    });
+    satellites.forEach((sat) => {
+      if (sat.ringName.startsWith("ring_adapt_") && !portUsage[sat.name].inwards && portUsage[sat.name].outwards) {
+        // start route
+        const route = { links: [], throughput: Infinity, latency: 0, destination: sat.name };
+        let current = sat.name;
+        while (current && linkByFrom[current]) {
+          const link = linkByFrom[current];
+          route.links.push(link);
+          route.throughput = Math.min(route.throughput, link.gbpsCapacity);
+          route.latency += link.latencySeconds;
+          route.destination = link.toId;
+          current = link.toId;
+          if (!portUsage[current] || !portUsage[current].outwards) break; // no further
+        }
+        if (route.links.length > 0) {
+          routes[sat.name] = route;
+        }
+      }
+    });
+    // Now compute summary
+    let totalThroughput = 0;
+    let minLatency = Infinity;
+    let maxLatency = 0;
+    let weightedLatencySum = 0;
+    let totalWeight = 0;
+    Object.values(routes).forEach((route) => {
+      totalThroughput += route.throughput;
+      if (route.latency < minLatency) minLatency = route.latency;
+      if (route.latency > maxLatency) maxLatency = route.latency;
+      weightedLatencySum += route.latency * route.throughput;
+      totalWeight += route.throughput;
+    });
+    const avgWeightedLatency = totalWeight > 0 ? weightedLatencySum / totalWeight : 0;
+    // Display
+    const div = document.getElementById("info-area-capacity");
+    if (div) {
+      div.innerHTML = `Adapted rings: Total Throughput: ${totalThroughput.toFixed(2)} Gbps, Latency: Min ${minLatency.toFixed(
+        2
+      )}s, Max ${maxLatency.toFixed(2)}s, Avg Weighted ${avgWeightedLatency.toFixed(2)}s`;
     }
   }
 
@@ -703,6 +763,20 @@ export class SimNetwork {
       // Sort
       const sortedInner = innerSats.slice().sort((a, b) => a.position.solarAngle - b.position.solarAngle);
       const sortedOuter = outerSats.slice().sort((a, b) => a.position.solarAngle - b.position.solarAngle);
+
+      console.log("outerSats.length:", outerSats.length, "sortedOuter.length:", sortedOuter.length);
+      const undefinedCount = outerSats.filter((s) => !s).length;
+      if (undefinedCount > 0) {
+        console.error(
+          "outerSats has",
+          undefinedCount,
+          "undefined elements for circRingName:",
+          circRingName,
+          "planetRingName:",
+          planetRingName
+        );
+      }
+
       const outerAngles = sortedOuter.map((s) => s.position.solarAngle);
 
       const candidates = [];
@@ -757,8 +831,21 @@ export class SimNetwork {
           const neighborIndex = (searchIdx + offset + sortedOuter.length) % sortedOuter.length;
           const outerSat = sortedOuter[neighborIndex];
 
+          // console.log("neighborIndex:", neighborIndex, "sortedOuter.length:", sortedOuter.length, "outerSat:", outerSat);
+          if (!outerSat) {
+            console.error(
+              "outerSat is undefined at neighborIndex",
+              neighborIndex,
+              "for circRingName:",
+              circRingName,
+              "planetRingName:",
+              planetRingName
+            );
+            return;
+          }
+
           const outerPortName = isPlanetInner ? circularPort : planetPort;
-          if (portUsage[outerSat.name][outerPortName]) return;
+          if (!outerSat || !outerSat.name || portUsage[outerSat.name][outerPortName]) return;
 
           const circSat = isPlanetInner ? outerSat : innerSat;
           if (circSat.orbitalZone !== "BETWEEN_EARTH_AND_MARS") return;

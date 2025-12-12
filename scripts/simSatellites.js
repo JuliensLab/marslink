@@ -261,10 +261,10 @@ export class SimSatellites {
       const sourceDist = sourcePositions[0].distanceToSun;
       const targetDist = targetPositions[0].distanceToSun;
       if (sourceDist > targetDist) {
-        console.log(`No crossings. Source (${sourceDist}) > Target (${targetDist}). Outside.`);
+        // console.log(`No crossings. Source (${sourceDist}) > Target (${targetDist}). Outside.`);
         outside = [0, 360];
       } else {
-        console.log(`No crossings. Source (${sourceDist}) <= Target (${targetDist}). Inside.`);
+        // console.log(`No crossings. Source (${sourceDist}) <= Target (${targetDist}). Inside.`);
         inside = [0, 360];
       }
     } else if (unique.length >= 2) {
@@ -682,7 +682,7 @@ export class SimSatellites {
         }
       }
     }
-    console.log(ringName, satellites);
+    // console.log(ringName, satellites);
     return satellites;
   }
 

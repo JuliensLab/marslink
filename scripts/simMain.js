@@ -218,11 +218,13 @@ export class SimMain {
     if (ringCount == 0) return [];
     ringCount += 2;
 
-    const satCountPerRing = uiConfig["adapted_rings.satcountperring"];
-    if (satCountPerRing == 0) return [];
+    const routeCount = uiConfig["adapted_rings.route_count"];
+    if (routeCount == 0) return [];
+
+    const linearSatCountIncrease = uiConfig["adapted_rings.linear_satcount_increase"];
 
     const distOuterAu = 1.5236365;
-    const distInnerAu = 0.99;
+    const distInnerAu = 1;
     const earthMarsInclinationPct = 0.5;
 
     // 1. Calculate the Periapsis Radius for the start (Earth) and end (Mars)
@@ -259,10 +261,11 @@ export class SimMain {
       }
 
       let satDistanceSunAu = a_calc;
+      let satCount = Math.ceil(routeCount * (1 + (linearSatCountIncrease * ringId) / ringCount));
 
       // Push the satellite configuration for this ring
       satellitesConfig.push({
-        satCount: satCountPerRing,
+        satCount: satCount,
         satDistanceSun: satDistanceSunAu,
         ringName: "ring_adapt_" + ringId,
         ringType: ringType,

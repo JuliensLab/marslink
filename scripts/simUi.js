@@ -245,7 +245,7 @@ export class SimUi {
           delete baseConfig["simulation.calctimeSec"];
           delete baseConfig["laser_technology.improvement-factor"];
           delete baseConfig["adapted_rings.ringcount"];
-          delete baseConfig["adapted_rings.satcountperring"];
+          delete baseConfig["adapted_rings.route_count"];
 
           // Initialize satellitesConfig
           const satellitesConfig = this.getGroupsConfig([
@@ -675,7 +675,8 @@ export class SimUi {
         case "circular_rings.earth-mars-orbit-inclination-pct":
         case "adapted_rings.laser-ports-per-satellite":
         case "adapted_rings.ringcount":
-        case "adapted_rings.satcountperring":
+        case "adapted_rings.route_count":
+        case "adapted_rings.linear_satcount_increase":
         case "eccentric_rings.ringcount":
         case "eccentric_rings.requiredmbpsbetweensats":
         case "eccentric_rings.distance-sun-average-au":
