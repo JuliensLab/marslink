@@ -870,9 +870,9 @@ export class SimNetwork {
       if (infoDiv) {
         infoDiv.innerHTML = "";
         infoDiv.innerHTML += `<div>Adapted rings:<br>${formatThroughput(totalThroughput)} via ${routes.length} routes`;
-        infoDiv.innerHTML += `Route ${formatThroughput(minThroughput)} | ${formatThroughput(weightedAvgThroughput)} | ${formatThroughput(
-          maxThroughput
-        )}<br>`;
+        infoDiv.innerHTML += `Route ${minThroughput.toFixed(1)} | ${weightedAvgThroughput.toFixed(1)} | ${maxThroughput.toFixed(
+          1
+        )} Mbps<br>`;
         infoDiv.innerHTML += `Latency ${(minLatency / 60).toFixed(1)} | ${(weightedAvgLatency / 60).toFixed(1)} | ${(
           maxLatency / 60
         ).toFixed(1)} minutes</div>`;
