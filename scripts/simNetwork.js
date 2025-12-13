@@ -788,23 +788,28 @@ export class SimNetwork {
       linkMap.get(link.fromId).push(link);
     });
 
-    // Start from Earth satellites with outward ports used
-    const earthSats = rings["ring_earth"] || [];
-    const marsSats = rings["ring_mars"] || [];
+    // Start from satellites suitable for Earth with outward ports used
+    const earthSuitableSats = [];
+    Object.values(rings).forEach((ringSats) => {
+      ringSats.forEach((sat) => {
+        if (sat.suitable && sat.suitable.includes("Earth")) {
+          earthSuitableSats.push(sat);
+        }
+      });
+    });
 
-    let count = 4;
-    earthSats.forEach((earthSat) => {
-      if (earthSat.outwards !== null) {
-        // Start a route from this Earth satellite
+    earthSuitableSats.forEach((startSat) => {
+      if (startSat.outwards !== null) {
+        // Start a route from this satellite
         const route = {
-          path: [earthSat.name],
+          path: [startSat.name],
           throughputMbps: Infinity,
           latencySeconds: 0,
-          origin: earthSat.name,
+          origin: startSat.name,
           destination: null,
         };
 
-        let currentSat = earthSat;
+        let currentSat = startSat;
         let foundMars = false;
 
         while (currentSat && !foundMars) {
@@ -820,13 +825,14 @@ export class SimNetwork {
               route.latencySeconds += outwardLink.latencySeconds;
             }
 
-            // Check if nextSat is on Mars
-            if (marsSats.some((sat) => sat.name === nextSatName)) {
+            // Check if nextSat is suitable for Mars
+            const nextSat = satMap.get(nextSatName);
+            if (nextSat && nextSat.suitable && nextSat.suitable.includes("Mars")) {
               route.destination = nextSatName;
               foundMars = true;
             }
 
-            currentSat = satMap.get(nextSatName);
+            currentSat = nextSat;
           } else {
             break; // No outward link, end route
           }
