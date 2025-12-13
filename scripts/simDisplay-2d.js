@@ -295,10 +295,13 @@ export class SimDisplay {
   setLinksColors(type) {
     // Set the links material based on the type
     this.linksColorsType = type;
+    this.drawSolarSystem();
   }
 
   setSatelliteColorMode(mode) {
     // 2D display doesn't use satellite colors
+    this.satelliteColorMode = mode;
+    this.drawSolarSystem();
   }
 
   /**
@@ -445,7 +448,7 @@ export class SimDisplay {
     }
 
     // === Draw Satellites (example) ===
-    if (true) {
+    if (this.satelliteColorMode !== "None") {
       const satSize = 4 * satelliteScaleFactor;
       for (let satellite of this.satellites) {
         const pos = this.satellitePositions[satellite.name];
@@ -462,75 +465,77 @@ export class SimDisplay {
     }
 
     // === Draw Links ===
-    const activeLinkSet = new Set(this.activeLinks.map((link) => link.fromId + "_" + link.toId));
-    const inactiveLinks = this.possibleLinks.filter(
-      (link) => !activeLinkSet.has(link.fromId + "_" + link.toId) && !activeLinkSet.has(link.toId + "_" + link.fromId)
-    );
-    const allLinks = [...this.activeLinks, ...inactiveLinks];
+    if (this.linksColorsType !== "None") {
+      const activeLinkSet = new Set(this.activeLinks.map((link) => link.fromId + "_" + link.toId));
+      const inactiveLinks = this.possibleLinks.filter(
+        (link) => !activeLinkSet.has(link.fromId + "_" + link.toId) && !activeLinkSet.has(link.toId + "_" + link.fromId)
+      );
+      const allLinks = [...this.activeLinks, ...inactiveLinks];
 
-    // Compute min/max flows for color interpolation
-    let flows = [];
-    if (this.linksColorsType === "actual") flows = this.activeLinks.map((link) => link.gbpsFlowActual);
-    else if (this.linksColorsType === "capacity") flows = allLinks.map((link) => link.gbpsCapacity);
-    const maxFlow = flows.length > 0 ? Math.max(...flows) : 1;
-    const minFlow = flows.length > 0 ? Math.min(...flows) : 0;
+      // Compute min/max flows for color interpolation
+      let flows = [];
+      if (this.linksColorsType === "Flow") flows = this.activeLinks.map((link) => link.gbpsFlow);
+      else if (this.linksColorsType === "Capacity") flows = allLinks.map((link) => link.gbpsCapacity);
+      const maxFlow = flows.length > 0 ? Math.max(...flows) : 1;
+      const minFlow = flows.length > 0 ? Math.min(...flows) : 0;
 
-    console.log("Max flow:", maxFlow, "Min flow:", minFlow);
+      console.log("Max flow:", maxFlow, "Min flow:", minFlow);
 
-    const interpolateColor = (t) => {
-      const colMin = {
-        r: (this.styles.links.active.colormin >> 16) & 0xff,
-        g: (this.styles.links.active.colormin >> 8) & 0xff,
-        b: this.styles.links.active.colormin & 0xff,
+      const interpolateColor = (t) => {
+        const colMin = {
+          r: (this.styles.links.active.colormin >> 16) & 0xff,
+          g: (this.styles.links.active.colormin >> 8) & 0xff,
+          b: this.styles.links.active.colormin & 0xff,
+        };
+        const colMax = {
+          r: (this.styles.links.active.colormax >> 16) & 0xff,
+          g: (this.styles.links.active.colormax >> 8) & 0xff,
+          b: this.styles.links.active.colormax & 0xff,
+        };
+        const r = colMin.r + (colMax.r - colMin.r) * t;
+        const g = colMin.g + (colMax.g - colMin.g) * t;
+        const b = colMin.b + (colMax.b - colMin.b) * t;
+        return `rgb(${r}, ${g}, ${b})`;
       };
-      const colMax = {
-        r: (this.styles.links.active.colormax >> 16) & 0xff,
-        g: (this.styles.links.active.colormax >> 8) & 0xff,
-        b: this.styles.links.active.colormax & 0xff,
-      };
-      const r = colMin.r + (colMax.r - colMin.r) * t;
-      const g = colMin.g + (colMax.g - colMin.g) * t;
-      const b = colMin.b + (colMax.b - colMin.b) * t;
-      return `rgb(${r}, ${g}, ${b})`;
-    };
 
-    for (let link of allLinks) {
-      const isActive = activeLinkSet.has(link.fromId + "_" + link.toId);
+      for (let link of allLinks) {
+        const isActive = activeLinkSet.has(link.fromId + "_" + link.toId);
 
-      const fromPos = this.planetPositions[link.fromId] || this.satellitePositions[link.fromId];
-      const toPos = this.planetPositions[link.toId] || this.satellitePositions[link.toId];
-      if (!fromPos || !toPos) {
-        console.warn(`Cannot find positions for link between "${link.fromId}" and "${link.toId}"`);
-        continue;
-      }
-
-      const fromX = centerX - auTo3D(fromPos.x) * scaleAUtoPX;
-      const fromY = centerY + auTo3D(fromPos.y) * scaleAUtoPX;
-      const toX = centerX - auTo3D(toPos.x) * scaleAUtoPX;
-      const toY = centerY + auTo3D(toPos.y) * scaleAUtoPX;
-
-      // Stroke color
-      let strokeColor = "#777777"; // inactive
-
-      // Set colors
-      if ((this.linksColorsType === "actual" && isActive) || this.linksColorsType === "capacity") {
-        // Active link: interpolate color based on flow
-        let t = 0;
-        let valFlow = this.linksColorsType === "actual" ? link.gbpsFlowActual : link.gbpsCapacity;
-        if (maxFlow > minFlow) {
-          t = (valFlow - minFlow) / (maxFlow - minFlow);
+        const fromPos = this.planetPositions[link.fromId] || this.satellitePositions[link.fromId];
+        const toPos = this.planetPositions[link.toId] || this.satellitePositions[link.toId];
+        if (!fromPos || !toPos) {
+          console.warn(`Cannot find positions for link between "${link.fromId}" and "${link.toId}"`);
+          continue;
         }
-        strokeColor = interpolateColor(isNaN(t) ? 0 : t);
-      }
 
-      this.ctx.save();
-      this.ctx.strokeStyle = strokeColor;
-      this.ctx.lineWidth = (this.linksColorsType === "actual" && isActive) || this.linksColorsType === "capacity" ? 2 : 1;
-      this.ctx.beginPath();
-      this.ctx.moveTo(fromX, fromY);
-      this.ctx.lineTo(toX, toY);
-      this.ctx.stroke();
-      this.ctx.restore();
+        const fromX = centerX - auTo3D(fromPos.x) * scaleAUtoPX;
+        const fromY = centerY + auTo3D(fromPos.y) * scaleAUtoPX;
+        const toX = centerX - auTo3D(toPos.x) * scaleAUtoPX;
+        const toY = centerY + auTo3D(toPos.y) * scaleAUtoPX;
+
+        // Stroke color
+        let strokeColor = "#777777"; // inactive
+
+        // Set colors
+        if ((this.linksColorsType === "Flow" && isActive) || this.linksColorsType === "Capacity") {
+          // Active link: interpolate color based on flow
+          let t = 0;
+          let valFlow = this.linksColorsType === "Flow" ? link.gbpsFlow : link.gbpsCapacity;
+          if (maxFlow > minFlow) {
+            t = (valFlow - minFlow) / (maxFlow - minFlow);
+          }
+          strokeColor = interpolateColor(isNaN(t) ? 0 : t);
+        }
+
+        this.ctx.save();
+        this.ctx.strokeStyle = strokeColor;
+        this.ctx.lineWidth = (this.linksColorsType === "Flow" && isActive) || this.linksColorsType === "Capacity" ? 2 : 1;
+        this.ctx.beginPath();
+        this.ctx.moveTo(fromX, fromY);
+        this.ctx.lineTo(toX, toY);
+        this.ctx.stroke();
+        this.ctx.restore();
+      }
     }
   }
 }

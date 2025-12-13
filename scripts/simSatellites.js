@@ -96,43 +96,117 @@ export class SimSatellites {
       this.ringCrossings.set(ringName, { earth: earthCrossings, mars: marsCrossings });
     }
 
-    // Compute suitable ranges for Earth and Mars connections
-    let suitableEarth = [];
-    let fullEarth = false;
-    const sortedRingsEarth = this.orbitalElements
+    // Initialize suitable to null
+    for (const orbitalElement of this.orbitalElements) {
+      const ringName = orbitalElement.ringName;
+      if (ringName === "ring_earth" || ringName === "ring_mars") continue;
+      const crossings = this.ringCrossings.get(ringName);
+      crossings.earth.suitable = null;
+      crossings.mars.suitable = null;
+    }
+
+    // Compute suitable ranges
+    this.computeSuitableRanges("earth");
+    this.computeSuitableRanges("mars");
+
+    console.log(this.ringCrossings);
+  }
+
+  computeSuitableRanges(target) {
+    const isEarth = target === "earth";
+    const sortedRings = this.orbitalElements
       .filter((e) => e.ringName !== "ring_earth" && e.ringName !== "ring_mars")
-      .sort((a, b) => a.a - b.a);
-    for (const ring of sortedRingsEarth) {
-      const crossings = this.ringCrossings.get(ring.ringName).earth;
-      if (!fullEarth && crossings.outside) {
-        suitableEarth = this.aggregateRanges(suitableEarth, crossings.outside);
-        crossings.suitable = suitableEarth[0];
-        if (this.isFullRange(suitableEarth)) {
-          fullEarth = true;
-        }
-      } else {
-        crossings.suitable = null;
+      .sort((a, b) => (isEarth ? a.a - b.a : b.a - a.a)); // Near to far for Earth, far to near for Mars
+
+    const crossingsKey = isEarth ? "earth" : "mars";
+    const targetOrbit = isEarth
+      ? this.orbitalElements.find((ele) => ele.ringName === "ring_earth")
+      : this.orbitalElements.find((ele) => ele.ringName === "ring_mars");
+
+    // Shortlist rings with crossings
+    let shortlist = sortedRings.filter((r) => {
+      const crossings = this.ringCrossings.get(r.ringName)[crossingsKey];
+      return crossings.crossings.length > 0;
+    });
+
+    // Add the next orbit after the last with crossings
+    if (shortlist.length > 0) {
+      const lastCrossingRing = shortlist[shortlist.length - 1];
+      const lastIndex = sortedRings.findIndex((r) => r.ringName === lastCrossingRing.ringName);
+      if (lastIndex + 1 < sortedRings.length) {
+        shortlist.push(sortedRings[lastIndex + 1]);
       }
     }
 
-    let suitableMars = [];
-    let fullMars = false;
-    const sortedRingsMars = this.orbitalElements
-      .filter((e) => e.ringName !== "ring_earth" && e.ringName !== "ring_mars")
-      .sort((a, b) => b.a - a.a);
-    for (const ring of sortedRingsMars) {
-      const crossings = this.ringCrossings.get(ring.ringName).mars;
-      if (!fullMars && crossings.inside) {
-        suitableMars = this.aggregateRanges(suitableMars, crossings.inside);
-        crossings.suitable = suitableMars[0];
-        if (this.isFullRange(suitableMars)) {
-          fullMars = true;
+    // If no crossings, assign the entire range to the best ring
+    if (shortlist.length === 0) {
+      let bestDist = isEarth ? Infinity : -Infinity;
+      let bestRing = null;
+      for (const ring of sortedRings) {
+        const pos = this.getOrbitPositionAtAngle(ring, 0); // Use solar angle 0 for simplicity
+        if (pos) {
+          const dist = Math.sqrt(pos.x * pos.x + pos.y * pos.y);
+          const targetPos = this.getOrbitPositionAtAngle(targetOrbit, 0);
+          if (targetPos) {
+            const targetDist = Math.sqrt(targetPos.x * targetPos.x + targetPos.y * targetPos.y);
+            const condition = isEarth ? dist > targetDist : dist < targetDist;
+            if (condition) {
+              if (isEarth ? dist < bestDist : dist > bestDist) {
+                bestDist = dist;
+                bestRing = ring;
+              }
+            }
+          }
         }
-      } else {
-        crossings.suitable = null;
+      }
+      if (bestRing) {
+        shortlist = [bestRing];
       }
     }
-    console.log(this.ringCrossings);
+
+    // Crossings solar angles
+    let crossingsSolarAngles = [0, 360];
+    for (const ring of shortlist) {
+      const crossings = this.ringCrossings.get(ring.ringName)[crossingsKey].crossings;
+      crossingsSolarAngles.push(...crossings);
+    }
+    crossingsSolarAngles = [...new Set(crossingsSolarAngles)].sort((a, b) => a - b);
+
+    // Create ranges
+    let ranges = [];
+    for (let i = 0; i < crossingsSolarAngles.length - 1; i++) {
+      ranges.push([crossingsSolarAngles[i], crossingsSolarAngles[i + 1]]);
+    }
+
+    // Assign ranges to rings
+    for (const range of ranges) {
+      const midpoint = (range[0] + range[1]) / 2;
+      let bestDist = isEarth ? Infinity : -Infinity;
+      let bestRing = null;
+      for (const ring of shortlist) {
+        const pos = this.getOrbitPositionAtAngle(ring, midpoint);
+        if (pos) {
+          const dist = Math.sqrt(pos.x * pos.x + pos.y * pos.y);
+          // Get target's position at midpoint
+          const targetPos = this.getOrbitPositionAtAngle(targetOrbit, midpoint);
+          if (targetPos) {
+            const targetDist = Math.sqrt(targetPos.x * targetPos.x + targetPos.y * targetPos.y);
+            const condition = isEarth ? dist > targetDist : dist < targetDist;
+            if (condition) {
+              if (isEarth ? dist < bestDist : dist > bestDist) {
+                bestDist = dist;
+                bestRing = ring;
+              }
+            }
+          }
+        }
+      }
+      if (bestRing) {
+        const crossings = this.ringCrossings.get(bestRing.ringName)[crossingsKey];
+        if (!crossings.suitable) crossings.suitable = [];
+        crossings.suitable.push(range);
+      }
+    }
   }
 
   precomputeOrbitPositions(orbitalElement) {
@@ -174,6 +248,29 @@ export class SimSatellites {
     for (const satellite of this.satellites) {
       satellite.position = helioCoords(satellite, simDaysSinceStart);
       satellite.orbitalZone = this.getRadialZone(satellite, satellite.ringName);
+      if (satellite.ringName !== "ring_earth" && satellite.ringName !== "ring_mars") {
+        const crossings = this.ringCrossings.get(satellite.ringName);
+        if (crossings) {
+          const suitable = [];
+          if (
+            crossings.earth.suitable &&
+            crossings.earth.suitable.some((range) => this.isAngleInRange(satellite.position.solarAngle, range))
+          ) {
+            suitable.push("Earth");
+          }
+          if (
+            crossings.mars.suitable &&
+            crossings.mars.suitable.some((range) => this.isAngleInRange(satellite.position.solarAngle, range))
+          ) {
+            suitable.push("Mars");
+          }
+          if (suitable.length > 0) {
+            satellite.suitable = suitable;
+          } else {
+            delete satellite.suitable;
+          }
+        }
+      }
     }
     return this.satellites;
   }

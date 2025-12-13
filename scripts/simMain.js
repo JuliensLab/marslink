@@ -32,7 +32,7 @@ export class SimMain {
     // Do not instantiate simDisplay here; it will be set by setDisplayType
     this.simDisplay = null;
     this.linksColors = null;
-    this.satelliteColorMode = "Quadrants";
+    this.satelliteColorMode = "Quad";
     this.sunSizeFactor = 1;
     this.planetsSizeFactor = 1;
     this.satelliteSizeFactor = 1;
@@ -68,6 +68,7 @@ export class SimMain {
       console.error("Invalid display type:", type);
       return;
     }
+    this.simDisplay.simSatellites = this.simSatellites;
     this.simDisplay.setLinksColors(this.linksColors);
     this.simDisplay.setSizeFactors(this.sunSizeFactor, this.planetsSizeFactor);
     this.simDisplay.setSatelliteColorMode(this.satelliteColorMode);
@@ -76,12 +77,13 @@ export class SimMain {
   }
 
   setLinksColors(type) {
-    if (type === "actual" && this.linksColors !== "actual") {
+    if (type === "Flow" && this.linksColors !== "Flow") {
       this.displayChanged = true;
       this.requestLinksUpdate = true;
     }
     this.linksColors = type;
     if (this.simDisplay) this.simDisplay.setLinksColors(type);
+    if (this.simDisplay && this.planets) this.simDisplay.updatePositions(this.planets, this.satellites);
   }
 
   setSatelliteColorMode(mode) {
@@ -89,6 +91,7 @@ export class SimMain {
     if (this.simDisplay) this.simDisplay.setSatelliteColorMode(mode);
     this.displayChanged = true;
     this.requestSatellitesUpdate = true;
+    if (this.simDisplay && this.planets) this.simDisplay.updatePositions(this.planets, this.satellites);
   }
 
   /**
@@ -870,7 +873,7 @@ export class SimMain {
       this.simDisplay.updatePositions(planets, satellites);
       this.ui.updateSimTime(simDate);
 
-      if (this.linksColors === "actual" && (this.simLinkBudget.calctimeMs > 0 || this.configChanged || this.displayChanged)) {
+      if (this.linksColors === "Flow" && (this.simLinkBudget.calctimeMs > 0 || this.configChanged || this.displayChanged)) {
         let perf = performance.now();
         const networkData = this.simNetwork.getNetworkData(planets, satellites, possibleLinks, this.simLinkBudget.calctimeMs);
         console.log(`Flow: ${Math.round(performance.now() - perf)} ms`);

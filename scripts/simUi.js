@@ -42,10 +42,10 @@ export class SimUi {
       this.simMain.satellitesConfig ? this.simMain.satellitesConfig["laser_technology.improvement-factor"] : "not set yet"
     );
     // Set the initial display type
-    const linksColors = this.slidersData.display["links-colors"].value;
-    this.simMain.setLinksColors(linksColors);
     const displayType = this.slidersData.display["display-type"].value;
     this.simMain.setDisplayType(displayType);
+    const linksColors = this.slidersData.display["links-colors"].value;
+    this.simMain.setLinksColors(linksColors);
     const satelliteColors = this.slidersData.display["satellite-colors"].value;
     this.simMain.setSatelliteColorMode(satelliteColors);
 
@@ -745,7 +745,7 @@ export class SimUi {
 
   updateInfoAreaCosts(html) {
     document.getElementById("info-area-costs").innerHTML = html;
-    const arrows = ["capacity", "cost"];
+    const arrows = ["Capacity", "cost"];
     for (const arrow of arrows) {
       const capacityArrow = document.getElementById(`${arrow}-arrow`);
       if (capacityArrow) {

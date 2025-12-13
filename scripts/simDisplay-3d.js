@@ -56,7 +56,7 @@ export class SimDisplay {
     this.planetSizeFactor = 1;
     this.satelliteSizeFactor = 1;
     this.currentSatelliteScale = 100; // Default scale to make satellites visible initially
-    this.satelliteColorMode = "Orbital zone"; // Default color mode
+    this.satelliteColorMode = "Zone"; // Default color mode
     // === Styles ===
     this.styles = {
       links: {
@@ -258,26 +258,32 @@ export class SimDisplay {
   }
 
   getSatelliteColorIndex(satellite) {
-    if (this.satelliteColorMode === "Quadrants") {
+    if (this.satelliteColorMode === "Quad") {
       const solarAngle = ((satellite.position.solarAngle % 360) + 360) % 360;
       return Math.floor(solarAngle / 90);
-    } else if (this.satelliteColorMode === "Orbital zone") {
+    } else if (this.satelliteColorMode === "Zone") {
       if (satellite.orbitalZone === "INSIDE_EARTH") return 0;
       if (satellite.orbitalZone === "BETWEEN_EARTH_AND_MARS") return 1;
       if (satellite.orbitalZone === "OUTSIDE_MARS") return 2;
       if (satellite.orbitalZone === "EARTH_RING") return 4;
       if (satellite.orbitalZone === "MARS_RING") return 5;
       return 3; // Unknown zone
+    } else if (this.satelliteColorMode === "Suit") {
+      if (!satellite.suitable) return 3; // Grey for unsuitable
+      if (satellite.suitable.includes("Mars") && satellite.suitable.includes("Earth")) return 1; // Green for both
+      else if (satellite.suitable.includes("Mars")) return 0; // Red for Mars
+      else if (satellite.suitable.includes("Earth")) return 2; // Blue for Earth
+      else return 3; // Grey for unsuitable
     } else {
-      // Normal
+      // Grey or other
       return 0; // all same
     }
   }
 
   getEmissiveColors() {
-    if (this.satelliteColorMode === "Quadrants") {
+    if (this.satelliteColorMode === "Quad") {
       return this.quadrantEmissives;
-    } else if (this.satelliteColorMode === "Orbital zone") {
+    } else if (this.satelliteColorMode === "Zone" || this.satelliteColorMode === "Suit") {
       return this.orbitalZoneEmissives;
     } else {
       return [this.normalEmissive];
@@ -346,7 +352,7 @@ export class SimDisplay {
     this.currentSatelliteScale = satelliteScaleFactor;
   }
 
-  // Define emissive colors for solar angle quadrants
+  // Define emissive colors for solar angle Quad
   quadrantEmissives = [
     new THREE.Color(0xdd2222), // 0-90 degrees
     new THREE.Color(0x22dd22), // 90-180 degrees
@@ -354,7 +360,7 @@ export class SimDisplay {
     new THREE.Color(0x666666), // 270-360 degrees
   ];
 
-  // Define emissive colors for orbital zones
+  // Define emissive colors for Zones
   orbitalZoneEmissives = [
     new THREE.Color(0xdd2222), // Red for inside earth
     new THREE.Color(0x22dd22), // Green for between earth and mars
@@ -389,6 +395,8 @@ export class SimDisplay {
       };
     });
 
+    if (this.satelliteColorMode === "None") return;
+
     if (satellites.length === 0 || this.satelliteSizeFactor <= 1) return;
 
     const scale = 0.0001;
@@ -401,7 +409,8 @@ export class SimDisplay {
     );
 
     // Group satellites by color index
-    const numGroups = this.satelliteColorMode === "Quadrants" ? 4 : this.satelliteColorMode === "Orbital zone" ? 6 : 1;
+    const numGroups =
+      this.satelliteColorMode === "Quad" ? 4 : this.satelliteColorMode === "Zone" || this.satelliteColorMode === "Suit" ? 6 : 1;
     const colorGroups = Array.from({ length: numGroups }, () => []);
     satellites.forEach((satellite, index) => {
       const colorIndex = this.getSatelliteColorIndex(satellite);
@@ -460,7 +469,7 @@ export class SimDisplay {
    * @param {Object} planetsPositions - An object mapping planet names to positions { x, y, z }.
    * @param {Array} satellitesPositions - Array of satellite position objects [{ x, y, z }, ...].
    * @param {Array} links - Array of link objects with properties:
-   *                        { fromId: string, toId: string, gbpsFlowActual: number, ... }.
+   *                        { fromId: string, toId: string, gbpsFlow: number, ... }.
    */
   updatePositions(planets, satellites) {
     // === Update Planet Positions ===
@@ -512,10 +521,12 @@ export class SimDisplay {
       geometry.scale(this.currentSatelliteScale, this.currentSatelliteScale, this.currentSatelliteScale);
 
       // Group satellites by color index
-      const numGroups = this.satelliteColorMode === "Quadrants" ? 4 : this.satelliteColorMode === "Orbital zone" ? 6 : 1;
+      const numGroups =
+        this.satelliteColorMode === "Quad" ? 4 : this.satelliteColorMode === "Zone" || this.satelliteColorMode === "Suit" ? 6 : 1;
       const colorGroups = Array.from({ length: numGroups }, () => []);
       satellites.forEach((satellite, index) => {
         const colorIndex = this.getSatelliteColorIndex(satellite);
+        // console.log(colorGroups[colorIndex])
         colorGroups[colorIndex].push({ satellite, index });
       });
 
@@ -579,7 +590,7 @@ export class SimDisplay {
     const allLinks = [...this.activeLinks, ...inactiveLinks];
 
     // Filter to only links with valid positions
-    const validLinks = allLinks.filter((link) => {
+    let validLinks = allLinks.filter((link) => {
       const fromPosition = this.planetPositions[link.fromId] || this.satellitePositions[link.fromId];
       const toPosition = this.planetPositions[link.toId] || this.satellitePositions[link.toId];
       return (
@@ -594,13 +605,17 @@ export class SimDisplay {
       );
     });
 
+    if (this.linksColorsType === "None") {
+      validLinks = [];
+    }
+
     const numLinks = validLinks.length;
     const positions = new Float32Array(numLinks * 2 * 3);
     const colors = new Float32Array(numLinks * 2 * 3);
 
     // Calculate min and max flow for color mapping (for active links only)
     let flows = [];
-    if (this.linksColorsType === "actual") {
+    if (this.linksColorsType === "Flow") {
       flows = this.activeLinks
         .filter((link) => {
           const fromPosition = this.planetPositions[link.fromId] || this.satellitePositions[link.fromId];
@@ -616,8 +631,8 @@ export class SimDisplay {
             !isNaN(toPosition.z)
           );
         })
-        .map((link) => link.gbpsFlowActual);
-    } else if (this.linksColorsType === "capacity") {
+        .map((link) => link.gbpsFlow);
+    } else if (this.linksColorsType === "Capacity") {
       flows = validLinks.map((link) => link.gbpsCapacity);
     }
 
@@ -647,10 +662,10 @@ export class SimDisplay {
 
       // Set colors
       let color = new THREE.Color(this.styles.links.inactive.color);
-      if ((this.linksColorsType === "actual" && isActive) || this.linksColorsType === "capacity") {
+      if ((this.linksColorsType === "Flow" && isActive) || this.linksColorsType === "Capacity") {
         // Active link: interpolate color based on flow
         let t = 0;
-        let valFlow = this.linksColorsType === "actual" ? link.gbpsFlowActual : link.gbpsCapacity;
+        let valFlow = this.linksColorsType === "Flow" ? link.gbpsFlow : link.gbpsCapacity;
         if (maxFlow > minFlow) {
           t = (valFlow - minFlow) / (maxFlow - minFlow);
         }
@@ -714,7 +729,7 @@ export class SimDisplay {
     this.linkLabels = [];
 
     // Only show labels when 'L' key is pressed and display flow is not 'none'
-    if (!this.showLinkLabels || this.linksColorsType === "none") return;
+    if (!this.showLinkLabels || this.linksColorsType === "None") return;
 
     validLinks.forEach((link) => {
       const fromPosition = this.planetPositions[link.fromId] || this.satellitePositions[link.fromId];
@@ -745,9 +760,9 @@ export class SimDisplay {
         const midPoint = new THREE.Vector3().addVectors(fromPos, toPos).multiplyScalar(0.5);
         // Determine display value based on linksColorsType
         let displayMbps = 0;
-        if (this.linksColorsType === "actual") {
-          displayMbps = Math.round(link.gbpsFlowActual * 1000);
-        } else if (this.linksColorsType === "capacity") {
+        if (this.linksColorsType === "Flow") {
+          displayMbps = Math.round(link.gbpsFlow * 1000);
+        } else if (this.linksColorsType === "Capacity") {
           displayMbps = Math.round(link.gbpsCapacity * 1000);
         }
         const label = this.createTextSprite(`${displayMbps}`);
