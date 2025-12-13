@@ -378,7 +378,18 @@ export class SimDisplay {
     // Cleanup existing satellites group
     this.clearGroup(this.satellitesGroup);
 
-    if (satellites.length === 0) return;
+    // Always populate satellite positions for links, even if not displaying meshes
+    this.satellitePositions = {};
+    satellites.forEach((satellite) => {
+      const position = satellite.position;
+      this.satellitePositions[satellite.name] = {
+        x: auTo3D(position.x),
+        y: auTo3D(position.z),
+        z: -auTo3D(position.y),
+      };
+    });
+
+    if (satellites.length === 0 || this.satelliteSizeFactor <= 1) return;
 
     const scale = 0.0001;
     // Satellite geometry: Cylinder (adjust dimensions as needed)
@@ -484,9 +495,18 @@ export class SimDisplay {
 
     // === Update Satellite Positions ===
     this.satellitePositions = {};
+    // Always populate satellite positions for links, even if not displaying meshes
+    satellites.forEach((satellite) => {
+      const position = satellite.position;
+      this.satellitePositions[satellite.name] = {
+        x: auTo3D(position.x),
+        y: auTo3D(position.z),
+        z: -auTo3D(position.y),
+      };
+    });
     // Recreate satellite meshes grouped by color mode
     this.clearGroup(this.satellitesGroup);
-    if (satellites.length > 0) {
+    if (satellites.length > 0 && this.satelliteSizeFactor > 1) {
       const scale = 0.0001;
       const geometry = new THREE.CylinderGeometry(scale, scale, scale * 2, 6);
       geometry.scale(this.currentSatelliteScale, this.currentSatelliteScale, this.currentSatelliteScale);
@@ -530,13 +550,6 @@ export class SimDisplay {
           }
           dummy.updateMatrix();
           instancedMesh.setMatrixAt(localIndex, dummy.matrix);
-
-          // Store position
-          this.satellitePositions[item.satellite.name] = {
-            x: dummy.position.x,
-            y: dummy.position.y,
-            z: dummy.position.z,
-          };
         });
         instancedMesh.instanceMatrix.needsUpdate = true;
         this.satellitesGroup.add(instancedMesh);
