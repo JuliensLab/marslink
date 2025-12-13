@@ -224,7 +224,7 @@ export class SimMain {
     const linearSatCountIncrease = uiConfig["adapted_rings.linear_satcount_increase"];
 
     const distOuterAu = this.simSatellites.getMars().a;
-    const distInnerAu = this.simSatellites.getEarthApsis().periapsis;
+    const distInnerAu = this.simSatellites.getEarthApsis().periapsis * 1.006;
     console.log("Adapted Rings from", distInnerAu, "to", distOuterAu);
     const earthMarsInclinationPct = 0.5;
 
