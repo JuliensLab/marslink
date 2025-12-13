@@ -8,6 +8,7 @@ export class SimSatellites {
     this.Earth = planets.find((p) => p.name === "Earth");
     this.Mars = planets.find((p) => p.name === "Mars");
     this.apsidesEarth = this.calculateApsides(this.Earth.a, this.Earth.e);
+    this.apsidesMars = this.calculateApsides(this.Mars.a, this.Mars.e);
 
     this.satellites = [];
     this.orbitalElements = [];
@@ -42,6 +43,22 @@ export class SimSatellites {
 
   getRingCrossings() {
     return this.ringCrossings;
+  }
+
+  getEarth() {
+    return this.Earth;
+  }
+
+  getMars() {
+    return this.Mars;
+  }
+
+  getEarthApsis() {
+    return this.apsidesEarth;
+  }
+
+  getMarsApsis() {
+    return this.apsidesMars;
   }
 
   setSatellitesConfig(satellitesConfig) {
@@ -268,7 +285,7 @@ export class SimSatellites {
         inside = [0, 360];
       }
     } else if (unique.length >= 2) {
-      console.log(`Multiple crossings found: ${unique.length} crossings.`);
+      // console.log(`Multiple crossings found: ${unique.length} crossings.`);
       // Determine which range is inside by checking distance at midpoint
       const midAngle = (unique[0] + unique[1]) / 2;
       const sourcePos = this.getOrbitPositionAtAngle(sourceEle, midAngle);
@@ -351,42 +368,47 @@ export class SimSatellites {
     if (!orbitalElement || !orbitalElement.precomputedPositions) return null;
 
     const positions = orbitalElement.precomputedPositions;
+    if (positions.length === 0) return null;
+
     // Normalize angle to 0-360
     let angle = ((targetAngle % 360) + 360) % 360;
 
-    let index = -1;
-    // Assuming sorted array from precomputeOrbitPositions
-    if (this.solarAngleStep === 1.0 && positions.length >= 360) {
-      // Fast lookup if step is 1 degree
-      index = Math.floor(angle);
-      // Safety clamp in case of float weirdness or array length mismatch
-      if (index >= positions.length) index = positions.length - 1;
-    } else {
-      // Fallback search
-      for (let i = 0; i < positions.length; i++) {
-        if (positions[i].solarAngle <= angle) {
-          index = i;
-        } else {
-          break;
-        }
+    // Binary search to find the smallest i where positions[i].solarAngle >= angle
+    let left = 0;
+    let right = positions.length;
+    while (left < right) {
+      const mid = Math.floor((left + right) / 2);
+      if (positions[mid].solarAngle < angle) {
+        left = mid + 1;
+      } else {
+        right = mid;
       }
     }
+    const i = left;
 
-    if (index === -1) index = positions.length - 1; // Wrap around case handled below
+    let p1, p2, ang1, ang2;
+    if (i === positions.length) {
+      // Wrap around: angle > all solarAngles, interpolate between last and first
+      p1 = positions[positions.length - 1];
+      p2 = positions[0];
+      ang1 = p1.solarAngle;
+      ang2 = p2.solarAngle + 360;
+    } else if (i === 0) {
+      // Wrap around: angle <= positions[0].solarAngle, interpolate between last and first
+      p1 = positions[positions.length - 1];
+      p2 = positions[0];
+      ang1 = p1.solarAngle - 360;
+      ang2 = p2.solarAngle;
+    } else {
+      // Normal case: interpolate between i-1 and i
+      p1 = positions[i - 1];
+      p2 = positions[i];
+      ang1 = p1.solarAngle;
+      ang2 = p2.solarAngle;
+    }
 
-    const p1 = positions[index];
-    const p2 = positions[(index + 1) % positions.length];
-
-    // Handle wrap around for interpolation (e.g. angle 359.5 to 0.5)
-    let ang1 = p1.solarAngle;
-    let ang2 = p2.solarAngle;
-    if (ang2 < ang1) ang2 += 360;
-    let calcAngle = angle;
-    if (calcAngle < ang1) calcAngle += 360;
-
-    // Linear Interpolation of x, y, z
-    const t = ang2 - ang1 === 0 ? 0 : (calcAngle - ang1) / (ang2 - ang1);
-
+    // Linear interpolation
+    const t = (angle - ang1) / (ang2 - ang1);
     return {
       x: p1.x + t * (p2.x - p1.x),
       y: p1.y + t * (p2.y - p1.y),

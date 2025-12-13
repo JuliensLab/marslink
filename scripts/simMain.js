@@ -223,8 +223,9 @@ export class SimMain {
 
     const linearSatCountIncrease = uiConfig["adapted_rings.linear_satcount_increase"];
 
-    const distOuterAu = 1.5236365;
-    const distInnerAu = 1;
+    const distOuterAu = this.simSatellites.getMars().a;
+    const distInnerAu = this.simSatellites.getEarthApsis().periapsis;
+    console.log("Adapted Rings from", distInnerAu, "to", distOuterAu);
     const earthMarsInclinationPct = 0.5;
 
     // 1. Calculate the Periapsis Radius for the start (Earth) and end (Mars)
@@ -781,15 +782,15 @@ export class SimMain {
     });
     // Console log planet links
     if (ringCapacities["ring_earth"] && ringCapacities["ring_earth"].planetLinks.length > 0) {
-      console.log("Earth");
+      // console.log("Earth");
       ringCapacities["ring_earth"].planetLinks.forEach((link) => {
-        console.log(`to ${link.satId}: ${Math.round(link.cap)}mbps`);
+        // console.log(`to ${link.satId}: ${Math.round(link.cap)}mbps`);
       });
     }
     if (ringCapacities["ring_mars"] && ringCapacities["ring_mars"].planetLinks.length > 0) {
-      console.log("Mars");
+      // console.log("Mars");
       ringCapacities["ring_mars"].planetLinks.forEach((link) => {
-        console.log(`to ${link.satId}: ${Math.round(link.cap)}mbps`);
+        // console.log(`to ${link.satId}: ${Math.round(link.cap)}mbps`);
       });
     }
     return { ringCapacities, interCap };
