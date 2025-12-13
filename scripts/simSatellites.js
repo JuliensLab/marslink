@@ -1,6 +1,6 @@
 // simSatellites.js
 
-import { helioCoords } from "./simOrbits.js?v=4.3";
+import { helioCoords, positionFromSolarAngle } from "./simOrbits.js?v=4.3";
 
 export class SimSatellites {
   constructor(simLinkBudget, planets) {
@@ -365,55 +365,9 @@ export class SimSatellites {
 
   // Helper: Get position (x,y,z) for a specific orbital element at a specific solar angle
   getOrbitPositionAtAngle(orbitalElement, targetAngle) {
-    if (!orbitalElement || !orbitalElement.precomputedPositions) return null;
-
-    const positions = orbitalElement.precomputedPositions;
-    if (positions.length === 0) return null;
-
-    // Normalize angle to 0-360
-    let angle = ((targetAngle % 360) + 360) % 360;
-
-    // Binary search to find the smallest i where positions[i].solarAngle >= angle
-    let left = 0;
-    let right = positions.length;
-    while (left < right) {
-      const mid = Math.floor((left + right) / 2);
-      if (positions[mid].solarAngle < angle) {
-        left = mid + 1;
-      } else {
-        right = mid;
-      }
-    }
-    const i = left;
-
-    let p1, p2, ang1, ang2;
-    if (i === positions.length) {
-      // Wrap around: angle > all solarAngles, interpolate between last and first
-      p1 = positions[positions.length - 1];
-      p2 = positions[0];
-      ang1 = p1.solarAngle;
-      ang2 = p2.solarAngle + 360;
-    } else if (i === 0) {
-      // Wrap around: angle <= positions[0].solarAngle, interpolate between last and first
-      p1 = positions[positions.length - 1];
-      p2 = positions[0];
-      ang1 = p1.solarAngle - 360;
-      ang2 = p2.solarAngle;
-    } else {
-      // Normal case: interpolate between i-1 and i
-      p1 = positions[i - 1];
-      p2 = positions[i];
-      ang1 = p1.solarAngle;
-      ang2 = p2.solarAngle;
-    }
-
-    // Linear interpolation
-    const t = (angle - ang1) / (ang2 - ang1);
-    return {
-      x: p1.x + t * (p2.x - p1.x),
-      y: p1.y + t * (p2.y - p1.y),
-      z: p1.z + t * (p2.z - p1.z),
-    };
+    if (!orbitalElement) return null;
+    const pos = positionFromSolarAngle(orbitalElement, targetAngle);
+    return { x: pos.x, y: pos.y, z: pos.z };
   }
 
   // Get radial zone for a satellite
