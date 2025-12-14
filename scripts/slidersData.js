@@ -378,6 +378,13 @@ export const slidersData = {
       scale: "linear",
       updateLongTermScore: true,
     },
+    auto_route_count: {
+      type: "radio",
+      label: "Auto Route Count",
+      options: ["yes", "no"],
+      value: "yes", // Default to yes
+      unit: "",
+    },
     route_count: {
       label: "Number of parallel routes",
       min: 1,
@@ -387,6 +394,7 @@ export const slidersData = {
       unit: "",
       scale: "linear",
       updateLongTermScore: true,
+      displayCondition: { slider: "auto_route_count", value: "no" },
     },
     linear_satcount_increase: {
       label: "Satcount increase with AU distance",

@@ -6,6 +6,8 @@ export class SimUi {
     this.simMain = simMain;
     this.slidersData = slidersData;
     this.sliders = {};
+    this.sliderContainers = {};
+    this.dependencies = {};
 
     this.createSliders();
     this.initializeSimMain();
@@ -401,10 +403,17 @@ export class SimUi {
       slidersContainer.appendChild(sectionContent);
 
       this.sliders[section] = {};
+      this.sliderContainers[section] = {};
 
       for (const sliderId in this.slidersData[section]) {
         const slider = this.slidersData[section][sliderId];
         const fullSliderId = `${section}.${sliderId}`;
+
+        if (slider.displayCondition) {
+          const refFullId = `${section}.${slider.displayCondition.slider}`;
+          if (!this.dependencies[refFullId]) this.dependencies[refFullId] = [];
+          this.dependencies[refFullId].push(fullSliderId);
+        }
 
         let min = slider.min;
         let max = slider.max;
@@ -467,6 +476,14 @@ export class SimUi {
 
         const sliderContainer = document.createElement("div");
         sliderContainer.className = "slider-container";
+
+        // Check display condition
+        if (slider.displayCondition) {
+          const refSlider = this.slidersData[section][slider.displayCondition.slider];
+          if (refSlider && refSlider.value !== slider.displayCondition.value) {
+            sliderContainer.style.display = 'none';
+          }
+        }
 
         const label = document.createElement("label");
         label.setAttribute("for", fullSliderId);
@@ -551,6 +568,7 @@ export class SimUi {
         sectionContent.appendChild(sliderContainer);
 
         this.sliders[section][sliderId] = input;
+        this.sliderContainers[section][sliderId] = sliderContainer;
 
         if (slider.type === "select" || slider.type === "dropdown") {
           input.addEventListener("change", () => {
@@ -706,6 +724,22 @@ export class SimUi {
 
         default:
           break;
+      }
+
+      // Update dependent sliders visibility
+      if (this.dependencies[sliderId]) {
+        this.dependencies[sliderId].forEach(depId => {
+          const [depSec, depSlid] = depId.split('.');
+          const depSlider = this.slidersData[depSec][depSlid];
+          const condition = depSlider.displayCondition;
+          const refValue = this.slidersData[depSec][condition.slider].value;
+          const container = this.sliderContainers[depSec][depSlid];
+          if (refValue === condition.value) {
+            container.style.display = 'block';
+          } else {
+            container.style.display = 'none';
+          }
+        });
       }
     }
   }
