@@ -481,7 +481,7 @@ export class SimUi {
         if (slider.displayCondition) {
           const refSlider = this.slidersData[section][slider.displayCondition.slider];
           if (refSlider && refSlider.value !== slider.displayCondition.value) {
-            sliderContainer.style.display = 'none';
+            sliderContainer.style.display = "none";
           }
         }
 
@@ -728,16 +728,16 @@ export class SimUi {
 
       // Update dependent sliders visibility
       if (this.dependencies[sliderId]) {
-        this.dependencies[sliderId].forEach(depId => {
-          const [depSec, depSlid] = depId.split('.');
+        this.dependencies[sliderId].forEach((depId) => {
+          const [depSec, depSlid] = depId.split(".");
           const depSlider = this.slidersData[depSec][depSlid];
           const condition = depSlider.displayCondition;
           const refValue = this.slidersData[depSec][condition.slider].value;
           const container = this.sliderContainers[depSec][depSlid];
           if (refValue === condition.value) {
-            container.style.display = 'block';
+            container.style.display = "block";
           } else {
-            container.style.display = 'none';
+            container.style.display = "none";
           }
         });
       }
