@@ -83,7 +83,12 @@ export class SimMain {
     }
     this.linksColors = type;
     if (this.simDisplay) this.simDisplay.setLinksColors(type);
-    if (this.simDisplay && this.planets) this.simDisplay.updatePositions(this.planets, this.satellites);
+    if (this.simDisplay && this.planets) {
+      const simDate = this.simTime.getDate();
+      const j2000 = new Date("2000-01-01T12:00:00Z");
+      const simDaysSinceStart = (simDate - j2000) / (1000 * 60 * 60 * 24);
+      this.simDisplay.updatePositions(this.planets, this.satellites, simDaysSinceStart);
+    }
   }
 
   setSatelliteColorMode(mode) {
@@ -91,7 +96,12 @@ export class SimMain {
     if (this.simDisplay) this.simDisplay.setSatelliteColorMode(mode);
     this.displayChanged = true;
     this.requestSatellitesUpdate = true;
-    if (this.simDisplay && this.planets) this.simDisplay.updatePositions(this.planets, this.satellites);
+    if (this.simDisplay && this.planets) {
+      const simDate = this.simTime.getDate();
+      const j2000 = new Date("2000-01-01T12:00:00Z");
+      const simDaysSinceStart = (simDate - j2000) / (1000 * 60 * 60 * 24);
+      this.simDisplay.updatePositions(this.planets, this.satellites, simDaysSinceStart);
+    }
   }
 
   /**
@@ -605,9 +615,8 @@ export class SimMain {
         else html += `Earth ring: ${Math.round(min)} / ${Math.round(avg)} / ${Math.round(max)} mbps<br>`;
       }
       if (earthFlows > 0) {
-        html += `Between Earth and Mars: ${Math.round(earthFlows)} mbps (${earthFlowsCount} links @${
-          Math.round((earthFlows / earthFlowsCount) * 10) / 10
-        } mbps)<br>`;
+        html += `Between Earth and Mars: ${Math.round(earthFlows)} mbps (${earthFlowsCount} links @${Math.round((earthFlows / earthFlowsCount) * 10) / 10
+          } mbps)<br>`;
       }
       // Between Earth and Circular
       Object.keys(interCap)
@@ -617,9 +626,8 @@ export class SimMain {
           const circPart = parts.find((p) => p.startsWith("ring_circ_"));
           const circNum = parseInt(circPart.split("_")[2]);
           const between = interCap[key];
-          html += `<span class='detail-data'>| ${Math.round(between.sum)} mbps (${between.count} links @${
-            Math.round((between.sum / between.count) * 10) / 10
-          } mbps)</span><br>`;
+          html += `<span class='detail-data'>| ${Math.round(between.sum)} mbps (${between.count} links @${Math.round((between.sum / between.count) * 10) / 10
+            } mbps)</span><br>`;
         });
       // Circular rings
       circularRings.forEach((ring, index) => {
@@ -640,9 +648,8 @@ export class SimMain {
           const nextNum = parseInt(nextRing.split("_")[2]);
           const betweenKey = [ring, nextRing].sort().join("-");
           const between = interCap[betweenKey] || { sum: 0, count: 0 };
-          html += `<span class='detail-data'>| ${Math.round(between.sum)} mbps (${between.count} links @${
-            Math.round((between.sum / between.count) * 10) / 10
-          } mbps)</span><br>`;
+          html += `<span class='detail-data'>| ${Math.round(between.sum)} mbps (${between.count} links @${Math.round((between.sum / between.count) * 10) / 10
+            } mbps)</span><br>`;
         }
       });
       // Between Mars and Circular
@@ -653,9 +660,8 @@ export class SimMain {
           const circPart = parts.find((p) => p.startsWith("ring_circ_"));
           const circNum = parseInt(circPart.split("_")[2]);
           const between = interCap[key];
-          html += `<span class='detail-data'>| (CR${circNum}) ${Math.round(between.sum)}mbps (${between.count} links @${
-            Math.round((between.sum / between.count) * 10) / 10
-          } mbps)</span><br>`;
+          html += `<span class='detail-data'>| (CR${circNum}) ${Math.round(between.sum)}mbps (${between.count} links @${Math.round((between.sum / between.count) * 10) / 10
+            } mbps)</span><br>`;
         });
       // Mars inring
       const marsInring = ringCapacities["ring_mars"] ? ringCapacities["ring_mars"].inring : [];
@@ -835,6 +841,9 @@ export class SimMain {
    */
   updateLoop() {
     const simDate = this.simTime.getDate();
+    const j2000 = new Date("2000-01-01T12:00:00Z");
+    const simDaysSinceStart = (simDate - j2000) / (1000 * 60 * 60 * 24);
+
     const planets = this.simSolarSystem.updatePlanetsPositions(simDate);
 
     let satellites;
@@ -868,9 +877,9 @@ export class SimMain {
       console.log(`Possible links: ${Math.round(performance.now() - perf)} ms`);
 
       this.removeLinks();
-      this.simDisplay.updatePossibleLinks(possibleLinks);
       this.simDisplay.setSatellites(satellites);
-      this.simDisplay.updatePositions(planets, satellites);
+      this.simDisplay.updatePossibleLinks(possibleLinks);
+      this.simDisplay.updatePositions(planets, satellites, simDaysSinceStart);
       this.ui.updateSimTime(simDate);
 
       if (this.linksColors === "Flow" && (this.simLinkBudget.calctimeMs > 0 || this.configChanged || this.displayChanged)) {
@@ -897,7 +906,7 @@ export class SimMain {
       this.configChanged = false;
       this.displayChanged = false;
     } else {
-      this.simDisplay.updatePositions(planets, satellites);
+      this.simDisplay.updatePositions(planets, satellites, simDaysSinceStart);
     }
 
     if (this.requestSatellitesUpdate) {

@@ -7,7 +7,7 @@ export const slidersData = {
     "display-type": {
       type: "radio",
       label: "Type",
-      options: ["2d", "3d"],
+      options: ["2d", "3d", "webgpu"],
       value: "3d", // Default to 3D
       unit: "",
     },

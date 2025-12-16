@@ -7,13 +7,115 @@ import { RenderPass } from "three/addons/postprocessing/RenderPass.js?v=4.3";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js?v=4.3";
 import { SimSolarSystem } from "./simSolarSystem.js?v=4.3";
 import { createCarModel } from "./modelCar.js?v=4.3";
+import { GPUComputationRenderer } from "./imported/three/addons/misc/GPUComputationRenderer.js";
 
-/**
- * Converts astronomical units (AU) to 3D units using a scale factor.
- *
- * @param {number} au - Distance in astronomical units.
- * @returns {number} Distance in 3D units
- */
+const satelliteVertexShader = `
+uniform sampler2D positionTexture;
+attribute vec2 reference;
+varying vec3 vColor;
+varying float vVisibility;
+
+void main() {
+    vec3 pos = texture2D(positionTexture, reference).xyz;
+    float visibility = texture2D(positionTexture, reference).w;
+    
+    // Simple logic: if w is negative, it's invisible/unused
+    vVisibility = visibility;
+    
+    // Position the vertex: object space position + instance world position
+    vec3 transformed = position + pos;
+    vec4 mvPosition = modelViewMatrix * vec4(transformed, 1.0);
+    gl_Position = projectionMatrix * mvPosition;
+    
+    // Pass color to fragment shader (can be uniform or attribute based)
+    vColor = vec3(1.0); 
+}
+`;
+
+const satelliteFragmentShader = `
+varying vec3 vColor;
+varying float vVisibility;
+
+void main() {
+    if (vVisibility < 0.0) discard;
+    gl_FragColor = vec4(vColor, 1.0);
+}
+`;
+
+const positionShaderFragment = `
+uniform float time;
+uniform sampler2D textureElements; // a, e, i, Om
+uniform sampler2D textureElements2; // w, M0, n, scale
+
+#define PI 3.1415926535897932384626433832795
+
+void main() {
+    vec2 uv = gl_FragCoord.xy / resolution.xy;
+    vec4 elements1 = texture2D(textureElements, uv);
+    vec4 elements2 = texture2D(textureElements2, uv);
+
+  if (elements1.x == 0.0) {
+    gl_FragColor = vec4(0.0, 0.0, 0.0, -1.0); // Invisible
+    return;
+  }
+
+    float a = elements1.x;
+    float e = elements1.y;
+  // Clamp eccentricity to avoid NaN in Kepler solver or hyperbolic orbits
+  if (e >= 1.0) e = 0.99;
+  if (e < 0.0) e = 0.0;
+
+    float i = elements1.z;
+    float Om = elements1.w;
+    
+    float w = elements2.x;
+    float M0 = elements2.y;
+    float n = elements2.z;
+    float scale = elements2.w;
+
+    // Mean Anomaly at time t
+    float M = mod(M0 + n * time, 2.0 * PI);
+
+    // Solve Kepler's Equation for Eccentric Anomaly E
+    // M = E - e * sin(E)
+    // Iterative approximation
+    float E = M;
+  if (e > 0.8) E = PI; // Initial guess for high eccentricity
+
+  for (int j = 0; j < 5; j++) {
+        float f = E - e * sin(E) - M;
+        float df = 1.0 - e * cos(E);
+    E = E - f / df;
+  }
+
+    // True Anomaly v
+    float v = 2.0 * atan(sqrt((1.0 + e) / (1.0 - e)) * tan(E / 2.0));
+
+    // Distance r
+    float r = a * (1.0 - e * cos(E));
+
+    // Heliocentric coordinates in orbital plane
+    float x_orb = r * cos(v);
+    float y_orb = r * sin(v);
+
+    // Coordinate transformation to 3D space
+    // Using Euler angles (Om, i, w)
+    
+    float cosOm = cos(Om);
+    float sinOm = sin(Om);
+
+    // Optimized combined rotation
+    float u = w + v;
+    
+    float x = r * (cos(u) * cosOm - sin(u) * sinOm * cos(i));
+    float y = r * (cos(u) * sinOm + sin(u) * cosOm * cos(i));
+    float z = r * (sin(u) * sin(i));
+
+  // Apply scale and coordinate swap (y -> z, z -> -y)
+  gl_FragColor = vec4(x * scale, z * scale, -y * scale, 1.0);
+}
+`;
+
 
 import { SIM_CONSTANTS } from "./simConstants.js";
 
@@ -130,6 +232,48 @@ export class SimDisplay {
     this.linkLabels = [];
     this.showLinkLabels = false; // Flag for 'L' key press
 
+    // Link Shaders
+    const linkVertexShader = `
+        uniform sampler2D positionTexture;
+        uniform vec3 color;
+        attribute vec2 satelliteUV; 
+        attribute vec3 linkColor;
+        varying vec3 vColor;
+
+void main() {
+            vec3 pos = texture2D(positionTexture, satelliteUV).xyz;
+            float vis = texture2D(positionTexture, satelliteUV).w;
+
+  // If satellite is invisible, we might want to hide the link too
+  // But for now let's just project it.
+
+  vColor = linkColor;
+
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+}
+`;
+
+    const linkFragmentShader = `
+        varying vec3 vColor;
+        uniform float opacity;
+void main() {
+  gl_FragColor = vec4(vColor, opacity);
+}
+`;
+
+    this.linkMaterial = new THREE.ShaderMaterial({
+      uniforms: {
+        positionTexture: { value: null },
+        opacity: { value: 0.2 }
+      },
+      vertexShader: linkVertexShader,
+      fragmentShader: linkFragmentShader,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending
+    });
+
     // === Load Scene Elements ===
     this.loadScene();
 
@@ -145,6 +289,94 @@ export class SimDisplay {
     // === Animation Loop ===
     this.animate();
   }
+
+  initGPGPU(satellites) {
+    const count = satellites.length;
+    if (count === 0) return;
+
+    // Determine texture size (power of 2 is best, but square is fine)
+    const width = Math.ceil(Math.sqrt(count));
+    this.gpuComputeWidth = width;
+
+    this.gpuCompute = new GPUComputationRenderer(width, width, this.renderer);
+
+    if (this.renderer.capabilities.isWebGL2 === false) {
+      this.gpuCompute.setDataType(THREE.HalfFloatType);
+    }
+
+    const dtElements1 = this.gpuCompute.createTexture();
+    const dtElements2 = this.gpuCompute.createTexture();
+
+    this.fillTextures(satellites, dtElements1, dtElements2);
+
+    this.positionVariable = this.gpuCompute.addVariable("texturePosition", positionShaderFragment, dtElements1); // Initial texture doesn't matter much if we overwrite
+
+    this.gpuCompute.setVariableDependencies(this.positionVariable, [this.positionVariable]);
+
+    this.positionVariable.material.uniforms["textureElements"] = { value: dtElements1 };
+    this.positionVariable.material.uniforms["textureElements2"] = { value: dtElements2 };
+    this.positionVariable.material.uniforms["time"] = { value: 0 };
+
+    const error = this.gpuCompute.init();
+    if (error !== null) {
+      console.error("GPGPU init error:", error);
+    } else {
+      console.log("GPGPU init success");
+    }
+  }
+
+  fillTextures(satellites, texture1, texture2) {
+    const data1 = texture1.image.data;
+    const data2 = texture2.image.data;
+
+    for (let i = 0; i < satellites.length; i++) {
+      const sat = satellites[i];
+
+      // Convert orbital elements if needed (SimSatellites uses o, p, l; GPGPU uses Om, w, M0)
+      let Om = sat.Om;
+      let w = sat.w;
+      let M0 = sat.M0;
+
+      if (Om === undefined && sat.o !== undefined) Om = sat.o;
+      if (w === undefined && sat.p !== undefined && sat.o !== undefined) w = sat.p - sat.o;
+      if (M0 === undefined && sat.l !== undefined && sat.p !== undefined) M0 = sat.l - sat.p;
+
+      // Normalize to 0-360
+      if (w !== undefined) w = ((w % 360) + 360) % 360;
+      if (M0 !== undefined) M0 = ((M0 % 360) + 360) % 360;
+
+      // Validation Check
+      if (isNaN(sat.a) || isNaN(sat.e) || isNaN(sat.i) || isNaN(Om) || isNaN(w) || isNaN(M0) || isNaN(sat.n)) {
+        console.warn(`[SimDisplay] NaN element detected for satellite ${i}(${sat.name}): a = ${sat.a}, e = ${sat.e}, n = ${sat.n}, Om = ${Om}, w = ${w}, M0 = ${M0} `);
+      }
+
+      // data1: a, e, i, Om
+      data1[i * 4 + 0] = sat.a;
+      data1[i * 4 + 1] = sat.e;
+      data1[i * 4 + 2] = sat.i * (Math.PI / 180); // Convert to radians
+      data1[i * 4 + 3] = Om * (Math.PI / 180);
+
+      // data2: w, M0, n, scale
+      data2[i * 4 + 0] = w * (Math.PI / 180);
+      data2[i * 4 + 1] = M0 * (Math.PI / 180) || 0; // Mean anomaly at epoch
+      data2[i * 4 + 2] = sat.n * (Math.PI / 180); // Mean motion (deg/day -> rad/day)
+      // We will pass 'simDaysSinceStart' as time.
+
+      data2[i * 4 + 3] = auTo3D(1.0); // Pass scale factor here to be safe
+
+      if (i < 10) {
+        console.log(`[SimDisplay] Sat ${i}: a = ${sat.a}, e = ${sat.e}, i = ${sat.i}, Om = ${Om}, w = ${to360(w)}, M0 = ${to360(M0)}, n = ${sat.n} `);
+        console.log(`[SimDisplay] Texture Data1 for ${i}: `, data1.slice(i * 4, i * 4 + 4));
+        console.log(`[SimDisplay] Texture Data2 for ${i}: `, data2.slice(i * 4, i * 4 + 4));
+      }
+    }
+
+    function to360(angle) {
+      if (angle === undefined) return 'undef';
+      return ((angle % 360) + 360) % 360;
+    }
+  }
+
 
   /**
    * Loads the scene elements including background, lights, sun, and planets.
@@ -204,16 +436,16 @@ export class SimDisplay {
 
     // === Initialize Links LineSegments ===
     // MODIFY MATERIAL TO ENABLE VERTEX COLORS
-    this.linksMaterial = new THREE.LineBasicMaterial({
-      vertexColors: true, // Enable vertex colors
-      transparent: true,
-      opacity: 1.0, // Full opacity; control transparency via color if needed
-    });
-
-    this.linksGeometry = new THREE.BufferGeometry();
-    this.linksLineSegments = new THREE.LineSegments(this.linksGeometry, this.linksMaterial);
-    this.linksLineSegments.frustumCulled = false; // Optional
-    this.scene.add(this.linksLineSegments);
+    // this.linksMaterial = new THREE.LineBasicMaterial({
+    //   vertexColors: true, // Enable vertex colors
+    //   transparent: true,
+    //   opacity: 1.0, // Full opacity; control transparency via color if needed
+    // });
+    //
+    // this.linksGeometry = new THREE.BufferGeometry();
+    // this.linksLineSegments = new THREE.LineSegments(this.linksGeometry, this.linksMaterial);
+    // this.linksLineSegments.frustumCulled = false; // Optional
+    // this.scene.add(this.linksLineSegments);
 
     // === Load Planets ===
     this.loadPlanets();
@@ -332,6 +564,11 @@ export class SimDisplay {
     planetScaleFactor = SIM_CONSTANTS.PLANET_SCALE_FACTOR * planetsFactor;
     satelliteScaleFactor = SIM_CONSTANTS.SATELLITE_SCALE_FACTOR * satellitesFactor;
 
+    this.currentSatelliteScale = satelliteScaleFactor;
+    if (this.satellitesMesh && this.satellitesMesh.material.uniforms.uScale) {
+      this.satellitesMesh.material.uniforms.uScale.value = this.currentSatelliteScale;
+    }
+
     // Update existing meshes
     if (this.sunMesh) {
       this.sunMesh.scale.set(sunScaleFactor, sunScaleFactor, sunScaleFactor);
@@ -381,86 +618,58 @@ export class SimDisplay {
    *                             { position: { x, y, z, solarAngle } }.
    */
   setSatellites(satellites) {
-    // Cleanup existing satellites group
     this.clearGroup(this.satellitesGroup);
 
-    // Always populate satellite positions for links, even if not displaying meshes
-    this.satellitePositions = {};
-    satellites.forEach((satellite) => {
-      const position = satellite.position;
-      this.satellitePositions[satellite.name] = {
-        x: auTo3D(position.x),
-        y: auTo3D(position.z),
-        z: -auTo3D(position.y),
-      };
+    if (satellites.length === 0) return;
+
+    // Initialize GPGPU if not already compatible or count changed drastically (simplified: re-init if not present)
+    // For now, always re-init when setSatellites is called (assuming it's called on config change, not every frame)
+    this.initGPGPU(satellites);
+    this.satellitesCount = satellites.length;
+
+    // Geometry
+    const scale = 0.0001; // Base scale, dynamic scaling via uScale uniform
+    const geometry = new THREE.CylinderGeometry(20, 20, 30, 6); // Base size, scaled by shader/matrix or minimal size
+    geometry.scale(scale, scale, scale);
+
+    // We need InstanceBufferGeometry to pass 'reference' attribute
+    const ibGeometry = new THREE.InstancedBufferGeometry();
+    ibGeometry.copy(geometry);
+
+    this.satelliteUVMap = new Map();
+    const references = new Float32Array(this.satellitesCount * 2);
+    for (let i = 0; i < this.satellitesCount; i++) {
+      const x = (i + 0.5) / this.gpuComputeWidth;
+      const y = (Math.floor(i / this.gpuComputeWidth) + 0.5) / this.gpuComputeWidth;
+      references[i * 2] = x;
+      references[i * 2 + 1] = y;
+
+      // Store UV for links
+      // Assumes satellites[i].name is unique
+      this.satelliteUVMap.set(satellites[i].name, { x, y });
+    }
+
+    ibGeometry.setAttribute('reference', new THREE.InstancedBufferAttribute(references, 2));
+    ibGeometry.instanceCount = this.satellitesCount;
+
+    // Material
+    const material = new THREE.ShaderMaterial({
+      uniforms: {
+        positionTexture: { value: null },
+        uScale: { value: this.currentSatelliteScale }
+      },
+      vertexShader: satelliteVertexShader,
+      fragmentShader: satelliteFragmentShader,
+      transparent: false, // Optimization
+      side: THREE.DoubleSide,
     });
 
-    if (this.satelliteColorMode === "None") return;
+    this.satellitesMesh = new THREE.Mesh(ibGeometry, material);
+    this.satellitesMesh.frustumCulled = false; // Important: vertices are displaced by shader
+    this.satellitesGroup.add(this.satellitesMesh);
 
-    if (satellites.length === 0 || this.satelliteSizeFactor <= 1) return;
-
-    const scale = 0.0001;
-    // Satellite geometry: Cylinder (adjust dimensions as needed)
-    const geometry = new THREE.CylinderGeometry(
-      scale, // Radius (top and bottom)
-      scale,
-      scale * 2, // Height
-      6 // Number of segments (hexagonal cylinder)
-    );
-
-    // Group satellites by color index
-    const numGroups =
-      this.satelliteColorMode === "Quad" ? 4 : this.satelliteColorMode === "Zone" || this.satelliteColorMode === "Suit" ? 6 : 1;
-    const colorGroups = Array.from({ length: numGroups }, () => []);
-    satellites.forEach((satellite, index) => {
-      const colorIndex = this.getSatelliteColorIndex(satellite);
-      colorGroups[colorIndex].push({ satellite, originalIndex: index });
-    });
-
-    // Create instanced meshes for each group
-    this.satelliteMeshes = [];
-    this.satelliteQuadrantIndices = [];
-    const emissives = this.getEmissiveColors();
-    colorGroups.forEach((groupSats, groupIndex) => {
-      if (groupSats.length === 0) return;
-
-      // Satellite material: Emissive color based on group
-      const material = new THREE.MeshPhongMaterial({
-        color: 0xffffff, // Default white color
-        shininess: 10, // Adds a subtle shine to the satellites
-        specular: new THREE.Color(0x333333), // Specular reflection color
-        emissive: emissives[groupIndex], // Emissive color based on group
-        emissiveIntensity: 0.5, // Adjust emissive intensity
-        transparent: false, // No transparency for now
-        opacity: 1.0, // Fully opaque
-      });
-
-      // Create Instanced Mesh
-      const instancedMesh = new THREE.InstancedMesh(geometry, material, groupSats.length);
-      instancedMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage); // Optimized for frequent updates
-      instancedMesh.castShadow = false; // Satellites do not cast shadows
-      instancedMesh.receiveShadow = true; // Satellites receive shadows
-
-      // Set initial transformations
-      const dummy = new THREE.Object3D();
-      groupSats.forEach((item, localIndex) => {
-        const position = item.satellite.position;
-        dummy.position.set(
-          auTo3D(position.x),
-          auTo3D(position.z), // Swap y and z axes if needed
-          -auTo3D(position.y)
-        );
-        dummy.updateMatrix();
-        instancedMesh.setMatrixAt(localIndex, dummy.matrix);
-      });
-
-      // Add to scene
-      this.satellitesGroup.add(instancedMesh);
-      this.satelliteMeshes.push(instancedMesh);
-      this.satelliteQuadrantIndices.push(groupSats.map((item) => item.originalIndex));
-    });
-
-    // Geometry scaling is handled in updatePositions
+    // Links GPGPU Setup (Plan for next step: create geometry for links)
+    // We will initialize links geometry here or in updateLinks
   }
 
   /**
@@ -471,7 +680,9 @@ export class SimDisplay {
    * @param {Array} links - Array of link objects with properties:
    *                        { fromId: string, toId: string, gbpsFlow: number, ... }.
    */
-  updatePositions(planets, satellites) {
+  updatePositions(planets, satellites, simTimeDays) {
+    if (!this.gpuCompute) return;
+
     // === Update Planet Positions ===
     this.planetPositions = {};
     for (let planet of Object.values(planets)) {
@@ -497,74 +708,33 @@ export class SimDisplay {
           // Reset rotation if not provided
           mesh.rotation.set(0, 0, 0);
         }
-      } else {
-        if (name != "Tesla") console.warn(`Mesh for planet "${name}" not found.`);
       }
     }
 
-    // === Update Satellite Positions ===
-    this.satellitePositions = {};
-    // Always populate satellite positions for links, even if not displaying meshes
-    satellites.forEach((satellite) => {
-      const position = satellite.position;
-      this.satellitePositions[satellite.name] = {
-        x: auTo3D(position.x),
-        y: auTo3D(position.z),
-        z: -auTo3D(position.y),
-      };
-    });
-    // Recreate satellite meshes grouped by color mode
-    this.clearGroup(this.satellitesGroup);
-    if (satellites.length > 0 && this.satelliteSizeFactor > 1) {
-      const scale = 0.0001;
-      const geometry = new THREE.CylinderGeometry(scale, scale, scale * 2, 6);
-      geometry.scale(this.currentSatelliteScale, this.currentSatelliteScale, this.currentSatelliteScale);
+    // === GPGPU COMPUTE ===
+    // Update time for the compute shader
+    this.positionVariable.material.uniforms["time"].value = simTimeDays; // Passing raw sim days? Need to check if n is in rad/day
+    this.gpuCompute.compute();
 
-      // Group satellites by color index
-      const numGroups =
-        this.satelliteColorMode === "Quad" ? 4 : this.satelliteColorMode === "Zone" || this.satelliteColorMode === "Suit" ? 6 : 1;
-      const colorGroups = Array.from({ length: numGroups }, () => []);
-      satellites.forEach((satellite, index) => {
-        const colorIndex = this.getSatelliteColorIndex(satellite);
-        // console.log(colorGroups[colorIndex])
-        colorGroups[colorIndex].push({ satellite, index });
-      });
+    // DEBUG: Read back one pixel to verify GPGPU output
+    // Run this only once per second roughly
+    if (!this.lastDebugTime || Date.now() - this.lastDebugTime > 1000) {
+      this.lastDebugTime = Date.now();
+      const rt = this.gpuCompute.getCurrentRenderTarget(this.positionVariable);
+      const pixelBuffer = new Float32Array(4);
+      this.renderer.readRenderTargetPixels(rt, 0, 0, 1, 1, pixelBuffer);
+      console.log(`[GPU Debug]Time: ${simTimeDays.toFixed(2)}, Pixel[0](Pos): x = ${pixelBuffer[0].toFixed(3)}, y = ${pixelBuffer[1].toFixed(3)}, z = ${pixelBuffer[2].toFixed(3)}, w = ${pixelBuffer[3]} `);
 
-      // Create instanced meshes for each group
-      const emissives = this.getEmissiveColors();
-      colorGroups.forEach((groupSats, groupIndex) => {
-        if (groupSats.length === 0) return;
+      // Also check if texture input is valid (check first satellite params if possible? No, can't read internal texture easily unless variable)
+      // But we can check if simTimeDays is progressing
+    }
 
-        const material = new THREE.MeshPhongMaterial({
-          color: 0xffffff,
-          shininess: 10,
-          specular: new THREE.Color(0x333333),
-          emissive: emissives[groupIndex],
-          emissiveIntensity: 0.5,
-          transparent: false,
-          opacity: 1.0,
-        });
+    // Get the new position texture
+    const currentTexture = this.gpuCompute.getCurrentRenderTarget(this.positionVariable).texture;
 
-        const instancedMesh = new THREE.InstancedMesh(geometry, material, groupSats.length);
-        instancedMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-        instancedMesh.castShadow = false;
-        instancedMesh.receiveShadow = true;
-
-        const dummy = new THREE.Object3D();
-        groupSats.forEach((item, localIndex) => {
-          const position = item.satellite.position;
-          dummy.position.set(auTo3D(position.x), auTo3D(position.z), -auTo3D(position.y));
-          if (position.rotation) {
-            dummy.rotation.set(position.rotation.x || 0, position.rotation.y || 0, position.rotation.z || 0);
-          } else {
-            dummy.rotation.set(0, 0, 0);
-          }
-          dummy.updateMatrix();
-          instancedMesh.setMatrixAt(localIndex, dummy.matrix);
-        });
-        instancedMesh.instanceMatrix.needsUpdate = true;
-        this.satellitesGroup.add(instancedMesh);
-      });
+    // Update Satellites Material
+    if (this.satellitesMesh) {
+      this.satellitesMesh.material.uniforms.positionTexture.value = currentTexture;
     }
 
     // === Update Links Positions ===
@@ -573,6 +743,9 @@ export class SimDisplay {
 
   updatePossibleLinks(links) {
     this.possibleLinks = links;
+    // Combine with active links to get all potential lines to draw
+    const allLinks = [...this.activeLinks, ...this.possibleLinks];
+    this.rebuildLinksGeometry(allLinks);
   }
 
   updateActiveLinks(links) {
@@ -580,138 +753,135 @@ export class SimDisplay {
   }
 
   updateLinksPositions() {
+    if (!this.gpuCompute) return;
+
+    // We need to rebuild the geometry buffers only if links change or on init
+    // But color updates happen here too.
+    // For GPGPU links, we need:
+    // 1. A buffer of 'satelliteUV' (vec2) for each vertex.
+    // 2. A buffer of 'linkColor' (vec3) for each vertex.
+
     const activeLinkSet = new Set(this.activeLinks.map((link) => link.fromId + "_" + link.toId));
 
-    // Filter out active links from possible links
-    const inactiveLinks = this.possibleLinks.filter(
-      (link) => !activeLinkSet.has(link.fromId + "_" + link.toId) && !activeLinkSet.has(link.toId + "_" + link.fromId)
-    );
-    // Combine all links
-    const allLinks = [...this.activeLinks, ...inactiveLinks];
+    // We can't display links involving Planets easily because Planets aren't in the texture!
+    // GPGPU Links only support Satellite-Satellite links if we assume texture lookup.
+    // If we want Planet-Satellite, we need to pass Planet positions as uniforms or put them in texture.
+    // Current texture only has Satellites.
+    // Workaround: Only render Satellite-Satellite links via GPGPU.
+    // Render Planet links via CPU? Or put Planets in texture?
+    // Planets list is small. We can pass them as uniforms array? Or just CPU lines for those.
+    // The bottleneck is 100k satellite links.
 
-    // Filter to only links with valid positions
-    let validLinks = allLinks.filter((link) => {
-      const fromPosition = this.planetPositions[link.fromId] || this.satellitePositions[link.fromId];
-      const toPosition = this.planetPositions[link.toId] || this.satellitePositions[link.toId];
-      return (
-        fromPosition &&
-        toPosition &&
-        !isNaN(fromPosition.x) &&
-        !isNaN(fromPosition.y) &&
-        !isNaN(fromPosition.z) &&
-        !isNaN(toPosition.x) &&
-        !isNaN(toPosition.y) &&
-        !isNaN(toPosition.z)
-      );
+    // Filter for Satellite-Only links for GPGPU optimization
+    // Assuming 'fromId' and 'toId' are satellite names (e.g. ring_earth-0).
+    // Planet names are "Earth", "Mars".
+    const isSat = (id) => id.includes("-") || id.includes("ring");
+
+    // For simplicity, let's just handle all links. If it's a planet, we need a fallback.
+    // Actually, simply:
+    // Let's create a mapping of name -> TextureUV in setSatellites.
+
+    if (!this.satelliteUVMap) return;
+
+    // Filter valid links (both ends must be in UV map)
+    const validLinks = [];
+    const allLinks = [...this.activeLinks, ...this.possibleLinks]; // Optim: maybe don't loop all if cached
+
+    // Wait, looping 1M links in JS is slow! = 10ms for 1M simple ops?
+    // We should avoid recreating buffers every frame.
+    // The user said: "Remove activeLinks.filter loop in updateLinksPositions"
+    // "Remove THREE.LineSegments with vertexColors"
+
+    // Strategy:
+    // Create a massive buffer ONCE (max links).
+    // Update 'indices' or 'drawRange' or 'visibility attribute'?
+    // If links are static (topology), we build geometry once.
+    // Are links static?
+    // "Satellites and Links" - Links might be dynamic (ISL).
+    // But ISL usually follows a pattern (next/prev).
+    // If the graph is static, we just build it once in setSatellites/setLinks.
+
+    // Assumption: Topology is mostly static or updates infrequently (config change).
+    // Flow/Active status changes frequently.
+
+    // Let's implement rebuildLinksGeometry method called only when topology changes.
+    // updatePositions should ONLY update colors/uniforms if needed (but even colors might be static-ish).
+    // Actually, Flow visualization requires color updates.
+    // Updating 1M colors attribute is slow? (Upload 12MB).
+    // Maybe use a 'linkDataTexture' for flow status?
+    // Too complex for now. Let's assume we build geometry once and update colors sparingly.
+
+    // But wait, updatePositions called every frame.
+    // We should NOT rebuild geometry here.
+
+    // Pass the positionTexture to material.
+    if (this.linksMesh && this.linksMesh.material.uniforms.positionTexture.value !== this.satellitesMesh.material.uniforms.positionTexture.value) {
+      this.linksMesh.material.uniforms.positionTexture.value = this.satellitesMesh.material.uniforms.positionTexture.value;
+    }
+  }
+
+  rebuildLinksGeometry(links) {
+    if (!this.gpuCompute || !this.satelliteUVMap) return;
+
+    // 1. Build buffers
+    const positions = []; // Not used but needed by Three? We can verify.
+    const satelliteUVs = [];
+    const colors = [];
+
+    // Only proces links where both ends are satellites in our texture
+    // If planet links are needed, handle separately (CPU).
+
+    let validCount = 0;
+    const maxLinks = links.length;
+
+    const uvs = new Float32Array(maxLinks * 2 * 2); // 2 vertices * 2 coords
+    const cols = new Float32Array(maxLinks * 2 * 3); // 2 vertices * 3 rgb
+
+    // For color, default to inactive
+    const baseColor = new THREE.Color(this.styles.links.inactive.color);
+
+    links.forEach((link, i) => {
+      const uv1 = this.satelliteUVMap.get(link.fromId);
+      const uv2 = this.satelliteUVMap.get(link.toId);
+
+      if (uv1 && uv2) {
+        uvs[validCount * 4 + 0] = uv1.x;
+        uvs[validCount * 4 + 1] = uv1.y;
+        uvs[validCount * 4 + 2] = uv2.x;
+        uvs[validCount * 4 + 3] = uv2.y;
+
+        cols[validCount * 6 + 0] = baseColor.r;
+        cols[validCount * 6 + 1] = baseColor.g;
+        cols[validCount * 6 + 2] = baseColor.b;
+
+        cols[validCount * 6 + 3] = baseColor.r;
+        cols[validCount * 6 + 4] = baseColor.g;
+        cols[validCount * 6 + 5] = baseColor.b;
+
+        validCount++;
+      }
     });
 
-    if (this.linksColorsType === "None") {
-      validLinks = [];
+    // Create Geometry
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('satelliteUV', new THREE.BufferAttribute(uvs.slice(0, validCount * 4), 2));
+    geometry.setAttribute('linkColor', new THREE.BufferAttribute(cols.slice(0, validCount * 6), 3));
+
+    // Three.js needs 'position' attribute for bounding box? 
+    // Shader ignores it, but Frustum Culling needs it.
+    // Disable frustum culling for links or provide simple positions.
+    // Providing 0s:
+    const zeros = new Float32Array(validCount * 2 * 3);
+    geometry.setAttribute('position', new THREE.BufferAttribute(zeros, 3));
+
+    if (this.linksMesh) {
+      this.linksGroup.remove(this.linksMesh);
+      this.linksMesh.geometry.dispose();
     }
 
-    const numLinks = validLinks.length;
-    const positions = new Float32Array(numLinks * 2 * 3);
-    const colors = new Float32Array(numLinks * 2 * 3);
-
-    // Calculate min and max flow for color mapping (for active links only)
-    let flows = [];
-    if (this.linksColorsType === "Flow") {
-      flows = this.activeLinks
-        .filter((link) => {
-          const fromPosition = this.planetPositions[link.fromId] || this.satellitePositions[link.fromId];
-          const toPosition = this.planetPositions[link.toId] || this.satellitePositions[link.toId];
-          return (
-            fromPosition &&
-            toPosition &&
-            !isNaN(fromPosition.x) &&
-            !isNaN(fromPosition.y) &&
-            !isNaN(fromPosition.z) &&
-            !isNaN(toPosition.x) &&
-            !isNaN(toPosition.y) &&
-            !isNaN(toPosition.z)
-          );
-        })
-        .map((link) => link.gbpsFlow);
-    } else if (this.linksColorsType === "Capacity") {
-      flows = validLinks.map((link) => link.gbpsCapacity);
-    }
-
-    const maxFlow = flows.length > 0 ? Math.max(...flows) : 1;
-    const minFlow = flows.length > 0 ? Math.min(...flows) : 0;
-
-    // const maxFlow = this.styles.links.active.gbpsmax;
-    // const minFlow = this.styles.links.active.gbpsmin;
-    // console.log(this.linksColorsType, maxFlow, minFlow);
-
-    for (let i = 0; i < numLinks; i++) {
-      const link = validLinks[i];
-      const isActive = activeLinkSet.has(link.fromId + "_" + link.toId);
-
-      // Get 'from' and 'to' positions
-      const fromPosition = this.planetPositions[link.fromId] || this.satellitePositions[link.fromId];
-      const toPosition = this.planetPositions[link.toId] || this.satellitePositions[link.toId];
-
-      // Set positions
-      positions[i * 6] = fromPosition.x;
-      positions[i * 6 + 1] = fromPosition.y;
-      positions[i * 6 + 2] = fromPosition.z;
-
-      positions[i * 6 + 3] = toPosition.x;
-      positions[i * 6 + 4] = toPosition.y;
-      positions[i * 6 + 5] = toPosition.z;
-
-      // Set colors
-      let color = new THREE.Color(this.styles.links.inactive.color);
-      if ((this.linksColorsType === "Flow" && isActive) || this.linksColorsType === "Capacity") {
-        // Active link: interpolate color based on flow
-        let t = 0;
-        let valFlow = this.linksColorsType === "Flow" ? link.gbpsFlow : link.gbpsCapacity;
-        if (maxFlow > minFlow) {
-          t = (valFlow - minFlow) / (maxFlow - minFlow);
-        }
-        t = isNaN(t) ? 0 : t;
-
-        // Map t (0-1) to the range of values (0 to max)
-        let value = t * (maxFlow - minFlow) + minFlow;
-
-        // Define color stops and their corresponding values
-        const colorStops = [
-          { value: 0, color: new THREE.Color(this.styles.links.active.color_0) },
-          { value: 0.02, color: new THREE.Color(this.styles.links.active.color_fixed) },
-          { value: maxFlow, color: new THREE.Color(this.styles.links.active.color_max) },
-        ];
-
-        // Find the appropriate color segment
-        for (let i = 0; i < colorStops.length - 1; i++) {
-          if (value >= colorStops[i].value && value <= colorStops[i + 1].value) {
-            // Calculate interpolation factor within this segment
-            let segmentT = (value - colorStops[i].value) / (colorStops[i + 1].value - colorStops[i].value);
-            segmentT = isNaN(segmentT) ? 0 : segmentT;
-            color.lerpColors(colorStops[i].color, colorStops[i + 1].color, segmentT);
-            break;
-          }
-        }
-      }
-
-      // Set color for both vertices
-      colors[i * 6] = color.r;
-      colors[i * 6 + 1] = color.g;
-      colors[i * 6 + 2] = color.b;
-
-      colors[i * 6 + 3] = color.r;
-      colors[i * 6 + 4] = color.g;
-      colors[i * 6 + 5] = color.b;
-    }
-
-    // Update the geometry
-    this.linksGeometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-    this.linksGeometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
-    this.linksGeometry.attributes.position.needsUpdate = true;
-    this.linksGeometry.attributes.color.needsUpdate = true;
-    this.linksGeometry.computeBoundingSphere();
-
-    // Update link labels
-    this.updateLinkLabels(validLinks);
+    this.linksMesh = new THREE.LineSegments(geometry, this.linkMaterial);
+    this.linksMesh.frustumCulled = false;
+    this.linksGroup.add(this.linksMesh);
   }
 
   /**
@@ -752,7 +922,7 @@ export class SimDisplay {
       // Calculate screen distance in pixels
       const screenDist = Math.sqrt(
         Math.pow(((fromScreen.x - toScreen.x) * window.innerWidth) / 2, 2) +
-          Math.pow(((fromScreen.y - toScreen.y) * window.innerHeight) / 2, 2)
+        Math.pow(((fromScreen.y - toScreen.y) * window.innerHeight) / 2, 2)
       );
 
       if (screenDist > 50) {
@@ -765,7 +935,7 @@ export class SimDisplay {
         } else if (this.linksColorsType === "Capacity") {
           displayMbps = Math.round(link.gbpsCapacity * 1000);
         }
-        const label = this.createTextSprite(`${displayMbps}`);
+        const label = this.createTextSprite(`${displayMbps} `);
         label.position.copy(midPoint);
         this.linkLabelsGroup.add(label);
         this.linkLabels.push(label);

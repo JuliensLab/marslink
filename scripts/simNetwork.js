@@ -44,7 +44,9 @@ export class SimNetwork {
    *                          }
    */
   getPossibleLinks(planets, satellites) {
+
     console.log(satellites);
+
     // Group satellites by ringName
     const rings = {}; // { ringName: [satellite1, satellite2, ...] }
 
@@ -1021,8 +1023,7 @@ export class SimNetwork {
     });
 
     console.log(
-      `Eccentric to circular ring connections (${eccentricRingNames.length} eccentric rings, ${
-        circularRingNames.length
+      `Eccentric to circular ring connections (${eccentricRingNames.length} eccentric rings, ${circularRingNames.length
       } circular rings, ${eccentricRingNames.reduce((sum, name) => sum + rings[name].length, 0)} + ${circularRingNames.reduce(
         (sum, name) => sum + rings[name].length,
         0
