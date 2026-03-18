@@ -131,7 +131,7 @@ export class SimMissionValidator {
 
     const nextState = this.calculateNextState(currentState, maneuver);
     const isp = vehicles[vehicleId].isp_s || 0;
-    const calculatedDeltaV = this.calculateDeltaV(maneuver.startMass_kg, maneuver.endMass_kg, isp);
+    const calculatedDeltaV = calculateDeltaV(maneuver.startMass_kg, maneuver.endMass_kg, isp);
     maneuverNode.deltaVMatch = maneuver.deltaV_km_per_s !== undefined ? Math.abs(calculatedDeltaV - maneuver.deltaV_km_per_s) < 0.02 : true;
 
     let calculatedEndMass;
@@ -222,16 +222,6 @@ export class SimMissionValidator {
     }
 
     return nextState;
-  }
-
-  /** Calculates delta-V using the Tsiolkovsky rocket equation */
-  calculateDeltaV(initialMass, finalMass, isp) {
-    if (isp === 0 || finalMass === 0 || initialMass <= finalMass) {
-      return 0;
-    }
-    const g0 = 9.80665; // m/s²
-    const deltaV_m_per_s = isp * g0 * Math.log(initialMass / finalMass);
-    return deltaV_m_per_s / 1000; // Convert to km/s
   }
 
   /** Displays all trees */
@@ -352,7 +342,7 @@ export function printTree(spaceChar, vehicles, node, level, previousEndMass = nu
     stringArray.push(maneuverString);
 
     if (!node.deltaVMatch) {
-      const calculatedDeltaV = this.calculateDeltaV(
+      const calculatedDeltaV = calculateDeltaV(
         node.maneuver.startMass_kg,
         node.maneuver.endMass_kg,
         vehicles[node.vehicleId]?.isp_s || 0
@@ -395,4 +385,14 @@ export function printTree(spaceChar, vehicles, node, level, previousEndMass = nu
     printTree(spaceChar, vehicles, node.children[0], level, node.maneuver?.endMass_kg, stringArray);
   }
   return stringArray;
+}
+
+/** Calculates delta-V using the Tsiolkovsky rocket equation */
+export function calculateDeltaV(initialMass, finalMass, isp) {
+  if (isp === 0 || finalMass === 0 || initialMass <= finalMass) {
+    return 0;
+  }
+  const g0 = 9.80665; // m/s²
+  const deltaV_m_per_s = isp * g0 * Math.log(initialMass / finalMass);
+  return deltaV_m_per_s / 1000; // Convert to km/s
 }
