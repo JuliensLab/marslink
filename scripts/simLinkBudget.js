@@ -28,10 +28,12 @@ export class SimLinkBudget {
 
     this.techImprovementFactor = Math.pow(2, technologyConfig["laser_technology.improvement-factor"]);
 
-    // Solar exclusion: sun radius * margin multiplier (0 = disabled)
     // Solar exclusion: angular margin (in degrees) from the sun's visible edge
     this.solarExclusionDeg = technologyConfig["simulation.solarExclusionDeg"] || 0;
     this.solarExclusionRad = this.solarExclusionDeg * SIM_CONSTANTS.DEG_TO_RAD;
+
+    // Max-flow algorithm selection (one of the keys in FLOW_ALGORITHMS)
+    this.flowAlgorithm = technologyConfig["simulation.flowAlgorithm"] || undefined;
 
     // Invalidate Gbps cache when tech config changes
     this._gbpsCache = new Map();

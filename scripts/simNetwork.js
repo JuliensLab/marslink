@@ -1,7 +1,7 @@
 // simNetwork.js — Thin orchestrator delegating to simTopology.js and simMaxFlow.js.
 
 import { TopologyBuilder } from "./simTopology.js";
-import { simplifyNetwork, desimplifyNetwork, edmondsKarp, calculateLatencies } from "./simMaxFlow.js";
+import { simplifyNetwork, desimplifyNetwork, computeMaxFlow, calculateLatencies } from "./simMaxFlow.js";
 
 export class SimNetwork {
   constructor(simLinkBudget, simSatellites) {
@@ -120,21 +120,26 @@ export class SimNetwork {
       addEdge(fromNodeId, toNodeId, gbpsCapacity, latencySeconds);
     });
 
-    // Implement the Edmonds-Karp Algorithm
     const source = nodeIds.get("Earth");
     const sink = nodeIds.get("Mars");
 
     // --- STEP 1: SIMPLIFY ---
-    const simplificationStack = []; // Initialize Stack
-    const linksBefore = Object.keys(capacities).length / 2;
-
-    // Pass the stack to the function
+    const simplificationStack = [];
     simplifyNetwork(graph, capacities, latencies, source, sink, simplificationStack);
 
-    const linksAfter = Object.keys(capacities).length / 2;
     // --- STEP 2: RUN MAX FLOW ---
-    // Max flow runs on the simplified graph (very fast)
-    const maxFlowResult = edmondsKarp(graph, capacities, source, sink, perfStart, calctimeMs);
+    // Uses the algorithm selected in simLinkBudget.flowAlgorithm (from the
+    // Simulation section UI), falling back to the default in
+    // simFlowAlgorithms/interface.js if unset.
+    const maxFlowResult = computeMaxFlow({
+      graph,
+      capacities,
+      source,
+      sink,
+      perfStart,
+      calctimeMs,
+      algorithm: this.simLinkBudget.flowAlgorithm,
+    });
 
     if (maxFlowResult === null) return { links: [], maxFlowGbps: 0, error: "timed out" };
 

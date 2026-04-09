@@ -659,6 +659,7 @@ export class SimUi {
         case "simulation.maxSatCount":
         case "simulation.calctimeSec":
         case "simulation.solarExclusionDeg":
+        case "simulation.flowAlgorithm":
         case "simulation.failed-satellites-slider":
         case "ring_earth.match-circular-rings":
         case "ring_earth.side-extension-degrees-slider":

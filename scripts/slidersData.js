@@ -117,6 +117,13 @@ export const slidersData = {
       scale: "linear",
       updateLongTermScore: true,
     },
+    flowAlgorithm: {
+      type: "radio",
+      label: "Max-flow algorithm",
+      options: ["push-relabel", "edmonds-karp"],
+      value: "push-relabel",
+      unit: "",
+    },
   },
   economics: {
     "launch-cost-slider": {
