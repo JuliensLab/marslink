@@ -97,17 +97,21 @@ export class SimNetwork {
 
     this.intraRing(rings, positions, linkCounts, finalLinks);
 
-    // this.marsEarthRings(rings, positions, linkCounts, finalLinks);
-
     this.interAdaptedRings(rings, positions, linkCounts, finalLinks, targetDepartureAngle, satellites);
     this.planetToCircularRings(rings, positions, linkCounts, finalLinks, "ring_mars", targetDepartureAngle);
     this.planetToCircularRings(rings, positions, linkCounts, finalLinks, "ring_earth", targetDepartureAngle);
-    // this.interEccentricRings(rings, positions, linkCounts, finalLinks);
 
-    // this.connectEccentricAndCircularRings(rings, positions, linkCounts, finalLinks);
+    // Connect Earth/Mars planets to their nearest ring satellites
+    this.planetToRingSatellites(filteredPlanets, rings, positions, linkCounts, finalLinks);
 
     // Calculate Earth to Mars routes
     this.calculateEarthToMarsRoutes(finalLinks, rings);
+
+    // Debug: check planet connectivity
+    const earthLinks = finalLinks.filter(l => l.fromId === "Earth" || l.toId === "Earth");
+    const marsLinks = finalLinks.filter(l => l.fromId === "Mars" || l.toId === "Mars");
+    console.log(`[DEBUG] Earth links: ${earthLinks.length}, Mars links: ${marsLinks.length}`);
+    console.log(`[DEBUG] Total finalLinks: ${finalLinks.length}`);
 
     return finalLinks;
   }
@@ -118,8 +122,7 @@ export class SimNetwork {
     // Initialize a Set for existing links for O(1) lookup
     const existingLinks = new Set(finalLinks.map((link) => `${link.fromId}-${link.toId}`));
 
-    // Precompute AU to KM conversion if not already done
-    const AU_IN_KM = this.AU_IN_KM; // Assuming this is a constant
+    const AU_IN_KM = this.AU_IN_KM;
 
     let linksAdded = 0;
 
@@ -127,6 +130,10 @@ export class SimNetwork {
     for (const [ringName, ringSatellites] of Object.entries(rings)) {
       // Skip rings with satellites that have exactly 2 ports
       if (this.simLinkBudget.getMaxLinksPerRing(ringName) === 2) continue;
+
+      // Pre-build name→satellite Map for O(1) neighbor lookup
+      const satByName = new Map();
+      for (const sat of ringSatellites) satByName.set(sat.name, sat);
 
       for (const satellite of ringSatellites) {
         // Early termination if satellite has reached max links
@@ -164,8 +171,8 @@ export class SimNetwork {
             directionNeigh = "prograde";
           }
 
-          // Check if ports are available
-          const neighborSat = ringSatellites.find((s) => s.name === neighborName);
+          // Check if ports are available — O(1) Map lookup instead of .find()
+          const neighborSat = satByName.get(neighborName);
           if (!neighborSat) continue;
           if (satellite[directionSat] !== null || neighborSat[directionNeigh] !== null) continue;
 
@@ -771,6 +778,62 @@ export class SimNetwork {
     console.log(`${planetRingName} <-> circular rings: ${linksAdded} connections`);
   }
 
+  /**
+   * Connects Earth and Mars planets to their closest ring satellites.
+   * Without these links, the max-flow algorithm has no source/sink edges.
+   *
+   * Earth connects to the closest ring_earth satellites.
+   * Mars connects to the closest ring_mars satellites.
+   * Uses high capacity (effectively infinite) so the bottleneck is the constellation, not the ground link.
+   */
+  planetToRingSatellites(filteredPlanets, rings, positions, linkCounts, finalLinks) {
+    const AU_IN_KM = this.AU_IN_KM;
+    const existingLinks = new Set(finalLinks.map((l) => `${l.fromId}-${l.toId}`));
+
+    const planetRingMap = {
+      Earth: "ring_earth",
+      Mars: "ring_mars",
+    };
+
+    for (const planet of filteredPlanets) {
+      const ringName = planetRingMap[planet.name];
+      if (!ringName || !rings[ringName]) continue;
+
+      const ringSats = rings[ringName];
+      const planetPos = positions[planet.name];
+      if (!planetPos) continue;
+
+      // Find closest satellites and connect to them (up to 10 to allow enough flow paths)
+      const candidates = ringSats
+        .map((sat) => ({
+          sat,
+          distanceAU: this.calculateDistanceAU(planetPos, positions[sat.name]),
+        }))
+        .sort((a, b) => a.distanceAU - b.distanceAU)
+        .slice(0, 10);
+
+      let linksAdded = 0;
+      for (const { sat, distanceAU } of candidates) {
+        const [fromId, toId] = planet.name < sat.name ? [planet.name, sat.name] : [sat.name, planet.name];
+        const key = `${fromId}-${toId}`;
+        if (existingLinks.has(key)) continue;
+
+        const distanceKm = distanceAU * AU_IN_KM;
+        // High capacity — ground segment shouldn't be the bottleneck
+        const gbpsCapacity = 1000;
+        const latencySeconds = this.calculateLatency(distanceKm);
+
+        finalLinks.push({ fromId, toId, distanceAU, distanceKm, latencySeconds, gbpsCapacity });
+        existingLinks.add(key);
+        linkCounts[planet.name]++;
+        linkCounts[sat.name]++;
+        linksAdded++;
+      }
+
+      console.log(`${planet.name} <-> ${ringName}: ${linksAdded} ground links (closest sats)`);
+    }
+  }
+
   calculateEarthToMarsRoutes(finalLinks, rings) {
     // Build routes from Earth to Mars through adapted rings
     const routes = [];
@@ -977,6 +1040,9 @@ export class SimNetwork {
     const connectedEccentricSatellites = new Set();
     const connectedCircularSatellites = new Set();
 
+    // Pre-build existing link Set for O(1) duplicate checking
+    const existingLinkSet = new Set(finalLinks.map((l) => `${l.fromId}-${l.toId}`));
+
     let linksAdded = 0;
     filteredLinks.forEach((link) => {
       const fromId = link.fromSatellite.name;
@@ -995,9 +1061,8 @@ export class SimNetwork {
       // To avoid duplicate links, order the IDs lexicographically
       const [orderedFromId, orderedToId] = fromId < toId ? [fromId, toId] : [toId, fromId];
 
-      // Check if the link already exists
-      const linkExists = finalLinks.some((existingLink) => existingLink.fromId === orderedFromId && existingLink.toId === orderedToId);
-      if (linkExists) return;
+      // Check if the link already exists — O(1) Set lookup instead of .some()
+      if (existingLinkSet.has(`${orderedFromId}-${orderedToId}`)) return;
 
       // Add the link
       finalLinks.push({
@@ -1016,6 +1081,7 @@ export class SimNetwork {
       // Mark satellites as connected
       connectedEccentricSatellites.add(fromId);
       connectedCircularSatellites.add(toId);
+      existingLinkSet.add(`${orderedFromId}-${orderedToId}`);
 
       linksAdded++;
     });
@@ -1068,19 +1134,16 @@ export class SimNetwork {
     const latencies = {}; // Edge latencies
     const positions = {}; // Node positions for reference
 
+    // Pre-build name→position Map for O(1) lookups
+    const positionMap = new Map();
+    for (const planet of planets) positionMap.set(planet.name, planet.position);
+    for (const satellite of satellites) positionMap.set(satellite.name, satellite.position);
+
     // Initialize graph nodes
     nodeIds.forEach((id, name) => {
       graph[id] = [];
-      positions[name] = planetOrSatellitePosition(planets, satellites, name);
+      positions[name] = positionMap.get(name) || null;
     });
-
-    // Helper Function to Retrieve Position
-    function planetOrSatellitePosition(planets, satellites, name) {
-      const planet = planets.find((p) => p.name === name);
-      if (planet) return planet.position;
-      const satellite = satellites.find((s) => s.name === name);
-      return satellite ? satellite.position : null;
-    }
 
     // Helper Function to Add Edges (Bidirectional)
     const addEdge = (fromId, toId, capacity, latency) => {
@@ -1368,13 +1431,13 @@ export class SimNetwork {
     while (true) {
       if (performance.now() - perfStart > calctimeMs) return null;
       // Breadth-First Search (BFS) to find the shortest augmenting path
-      const queue = [];
+      const queue = [source];
+      let qHead = 0; // Index-based dequeue — O(1) instead of shift()'s O(n)
       const parents = {};
-      queue.push(source);
       parents[source] = null;
 
-      while (queue.length > 0) {
-        const current = queue.shift();
+      while (qHead < queue.length) {
+        const current = queue[qHead++];
 
         for (const neighbor of graph[current]) {
           const edgeKey = `${current}_${neighbor}`;
@@ -1431,6 +1494,13 @@ export class SimNetwork {
     if (nodeIds === undefined) return null;
     nodeIds.forEach((id, name) => inverseNodeIds.set(id, name));
 
+    // Pre-build link lookup Map for O(1) edge→latency instead of .find()
+    const linkLatencyMap = new Map();
+    for (const link of networkData.links) {
+      linkLatencyMap.set(`${link.fromId}_${link.toId}`, link.latencySeconds);
+      linkLatencyMap.set(`${link.toId}_${link.fromId}`, link.latencySeconds);
+    }
+
     const source = nodeIds.get("Earth");
     const sink = nodeIds.get("Mars");
 
@@ -1444,10 +1514,10 @@ export class SimNetwork {
     // Helper Function to Find a Path with Positive Flow
     const findPathWithFlow = () => {
       const parent = new Array(Object.keys(graph).length).fill(-1);
-      const queue = [];
-      queue.push(source);
-      while (queue.length > 0) {
-        const current = queue.shift();
+      const queue = [source];
+      let qHead = 0;
+      while (qHead < queue.length) {
+        const current = queue[qHead++];
         for (const neighbor of graph[current]) {
           const edgeKey = `${current}_${neighbor}`;
           if (flows[edgeKey] > 0 && parent[neighbor] === -1 && neighbor !== source) {
@@ -1484,17 +1554,14 @@ export class SimNetwork {
         }
       }
 
-      // Calculate total latency for the path
+      // Calculate total latency for the path — O(1) Map lookup per edge
       let totalLatency = 0;
       for (const edge of path) {
         const fromName = inverseNodeIds.get(edge.from);
         const toName = inverseNodeIds.get(edge.to);
-        // Retrieve the link's latency
-        const link = networkData.links.find(
-          (l) => (l.fromId === fromName && l.toId === toName) || (l.fromId === toName && l.toId === fromName)
-        );
-        if (link) {
-          totalLatency += link.latencySeconds;
+        const latency = linkLatencyMap.get(`${fromName}_${toName}`);
+        if (latency !== undefined) {
+          totalLatency += latency;
         } else {
           console.warn(`Link not found between ${fromName} and ${toName}`);
         }

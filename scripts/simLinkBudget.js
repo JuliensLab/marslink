@@ -23,10 +23,17 @@ export class SimLinkBudget {
       ring_mars: technologyConfig["ring_mars.laser-ports-per-satellite"],
       circular_rings: technologyConfig["circular_rings.laser-ports-per-satellite"],
       eccentric_rings: technologyConfig["eccentric_rings.laser-ports-per-satellite"],
+      adapted_rings: technologyConfig["adapted_rings.laser-ports-per-satellite"],
     };
 
     this.techImprovementFactor = Math.pow(2, technologyConfig["laser_technology.improvement-factor"]);
     console.log("//// this.techImprovementFactor", this.techImprovementFactor);
+
+    // Invalidate Gbps cache when tech config changes
+    this._gbpsCache = new Float64Array(1024);
+    this._gbpsCacheValid = new Uint8Array(1024);
+    // Precompute constant factor: techImprovementFactor * baseGbps * baseDistanceKm²
+    this._gbpsFactor = this.techImprovementFactor * this.baseGbps * this.baseDistanceKm * this.baseDistanceKm;
   }
 
   convertAUtoKM(AU) {
@@ -34,9 +41,21 @@ export class SimLinkBudget {
   }
 
   // Function to calculate Gbps capacity based on distance
+  // Bucketed cache: distances rounded to 100km share the same result
   calculateGbps(distanceKm) {
     if (isNaN(distanceKm) || distanceKm <= 0) return 0;
-    return this.techImprovementFactor * this.baseGbps * Math.pow(this.baseDistanceKm / distanceKm, 2);
+    const bucket = (distanceKm / 100) | 0; // integer bucket index
+    if (bucket < 1024 && this._gbpsCacheValid && this._gbpsCacheValid[bucket]) {
+      return this._gbpsCache[bucket];
+    }
+    const result = this._gbpsFactor
+      ? this._gbpsFactor / (distanceKm * distanceKm)
+      : this.techImprovementFactor * this.baseGbps * Math.pow(this.baseDistanceKm / distanceKm, 2);
+    if (bucket < 1024 && this._gbpsCacheValid) {
+      this._gbpsCache[bucket] = result;
+      this._gbpsCacheValid[bucket] = 1;
+    }
+    return result;
   }
 
   // Function to calculate distance based on Gbps capacity
@@ -65,6 +84,7 @@ export class SimLinkBudget {
     if (ringName === "ring_mars") return this.maxLinksPerRing.ring_mars;
     if (ringName.startsWith("ring_circ")) return this.maxLinksPerRing.circular_rings;
     if (ringName.startsWith("ring_ecce")) return this.maxLinksPerRing.eccentric_rings;
+    if (ringName.startsWith("ring_adapt")) return this.maxLinksPerRing.adapted_rings || this.maxLinksPerSatellite;
     return this.maxLinksPerSatellite; // fallback
   }
 }

@@ -847,7 +847,6 @@ export class SimMain {
         costPerLaserTerminal: this.costPerLaserTerminal,
         laserPortsPerSatellite: this.simLinkBudget.maxLinksPerSatellite,
       });
-      // if (!new SimMissionValidator(this.missionProfiles)) throw new Error("Mission validation failed");
       satellites = this.simSatellites.updateSatellitesPositions(simDate);
       this.satellitesCount = satellites.length;
       console.log("Total satellites on main page:", this.satellitesCount);

@@ -119,6 +119,10 @@ export class SimDisplay {
     this.planets = {}; // Store planet meshes
     this.satellitesGroup = new THREE.Group();
     this.scene.add(this.satellitesGroup);
+    // Cached instanced mesh data for in-place position updates
+    this._cachedMeshes = [];
+    this._cachedGroupMappings = [];
+    this._cachedGeometry = null;
     this.linksGroup = new THREE.Group();
     this.scene.add(this.linksGroup);
     this.linkLabelsGroup = new THREE.Group();
@@ -347,9 +351,20 @@ export class SimDisplay {
         }
       }
     }
-    // Update satellites geometry scale
-    // Scaling is handled in updatePositions when recreating meshes
+    // Update satellite geometry scale — apply to cached instanced meshes
     this.currentSatelliteScale = satelliteScaleFactor;
+    if (this._cachedMeshes) {
+      for (const mesh of this._cachedMeshes) {
+        mesh.geometry.dispose();
+      }
+      const scale = 0.0001;
+      const newGeometry = new THREE.CylinderGeometry(scale, scale, scale * 2, 6);
+      newGeometry.scale(this.currentSatelliteScale, this.currentSatelliteScale, this.currentSatelliteScale);
+      this._cachedGeometry = newGeometry;
+      for (const mesh of this._cachedMeshes) {
+        mesh.geometry = newGeometry;
+      }
+    }
   }
 
   // Define emissive colors for solar angle Quad
@@ -380,6 +395,11 @@ export class SimDisplay {
    * @param {Array} satellites - Array of satellite objects with properties:
    *                             { position: { x, y, z, solarAngle } }.
    */
+  /**
+   * Rebuilds satellite instanced meshes from scratch.
+   * Call only when satellite count or color mode changes.
+   * Per-frame position updates use updatePositions() which updates matrices in-place.
+   */
   setSatellites(satellites) {
     // Cleanup existing satellites group
     this.clearGroup(this.satellitesGroup);
@@ -395,18 +415,18 @@ export class SimDisplay {
       };
     });
 
-    if (this.satelliteColorMode === "None") return;
+    // Reset cached mesh data
+    this._cachedMeshes = [];
+    this._cachedGroupMappings = [];
+    this._cachedGeometry = null;
 
+    if (this.satelliteColorMode === "None") return;
     if (satellites.length === 0 || this.satelliteSizeFactor <= 1) return;
 
     const scale = 0.0001;
-    // Satellite geometry: Cylinder (adjust dimensions as needed)
-    const geometry = new THREE.CylinderGeometry(
-      scale, // Radius (top and bottom)
-      scale,
-      scale * 2, // Height
-      6 // Number of segments (hexagonal cylinder)
-    );
+    const geometry = new THREE.CylinderGeometry(scale, scale, scale * 2, 6);
+    geometry.scale(this.currentSatelliteScale, this.currentSatelliteScale, this.currentSatelliteScale);
+    this._cachedGeometry = geometry;
 
     // Group satellites by color index
     const numGroups =
@@ -418,49 +438,39 @@ export class SimDisplay {
     });
 
     // Create instanced meshes for each group
-    this.satelliteMeshes = [];
-    this.satelliteQuadrantIndices = [];
     const emissives = this.getEmissiveColors();
+    const dummy = new THREE.Object3D();
+
     colorGroups.forEach((groupSats, groupIndex) => {
       if (groupSats.length === 0) return;
 
-      // Satellite material: Emissive color based on group
       const material = new THREE.MeshPhongMaterial({
-        color: 0xffffff, // Default white color
-        shininess: 10, // Adds a subtle shine to the satellites
-        specular: new THREE.Color(0x333333), // Specular reflection color
-        emissive: emissives[groupIndex], // Emissive color based on group
-        emissiveIntensity: 0.5, // Adjust emissive intensity
-        transparent: false, // No transparency for now
-        opacity: 1.0, // Fully opaque
+        color: 0xffffff,
+        shininess: 10,
+        specular: new THREE.Color(0x333333),
+        emissive: emissives[groupIndex],
+        emissiveIntensity: 0.5,
+        transparent: false,
+        opacity: 1.0,
       });
 
-      // Create Instanced Mesh
       const instancedMesh = new THREE.InstancedMesh(geometry, material, groupSats.length);
-      instancedMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage); // Optimized for frequent updates
-      instancedMesh.castShadow = false; // Satellites do not cast shadows
-      instancedMesh.receiveShadow = true; // Satellites receive shadows
+      instancedMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      instancedMesh.castShadow = false;
+      instancedMesh.receiveShadow = true;
 
-      // Set initial transformations
-      const dummy = new THREE.Object3D();
       groupSats.forEach((item, localIndex) => {
         const position = item.satellite.position;
-        dummy.position.set(
-          auTo3D(position.x),
-          auTo3D(position.z), // Swap y and z axes if needed
-          -auTo3D(position.y)
-        );
+        dummy.position.set(auTo3D(position.x), auTo3D(position.z), -auTo3D(position.y));
         dummy.updateMatrix();
         instancedMesh.setMatrixAt(localIndex, dummy.matrix);
       });
+      instancedMesh.instanceMatrix.needsUpdate = true;
 
-      // Add to scene
       this.satellitesGroup.add(instancedMesh);
-      this.satelliteMeshes.push(instancedMesh);
-      this.satelliteQuadrantIndices.push(groupSats.map((item) => item.originalIndex));
+      this._cachedMeshes.push(instancedMesh);
+      this._cachedGroupMappings.push(groupSats.map((item) => item.originalIndex));
     });
-
-    // Geometry scaling is handled in updatePositions
   }
 
   /**
@@ -513,58 +523,23 @@ export class SimDisplay {
         z: -auTo3D(position.y),
       };
     });
-    // Recreate satellite meshes grouped by color mode
-    this.clearGroup(this.satellitesGroup);
-    if (satellites.length > 0 && this.satelliteSizeFactor > 1) {
-      const scale = 0.0001;
-      const geometry = new THREE.CylinderGeometry(scale, scale, scale * 2, 6);
-      geometry.scale(this.currentSatelliteScale, this.currentSatelliteScale, this.currentSatelliteScale);
-
-      // Group satellites by color index
-      const numGroups =
-        this.satelliteColorMode === "Quad" ? 4 : this.satelliteColorMode === "Zone" || this.satelliteColorMode === "Suit" ? 6 : 1;
-      const colorGroups = Array.from({ length: numGroups }, () => []);
-      satellites.forEach((satellite, index) => {
-        const colorIndex = this.getSatelliteColorIndex(satellite);
-        // console.log(colorGroups[colorIndex])
-        colorGroups[colorIndex].push({ satellite, index });
-      });
-
-      // Create instanced meshes for each group
-      const emissives = this.getEmissiveColors();
-      colorGroups.forEach((groupSats, groupIndex) => {
-        if (groupSats.length === 0) return;
-
-        const material = new THREE.MeshPhongMaterial({
-          color: 0xffffff,
-          shininess: 10,
-          specular: new THREE.Color(0x333333),
-          emissive: emissives[groupIndex],
-          emissiveIntensity: 0.5,
-          transparent: false,
-          opacity: 1.0,
-        });
-
-        const instancedMesh = new THREE.InstancedMesh(geometry, material, groupSats.length);
-        instancedMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-        instancedMesh.castShadow = false;
-        instancedMesh.receiveShadow = true;
-
-        const dummy = new THREE.Object3D();
-        groupSats.forEach((item, localIndex) => {
-          const position = item.satellite.position;
+    // Update instanced mesh matrices in-place (no rebuild)
+    if (this._cachedMeshes && this._cachedMeshes.length > 0) {
+      const dummy = new THREE.Object3D();
+      for (let g = 0; g < this._cachedMeshes.length; g++) {
+        const mesh = this._cachedMeshes[g];
+        const originalIndices = this._cachedGroupMappings[g];
+        for (let i = 0; i < originalIndices.length; i++) {
+          const satellite = satellites[originalIndices[i]];
+          if (!satellite) continue;
+          const position = satellite.position;
           dummy.position.set(auTo3D(position.x), auTo3D(position.z), -auTo3D(position.y));
-          if (position.rotation) {
-            dummy.rotation.set(position.rotation.x || 0, position.rotation.y || 0, position.rotation.z || 0);
-          } else {
-            dummy.rotation.set(0, 0, 0);
-          }
+          dummy.rotation.set(0, 0, 0);
           dummy.updateMatrix();
-          instancedMesh.setMatrixAt(localIndex, dummy.matrix);
-        });
-        instancedMesh.instanceMatrix.needsUpdate = true;
-        this.satellitesGroup.add(instancedMesh);
-      });
+          mesh.setMatrixAt(i, dummy.matrix);
+        }
+        mesh.instanceMatrix.needsUpdate = true;
+      }
     }
 
     // === Update Links Positions ===
@@ -590,128 +565,124 @@ export class SimDisplay {
     const allLinks = [...this.activeLinks, ...inactiveLinks];
 
     // Filter to only links with valid positions
-    let validLinks = allLinks.filter((link) => {
-      const fromPosition = this.planetPositions[link.fromId] || this.satellitePositions[link.fromId];
-      const toPosition = this.planetPositions[link.toId] || this.satellitePositions[link.toId];
-      return (
-        fromPosition &&
-        toPosition &&
-        !isNaN(fromPosition.x) &&
-        !isNaN(fromPosition.y) &&
-        !isNaN(fromPosition.z) &&
-        !isNaN(toPosition.x) &&
-        !isNaN(toPosition.y) &&
-        !isNaN(toPosition.z)
-      );
-    });
-
+    let validLinks;
     if (this.linksColorsType === "None") {
       validLinks = [];
+    } else {
+      validLinks = allLinks.filter((link) => {
+        const fromPosition = this.planetPositions[link.fromId] || this.satellitePositions[link.fromId];
+        const toPosition = this.planetPositions[link.toId] || this.satellitePositions[link.toId];
+        return (
+          fromPosition &&
+          toPosition &&
+          !isNaN(fromPosition.x) &&
+          !isNaN(fromPosition.y) &&
+          !isNaN(fromPosition.z) &&
+          !isNaN(toPosition.x) &&
+          !isNaN(toPosition.y) &&
+          !isNaN(toPosition.z)
+        );
+      });
     }
 
     const numLinks = validLinks.length;
-    const positions = new Float32Array(numLinks * 2 * 3);
-    const colors = new Float32Array(numLinks * 2 * 3);
+    const requiredSize = numLinks * 6;
 
-    // Calculate min and max flow for color mapping (for active links only)
-    let flows = [];
-    if (this.linksColorsType === "Flow") {
-      flows = this.activeLinks
-        .filter((link) => {
-          const fromPosition = this.planetPositions[link.fromId] || this.satellitePositions[link.fromId];
-          const toPosition = this.planetPositions[link.toId] || this.satellitePositions[link.toId];
-          return (
-            fromPosition &&
-            toPosition &&
-            !isNaN(fromPosition.x) &&
-            !isNaN(fromPosition.y) &&
-            !isNaN(fromPosition.z) &&
-            !isNaN(toPosition.x) &&
-            !isNaN(toPosition.y) &&
-            !isNaN(toPosition.z)
-          );
-        })
-        .map((link) => link.gbpsFlow);
-    } else if (this.linksColorsType === "Capacity") {
-      flows = validLinks.map((link) => link.gbpsCapacity);
+    // Reuse or grow pre-allocated typed arrays (avoid per-frame allocation)
+    if (!this._linkPositions || this._linkPositions.length < requiredSize) {
+      this._linkPositions = new Float32Array(Math.max(requiredSize, 6000));
+      this._linkColors = new Float32Array(Math.max(requiredSize, 6000));
+      // Create BufferAttributes once; reuse by swapping the array
+      this._linkPosAttr = new THREE.BufferAttribute(this._linkPositions, 3);
+      this._linkPosAttr.setUsage(THREE.DynamicDrawUsage);
+      this._linkColAttr = new THREE.BufferAttribute(this._linkColors, 3);
+      this._linkColAttr.setUsage(THREE.DynamicDrawUsage);
+      this.linksGeometry.setAttribute("position", this._linkPosAttr);
+      this.linksGeometry.setAttribute("color", this._linkColAttr);
     }
 
-    const maxFlow = flows.length > 0 ? Math.max(...flows) : 1;
-    const minFlow = flows.length > 0 ? Math.min(...flows) : 0;
+    const positions = this._linkPositions;
+    const colors = this._linkColors;
 
-    // const maxFlow = this.styles.links.active.gbpsmax;
-    // const minFlow = this.styles.links.active.gbpsmin;
-    // console.log(this.linksColorsType, maxFlow, minFlow);
+    // Calculate min and max flow for color mapping
+    let maxFlow = 1, minFlow = 0;
+    if (this.linksColorsType === "Flow") {
+      for (const link of this.activeLinks) {
+        const f = link.gbpsFlow;
+        if (f > maxFlow) maxFlow = f;
+        if (f < minFlow) minFlow = f;
+      }
+    } else if (this.linksColorsType === "Capacity" && validLinks.length > 0) {
+      maxFlow = 0;
+      minFlow = Infinity;
+      for (const link of validLinks) {
+        const c = link.gbpsCapacity;
+        if (c > maxFlow) maxFlow = c;
+        if (c < minFlow) minFlow = c;
+      }
+    }
+
+    // Pre-compute color stop THREE.Color objects once (not per-link)
+    const inactiveColor = this._inactiveColor || (this._inactiveColor = new THREE.Color());
+    inactiveColor.set(this.styles.links.inactive.color);
+    const color0 = this._color0 || (this._color0 = new THREE.Color());
+    color0.set(this.styles.links.active.color_0);
+    const colorFixed = this._colorFixed || (this._colorFixed = new THREE.Color());
+    colorFixed.set(this.styles.links.active.color_fixed);
+    const colorMax = this._colorMax || (this._colorMax = new THREE.Color());
+    colorMax.set(this.styles.links.active.color_max);
+    const tmpColor = this._tmpColor || (this._tmpColor = new THREE.Color());
+
+    const flowRange = maxFlow - minFlow;
+    const flowRangeInv = flowRange > 0 ? 1 / flowRange : 0;
 
     for (let i = 0; i < numLinks; i++) {
       const link = validLinks[i];
       const isActive = activeLinkSet.has(link.fromId + "_" + link.toId);
 
-      // Get 'from' and 'to' positions
       const fromPosition = this.planetPositions[link.fromId] || this.satellitePositions[link.fromId];
       const toPosition = this.planetPositions[link.toId] || this.satellitePositions[link.toId];
 
-      // Set positions
-      positions[i * 6] = fromPosition.x;
-      positions[i * 6 + 1] = fromPosition.y;
-      positions[i * 6 + 2] = fromPosition.z;
+      const off = i * 6;
+      positions[off]     = fromPosition.x;
+      positions[off + 1] = fromPosition.y;
+      positions[off + 2] = fromPosition.z;
+      positions[off + 3] = toPosition.x;
+      positions[off + 4] = toPosition.y;
+      positions[off + 5] = toPosition.z;
 
-      positions[i * 6 + 3] = toPosition.x;
-      positions[i * 6 + 4] = toPosition.y;
-      positions[i * 6 + 5] = toPosition.z;
-
-      // Set colors
-      let color = new THREE.Color(this.styles.links.inactive.color);
+      let r, g, b;
       if ((this.linksColorsType === "Flow" && isActive) || this.linksColorsType === "Capacity") {
-        // Active link: interpolate color based on flow
-        let t = 0;
-        let valFlow = this.linksColorsType === "Flow" ? link.gbpsFlow : link.gbpsCapacity;
-        if (maxFlow > minFlow) {
-          t = (valFlow - minFlow) / (maxFlow - minFlow);
+        const valFlow = this.linksColorsType === "Flow" ? link.gbpsFlow : link.gbpsCapacity;
+        const value = flowRange > 0 ? (valFlow - minFlow) * flowRangeInv * flowRange + minFlow : 0;
+
+        // Interpolate between color stops
+        if (value <= 0.02) {
+          const segmentT = value / 0.02;
+          tmpColor.lerpColors(color0, colorFixed, segmentT);
+        } else {
+          const segmentT = maxFlow > 0.02 ? (value - 0.02) / (maxFlow - 0.02) : 0;
+          tmpColor.lerpColors(colorFixed, colorMax, segmentT);
         }
-        t = isNaN(t) ? 0 : t;
-
-        // Map t (0-1) to the range of values (0 to max)
-        let value = t * (maxFlow - minFlow) + minFlow;
-
-        // Define color stops and their corresponding values
-        const colorStops = [
-          { value: 0, color: new THREE.Color(this.styles.links.active.color_0) },
-          { value: 0.02, color: new THREE.Color(this.styles.links.active.color_fixed) },
-          { value: maxFlow, color: new THREE.Color(this.styles.links.active.color_max) },
-        ];
-
-        // Find the appropriate color segment
-        for (let i = 0; i < colorStops.length - 1; i++) {
-          if (value >= colorStops[i].value && value <= colorStops[i + 1].value) {
-            // Calculate interpolation factor within this segment
-            let segmentT = (value - colorStops[i].value) / (colorStops[i + 1].value - colorStops[i].value);
-            segmentT = isNaN(segmentT) ? 0 : segmentT;
-            color.lerpColors(colorStops[i].color, colorStops[i + 1].color, segmentT);
-            break;
-          }
-        }
+        r = tmpColor.r; g = tmpColor.g; b = tmpColor.b;
+      } else {
+        r = inactiveColor.r; g = inactiveColor.g; b = inactiveColor.b;
       }
 
-      // Set color for both vertices
-      colors[i * 6] = color.r;
-      colors[i * 6 + 1] = color.g;
-      colors[i * 6 + 2] = color.b;
-
-      colors[i * 6 + 3] = color.r;
-      colors[i * 6 + 4] = color.g;
-      colors[i * 6 + 5] = color.b;
+      colors[off]     = r; colors[off + 1] = g; colors[off + 2] = b;
+      colors[off + 3] = r; colors[off + 4] = g; colors[off + 5] = b;
     }
 
-    // Update the geometry
-    this.linksGeometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-    this.linksGeometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
-    this.linksGeometry.attributes.position.needsUpdate = true;
-    this.linksGeometry.attributes.color.needsUpdate = true;
+    // Update draw range and flag buffers dirty (no new objects created)
+    this.linksGeometry.setDrawRange(0, numLinks * 2);
+    this._linkPosAttr.needsUpdate = true;
+    this._linkColAttr.needsUpdate = true;
     this.linksGeometry.computeBoundingSphere();
 
-    // Update link labels
-    this.updateLinkLabels(validLinks);
+    // Update link labels (skip cleanup when no labels exist and none requested)
+    if (this.showLinkLabels || this.linkLabels.length > 0) {
+      this.updateLinkLabels(validLinks);
+    }
   }
 
   /**
@@ -802,7 +773,31 @@ export class SimDisplay {
    */
   animate() {
     if (this.stopAnimation) return; // Stop if flagged
-    requestAnimationFrame(this.animate.bind(this));
+    requestAnimationFrame(this.animate);
+
+    // FPS counter
+    const now = performance.now();
+    if (!this._fpsFrames) {
+      this._fpsFrames = 0;
+      this._fpsLastTime = now;
+      this._fpsDisplay = document.getElementById("fps-counter");
+      if (!this._fpsDisplay) {
+        this._fpsDisplay = document.createElement("div");
+        this._fpsDisplay.id = "fps-counter";
+        this._fpsDisplay.style.cssText =
+          "position:fixed;top:8px;left:8px;color:#0f0;background:rgba(0,0,0,0.6);" +
+          "font:bold 14px monospace;padding:4px 8px;border-radius:4px;z-index:9999;pointer-events:none";
+        document.body.appendChild(this._fpsDisplay);
+      }
+    }
+    this._fpsFrames++;
+    const elapsed = now - this._fpsLastTime;
+    if (elapsed >= 500) {
+      this._fpsDisplay.textContent = `${Math.round((this._fpsFrames * 1000) / elapsed)} fps`;
+      this._fpsFrames = 0;
+      this._fpsLastTime = now;
+    }
+
     this.controls.update();
     this.composer.render();
   }
@@ -838,6 +833,9 @@ export class SimDisplay {
     this.clearGroup(this.satellitesGroup);
     this.clearGroup(this.linksGroup);
     this.clearGroup(this.linkLabelsGroup);
+    this._cachedMeshes = [];
+    this._cachedGroupMappings = [];
+    this._cachedGeometry = null;
 
     // Dispose of planet meshes
     for (let planetMesh of Object.values(this.planets)) {
