@@ -2,4 +2,7 @@
 /latex/
 /3d/
 /.vscode/
+/.claude/
 /results/
+/node_modules/
+.aider*

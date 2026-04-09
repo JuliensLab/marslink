@@ -1,0 +1,30 @@
+\section{Incremental Deployment Strategy}
+\label{sec:deployment}
+
+% GUIDANCE: Show how the constellation can be built incrementally, providing
+% value from day one.
+
+% 5.1 Deployment Phases
+%   - Ring-by-ring deployment. Each new ring placed to bisect the largest
+%     remaining gap (binary-search analogy).
+%   - Phase 1: single ring at ~1.3 AU midpoint, ~357 sats, ~2 Mbps.
+%     Already matches current Mars relay capability.
+%   - Phase 2: second ring, total ~944 sats, ~31 Mbps (15x improvement).
+%   - Phases 3--6: each ring roughly doubles throughput.
+%     By ring 6: ~2,208 sats, ~197 Mbps.
+%   - Further densification (more sats per ring) + more rings -> 1 Gbps.
+%   - INCLUDE FIGURE: staircase chart of cumulative throughput vs sats deployed.
+
+% 5.2 Ring Addition Order
+%   - Discuss why bisection is optimal: the bottleneck is always the widest
+%     gap, so inserting a ring there gives the largest marginal improvement.
+%   - Relate to the R_opt formula: as S grows, you naturally want more rings
+%     proportional to sqrt(S).
+
+% 5.3 Orbital Mechanics
+%   - Heliocentric circular orbits between 1.0 and 1.52 AU.
+%   - Delta-v from LEO: 1--6 km/s beyond Earth escape depending on target ring.
+%   - Each Starship launch delivers ~20 satellites to a single ring.
+%   - In-plane phasing maneuvers to distribute satellites around the ring.
+%
+% Target length: ~1.5 pages.
