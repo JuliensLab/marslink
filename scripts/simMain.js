@@ -689,8 +689,14 @@ export class SimMain {
       html += `<span id="capacity-arrow">▶</span> <span>Expand</span>`;
       html += `</div>`;
 
+      // --- Header: mode + laser tech improvement factor ---
+      const modeTitle = showFlow ? "FLOW" : "CAPACITY";
+      const techFactor = this.simLinkBudget.techImprovementFactor || 1;
+      const headerLine = `${modeTitle} | Laser tech improvement ${techFactor}x\n`;
+
       // --- Compact summary (visible when collapsed) ---
       html += `<pre id="capacity-compact" style="font-family: monospace; font-size: 11px; line-height: 1.4; margin: 0; white-space: pre;">`;
+      html += headerLine;
       if (showFlow) {
         html += planetLine(earth.side1, "\u25CF", earth.side2, `${fmtMbps(earthTotal)}, ${pct(earthTotal, earthCapTotal)}`, -2);
         if (rs) html += `${pipes}  ${fmtMbps(actualFlowMbps)}, ${adaptedFlowPct}\n`;
@@ -705,6 +711,7 @@ export class SimMain {
       html += `</pre>`;
       html += `<div id="capacity-content" style="display: none; margin-top: 4px;">`;
       html += `<pre style="font-family: monospace; font-size: 11px; line-height: 1.4; margin: 0; white-space: pre;">`;
+      html += headerLine;
 
       // Earth section
       if (earthTotal > 0 || earthInring.length > 0) {
