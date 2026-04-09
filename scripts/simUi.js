@@ -674,6 +674,7 @@ export class SimUi {
         case "circular_rings.earth-mars-orbit-inclination-pct":
         case "adapted_rings.laser-ports-per-satellite":
         case "adapted_rings.ringcount":
+        case "adapted_rings.auto_route_count":
         case "adapted_rings.route_count":
         case "adapted_rings.linear_satcount_increase":
         case "eccentric_rings.ringcount":

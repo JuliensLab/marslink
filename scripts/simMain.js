@@ -222,11 +222,21 @@ export class SimMain {
   }
 
   setAdaptedRingsConfig(uiConfig) {
-    let ringCount = uiConfig["adapted_rings.ringcount"];
-    if (ringCount == 0) return [];
-    ringCount += 2;
+    const userRingCount = uiConfig["adapted_rings.ringcount"];
+    if (userRingCount == 0) return [];
+    let ringCount = userRingCount + 2;
 
-    const routeCount = uiConfig["adapted_rings.route_count"];
+    // Section 4.4: Optimal route count N from R_opt = sqrt(D_em * S / (sqrt(3) * pi * r_M))
+    // Inverted for S = N*R: N = R * sqrt(3) * pi * r_M / D_em
+    let routeCount;
+    if (uiConfig["adapted_rings.auto_route_count"] === "yes") {
+      const rM = this.simSatellites.getMars().a;
+      const rE = this.simSatellites.getEarth().a;
+      const Dem = rM - rE;
+      routeCount = Math.round((userRingCount * Math.sqrt(3) * Math.PI * rM) / Dem);
+    } else {
+      routeCount = uiConfig["adapted_rings.route_count"];
+    }
     if (routeCount == 0) return [];
 
     const linearSatCountIncrease = uiConfig["adapted_rings.linear_satcount_increase"];
@@ -711,12 +721,15 @@ export class SimMain {
 
       // Adapted rings section
       if (rs) {
+        const adaptedRingCount = Object.keys(ringCapacities).filter((r) => r.startsWith("ring_adapt")).length;
         if (showFlow) {
           html += `${pipes}  ${fmtMbps(actualFlowMbps)}, ${adaptedFlowPct}\n`;
+          html += `${pipes}  ${adaptedRingCount} rings\n`;
           html += `${pipes}  ${activeRoutes}/${rs.routeCount} routes active\n`;
           html += `${pipes}  ${fmtRange(rs.minThroughput, rs.avgThroughput, rs.maxThroughput)}\n`;
         } else {
           html += `${pipes}  ${fmtMbps(rs.totalThroughput)}\n`;
+          html += `${pipes}  ${adaptedRingCount} rings\n`;
           html += `${pipes}  ${rs.routeCount} routes\n`;
           html += `${pipes}  ${fmtRange(rs.minThroughput, rs.avgThroughput, rs.maxThroughput)}\n`;
         }
