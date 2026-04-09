@@ -49,17 +49,6 @@ function esc(str) {
 }
 
 export async function generateReport(missionProfiles, resultTrees, costs, satellites) {
-  // remove
-  // const costs = {
-  //   costPerLaunch: this.costPerLaunch * 1000000,
-  //   costPerSatellite: this.costPerSatellite * 1000000,
-  //   costPerLaserTerminal: this.costPerLaserTerminal * 1000000,
-  //   laserPortsPerSatellite: this.simLinkBudget.maxLinksPerSatellite,
-  // };
-
-  const response = await fetch("reportTemplate.html");
-  let template = await response.text();
-
   // Count actual satellites per ring
   const actualSatCountPerRing = {};
   satellites.forEach((sat) => {
@@ -295,8 +284,10 @@ export async function generateReport(missionProfiles, resultTrees, costs, satell
   // Orbit sections (unchanged)
   let orbitSections = "";
   resultTrees.forEach((orbitTree) => {
-    orbitSections += `<div class="orbit-section">`;
-    orbitSections += `<h2>${esc(orbitTree.ringName)}</h2>`;
+    // Collapsible per-orbit block (collapsed by default to keep the report compact)
+    orbitSections += `<details class="orbit-section">`;
+    orbitSections += `<summary><h2>${esc(orbitTree.ringName)}</h2><span class="orbit-summary-meta">${orbitTree.satCount.toLocaleString()} sats · ${orbitTree.deploymentFlights_count.toLocaleString()} flights</span></summary>`;
+
     const propellants = {};
     for (let data of Object.values(orbitTree.vehicles)) {
       if (!Object.keys(propellants).includes(data.propellantType))
@@ -304,7 +295,8 @@ export async function generateReport(missionProfiles, resultTrees, costs, satell
       propellants[data.propellantType].selfPropulsion_kg += data.count ? data.count * data.propellantLoaded_kg : data.propellantLoaded_kg;
       propellants[data.propellantType].tankerPropellant_kg += data.count ? data.count * data.tankerPropellant_kg : data.tankerPropellant_kg;
     }
-    orbitSections += `${orbitTree.deploymentFlights_count} deployment flights are required to put all ${orbitTree.satCount} satellites into orbit.`;
+    orbitSections += `<p>${orbitTree.deploymentFlights_count} deployment flights are required to put all ${orbitTree.satCount} satellites into orbit.</p>`;
+
     orbitSections += `<div class="table propellant">`;
     orbitSections += `<table>`;
     orbitSections += `<tr><th>Propellant type</th><th>Propellant used for<br>one deployment flight (t)</th><th>Propellant used for<br>all ${orbitTree.deploymentFlights_count} deployment flights (t)</th></tr>`;
@@ -315,9 +307,11 @@ export async function generateReport(missionProfiles, resultTrees, costs, satell
         (orbitTree.deploymentFlights_count * (data.selfPropulsion_kg + data.tankerPropellant_kg)) / 1000
       ).toLocaleString()}</td></tr>`;
     orbitSections += `</table>`;
+    orbitSections += `</div>`;
+
     orbitSections += `<div class="table vehicles">`;
+    orbitSections += `<p class="table-caption">Table below valid for one deployment flight.</p>`;
     orbitSections += `<table>`;
-    orbitSections += `Table below valid for one deployment flight.`;
     orbitSections += `<tr><th>Vehicle</th><th>Propellant type</th><th>ISP (s)</th><th>Empty mass<br>(t)</th><th>Propellant used for<br>self propulsion (t)</th><th>Payload</th></tr>`;
     for (let [vehicleId, data] of Object.entries(orbitTree.vehicles))
       orbitSections += `<tr><td>${esc(vehicleId)}${data.count ? " x" + data.count : ""}</td><td>${esc(data.propellantType)}</td><td>${
@@ -331,24 +325,30 @@ export async function generateReport(missionProfiles, resultTrees, costs, satell
       }</td><td>${esc(getPayloadForVehicle(orbitTree.vehicles, vehicleId))}</td></tr>`;
     orbitSections += `</table>`;
     orbitSections += `</div>`;
+
     orbitSections += `<div class="console tree">`;
     for (let tree of orbitTree.trees) {
       orbitSections += printTree("&nbsp;", orbitTree.vehicles, tree, 0).join("<br>");
       orbitSections += "<br><br>";
     }
     orbitSections += `</div>`;
-    orbitSections += `</div>`;
-    orbitSections += `</div>`;
+
+    orbitSections += `</details>`;
   });
 
-  template = template.replace("{{totalsSections}}", totalsSections);
-  template = template.replace("{{orbitSections}}", orbitSections);
+  // Render directly into the in-page report panel.
+  const body = document.getElementById("report-panel-body");
+  if (!body) {
+    console.error("[reportGenerator] #report-panel-body not found in DOM.");
+    return;
+  }
+  body.innerHTML = `<div class="report">${totalsSections}${orbitSections}</div>`;
 
-  const newWindow = window.open("", "_blank");
-  if (newWindow) {
-    newWindow.document.write(template);
-    newWindow.document.close();
-  } else {
-    console.error("Failed to open new window. Check if pop-ups are blocked.");
+  // Surface the panel and notify any listeners (e.g. mode tabs in simUi).
+  const panel = document.getElementById("report-panel");
+  if (panel) {
+    panel.hidden = false;
+    panel.setAttribute("aria-hidden", "false");
+    document.dispatchEvent(new CustomEvent("marslink:report-rendered"));
   }
 }

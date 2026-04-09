@@ -132,7 +132,8 @@ export class SimDisplay {
     this.possibleLinks = [];
     this.activeLinks = [];
     this.linkLabels = [];
-    this.showLinkLabels = false; // Flag for 'L' key press
+    // Label mode: null = off, "mbps" = throughput labels (M key), "latency" = latency labels (L key)
+    this.linkLabelMode = null;
 
     // === Load Scene Elements ===
     this.loadScene();
@@ -703,8 +704,8 @@ export class SimDisplay {
     });
     this.linkLabels = [];
 
-    // Only show labels when 'L' key is pressed and display flow is not 'none'
-    if (!this.showLinkLabels || this.linksColorsType === "None") return;
+    // Only show labels when a label mode is active and links are being drawn
+    if (!this.linkLabelMode || this.linksColorsType === "None") return;
 
     validLinks.forEach((link) => {
       const fromPosition = this.planetPositions[link.fromId] || this.satellitePositions[link.fromId];
@@ -733,14 +734,22 @@ export class SimDisplay {
       if (screenDist > 50) {
         // Create label at midpoint
         const midPoint = new THREE.Vector3().addVectors(fromPos, toPos).multiplyScalar(0.5);
-        // Determine display value based on linksColorsType
-        let displayMbps = 0;
-        if (this.linksColorsType === "Flow") {
-          displayMbps = Math.round(link.gbpsFlow * 1000);
-        } else if (this.linksColorsType === "Capacity") {
-          displayMbps = Math.round(link.gbpsCapacity * 1000);
+
+        let labelText = "";
+        if (this.linkLabelMode === "mbps") {
+          let displayMbps = 0;
+          if (this.linksColorsType === "Flow") {
+            displayMbps = Math.round(link.gbpsFlow * 1000);
+          } else if (this.linksColorsType === "Capacity") {
+            displayMbps = Math.round(link.gbpsCapacity * 1000);
+          }
+          labelText = `${displayMbps}`;
+        } else if (this.linkLabelMode === "latency") {
+          const latencySec = link.latencySeconds ?? 0;
+          labelText = latencySec >= 1 ? `${latencySec.toFixed(1)}s` : `${Math.round(latencySec * 1000)}ms`;
         }
-        const label = this.createTextSprite(`${displayMbps}`);
+
+        const label = this.createTextSprite(labelText);
         label.position.copy(midPoint);
         this.linkLabelsGroup.add(label);
         this.linkLabels.push(label);
@@ -766,8 +775,16 @@ export class SimDisplay {
    * @param {KeyboardEvent} event - The keyboard event.
    */
   onKeyDown(event) {
-    if (event.key.toLowerCase() === "l") {
-      this.showLinkLabels = !this.showLinkLabels;
+    // Ignore shortcuts while typing in form fields
+    const t = event.target;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) {
+      return;
+    }
+    const key = event.key.toLowerCase();
+    if (key === "l") {
+      this.linkLabelMode = this.linkLabelMode === "latency" ? null : "latency";
+    } else if (key === "m") {
+      this.linkLabelMode = this.linkLabelMode === "mbps" ? null : "mbps";
     }
   }
 

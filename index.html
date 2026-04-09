@@ -2,99 +2,211 @@
 <html lang="en">
 
 <head>
-    <meta charset="UTF-8">
-    <title>Marslink</title>
-    <meta name="description"
-        content="A simulation of Marslink, a projected heliocentric satellite constellation to link Earth and Mars via SpaceX satellites. Developed by Julien Villa-Massone. Not affiliated with SpaceX.">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <!-- <script src="https://cdn.jsdelivr.net/npm/chart.js?v=3.0"></script> -->
-    <script src="scripts/imported/chart/chart.js?v=4.3"></script>
-    <link rel="stylesheet" href="styles.css">
+  <meta charset="UTF-8">
+  <title>Marslink</title>
+  <meta name="description"
+    content="A simulation of Marslink, a projected heliocentric satellite constellation to link Earth and Mars via SpaceX satellites. Developed by Julien Villa-Massone. Not affiliated with SpaceX.">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="scripts/imported/chart/chart.js?v=4.4"></script>
+  <link rel="stylesheet" href="styles.css?v=4.4">
 </head>
 
 <body>
-    <!-- Follow link in the top-right corner -->
-    <div id="overlay-top-right" class="overlay">
-        <a id="followX" href="https://x.com/julienvm" target="_blank">
-            <img src="img/x_logo.jpg" alt="Follow on X" class="x-logo">
-            Follow Dev @julienvm
-        </a>
+  <!-- Three.js canvas attaches directly to <body> via simDisplay-3d.js -->
 
-        <div id="info-area">
-            <div id="info-area-costs"></div>
-            <br>
-            <div id="info-area-capacity"></div>
-            <br>
-            <div id="info-area-data"></div>
-            <div style="width: 100%; height: 200px;">
-                <canvas id="latencyChart"></canvas>
-            </div>
+  <!-- ─────────────── TOP BAR ─────────────── -->
+  <header id="top-bar">
+    <div class="brand">
+      <span class="brand-mark">◉</span>
+      <span class="brand-name">Marslink</span>
+    </div>
+
+    <nav class="mode-tabs" role="tablist">
+      <button class="mode-tab" data-mode="configure" role="tab">
+        <span class="tab-icon" aria-hidden="true">⚙</span> Configure
+      </button>
+      <button class="mode-tab" data-mode="report" role="tab">
+        <span class="tab-icon" aria-hidden="true">▤</span> Deployment Report
+      </button>
+      <button class="mode-tab" data-mode="run" role="tab">
+        <span class="tab-icon" aria-hidden="true">▶</span> Full Run
+      </button>
+    </nav>
+
+    <div class="top-bar-actions">
+      <div class="help-wrapper">
+        <button id="help-btn" class="icon-btn" aria-label="Help" aria-expanded="false">?</button>
+        <div id="help-popup" class="help-popup" hidden>
+          <h3>Marslink</h3>
+          <p>Heliocentric satellite constellation simulator linking Earth and Mars.</p>
+
+          <h4>Workspaces</h4>
+          <ul>
+            <li><strong>Configure</strong> — tune the constellation with sliders. Search, type exact values, save presets.</li>
+            <li><strong>Deployment Report</strong> — fine-grained per-orbit breakdown of vehicles, propellant, and costs.</li>
+            <li><strong>Full Run</strong> — sweep multiple scenarios and compare results.</li>
+          </ul>
+
+          <h4>Keyboard</h4>
+          <ul class="kbd-list">
+            <li><kbd>L</kbd> toggle link latency labels</li>
+            <li><kbd>M</kbd> toggle link Mbps labels</li>
+          </ul>
+
+          <h4>Tips</h4>
+          <ul>
+            <li>Drag in the 3D view to orbit, scroll to zoom.</li>
+            <li>Spot the Tesla Roadster.</li>
+            <li>Object sizes are not to scale; distances and physics are.</li>
+          </ul>
+
+          <p class="help-credit">Not affiliated with SpaceX.</p>
+        </div>
+      </div>
+      <a id="followX" href="https://x.com/julienvm" target="_blank" rel="noopener">
+        <img src="img/x_logo.jpg" alt="" class="x-logo">
+        <span>Follow @julienvm</span>
+      </a>
+    </div>
+  </header>
+
+  <!-- ─────────────── LEFT RAIL ─────────────── -->
+  <aside id="left-rail">
+    <button class="rail-btn" data-mode="configure" title="Configure">
+      <span aria-hidden="true">⚙</span>
+    </button>
+    <button class="rail-btn" data-mode="report" title="Deployment Report">
+      <span aria-hidden="true">▤</span>
+    </button>
+    <button class="rail-btn" data-mode="run" title="Full Run">
+      <span aria-hidden="true">▶</span>
+    </button>
+  </aside>
+
+  <!-- ─────────────── MODE DRAWER (Configure / Run) ─────────────── -->
+  <section id="mode-drawer" hidden aria-hidden="true">
+
+    <!-- Configure pane -->
+    <div id="configure-pane" class="drawer-pane" hidden>
+      <header class="drawer-header">
+        <h2>Configure</h2>
+        <button class="icon-btn drawer-close" data-close-drawer aria-label="Close">×</button>
+      </header>
+
+      <div class="drawer-toolbar">
+        <div class="search-box">
+          <span class="search-icon" aria-hidden="true">⌕</span>
+          <input type="search" id="slider-search" placeholder="Filter parameters…" autocomplete="off">
+        </div>
+        <div class="presets">
+          <select id="presets-select" aria-label="Presets">
+            <option value="">Presets…</option>
+          </select>
+          <button id="save-preset-btn" class="icon-btn" title="Save current as preset">＋</button>
+          <button id="delete-preset-btn" class="icon-btn" title="Delete selected preset">－</button>
+        </div>
+      </div>
+
+      <div class="drawer-body" id="sliders-container"></div>
+    </div>
+
+    <!-- Run pane -->
+    <div id="run-pane" class="drawer-pane" hidden>
+      <header class="drawer-header">
+        <h2>Full Run</h2>
+        <button class="icon-btn drawer-close" data-close-drawer aria-label="Close">×</button>
+      </header>
+
+      <div class="drawer-body">
+        <p class="muted">
+          Sweep multiple scenarios across improvement scores, deployment dates,
+          ring counts and in-ring throughputs. Results open in a separate page.
+        </p>
+
+        <div class="form-group">
+          <label for="fullRunImprovementScores">Improvement scores</label>
+          <input type="text" id="fullRunImprovementScores" placeholder="256,512,1024">
+          <span class="form-hint">comma-separated</span>
+        </div>
+        <div class="form-group">
+          <label for="fullRunDates">Dates</label>
+          <input type="text" id="fullRunDates" placeholder="2034-08-19,2027-02-19">
+          <span class="form-hint">yyyy-mm-dd, comma-separated</span>
+        </div>
+        <div class="form-group">
+          <label for="fullRunRingCounts">Ring counts</label>
+          <input type="text" id="fullRunRingCounts" placeholder="2,3,4,5,6">
+          <span class="form-hint">comma-separated</span>
+        </div>
+        <div class="form-group">
+          <label for="fullRunMbps">In-ring throughput</label>
+          <input type="text" id="fullRunMbps" placeholder="25,50,100">
+          <span class="form-hint">Mbps, comma-separated</span>
         </div>
 
-        <!-- Generate report -->
-        <div id="generateReportDiv"></div>
+        <button id="startFullRun" class="btn btn-primary btn-block">Start Full Run</button>
 
-        <!-- Start Long-Term Run Button -->
-        <!-- <button id="startLongTermRun" class="large-button">Start Long-Term Run</button>
-        <br> -->
-
-        <!-- Start Scenarios Run Button -->
-        <!-- <button id="startLongTermScenariosRun" class="large-button">Start Scenarios Run</button> -->
-
-        <!-- Container to Display Simulation Results -->
-        <div id="long-term-results" style="margin-top: 20px;">
-
-            <!-- Long-Term Run Summary -->
-            <div id="long-term-summary-run" style="margin-bottom: 30px;">
-                <h3>Run Summary:</h3>
-
-                <!-- Progress Bar for Long-Term Run -->
-                <div id="progress-container-run" style="width: 100%; background-color: #f3f3f3; border: 1px solid #ccc; margin-top: 10px;">
-                    <div id="progress-bar-run" style="width: 0%; height: 20px; background-color: #4caf50;"></div>
-                </div>
-                <p id="progress-text-run">Progress: 0%</p>
-
-                <!-- Summary Text for Long-Term Run -->
-                <pre id="long-term-summary-run-text"></pre>
+        <div id="long-term-results">
+          <div id="long-term-summary-run">
+            <h3>Run progress</h3>
+            <div id="progress-container-run">
+              <div id="progress-bar-run"></div>
             </div>
-
+            <p id="progress-text-run">Idle</p>
+            <pre id="long-term-summary-run-text"></pre>
+          </div>
         </div>
+      </div>
     </div>
 
+  </section>
 
-    <!-- Simulation Information in the top-left corner -->
-    <div id="overlay-top-left" class="overlay">
-        <div id="sliders-container"></div>
+  <!-- ─────────────── RIGHT METRICS PANEL ─────────────── -->
+  <aside id="right-panel">
+    <div class="panel-header right-panel-header">
+      <h2>Live metrics</h2>
     </div>
-
-    <div id="overlay-bottom-left" class="overlay">
-        <div>Object sizes not to scale - Distances and calculations to scale</div>
-        <div>Not affiliated with SpaceX - Spot the Tesla Roadster</div>
-        <div>Press L to toggle link Mbps labels</div>
+    <div id="info-area">
+      <div id="info-area-costs"></div>
+      <div id="info-area-data"></div>
+      <div class="chart-wrap">
+        <canvas id="latencyChart"></canvas>
+      </div>
     </div>
+  </aside>
 
-    <div id="overlay-bottom-right" class="overlay">
-        <div id="simTime"></div>
+  <!-- ─────────────── BOTTOM BAR ─────────────── -->
+  <footer id="bottom-bar">
+    <div id="simTime" class="sim-time-display">—</div>
+    <div class="disclaimer">
+      Object sizes not to scale · Distances to scale · Not affiliated with SpaceX · L = latency labels · M = Mbps labels
     </div>
+  </footer>
 
-    <!-- Import map for three.js r170 -->
-    <!-- <script type="importmap">
-        {
-          "imports": {
-            "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
-            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
-          }
-        }
-    </script>    -->
-    <script type="importmap">
-        {
-          "imports": {
-            "three": "./scripts/imported/three/three.module.js",
-            "three/addons/": "./scripts/imported/three/addons/"
-          }
-        }
-    </script>
-    <script type="module" src="scripts/simMain.js?v=4.3"></script>
+  <!-- ─────────────── REPORT POPUP PANEL ─────────────── -->
+  <section id="report-panel" class="popup-panel" hidden aria-hidden="true">
+    <header class="panel-header">
+      <h2>Deployment Report</h2>
+      <div class="panel-actions">
+        <button id="report-refresh-btn" class="icon-btn" title="Regenerate from current configuration">↻</button>
+        <button id="report-close-btn" class="icon-btn" title="Close" data-close-drawer>×</button>
+      </div>
+    </header>
+    <div id="report-panel-body" class="panel-body">
+      <p class="empty-state">Generating report…</p>
+    </div>
+  </section>
+
+  <!-- Import map for three.js r170 -->
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "./scripts/imported/three/three.module.js",
+        "three/addons/": "./scripts/imported/three/addons/"
+      }
+    }
+  </script>
+  <script type="module" src="scripts/simMain.js?v=4.4"></script>
 </body>
 
 </html>

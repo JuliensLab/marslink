@@ -11,15 +11,49 @@ export class SimUi {
 
     this.createSliders();
     this.initializeSimMain();
-
-    // Remove unwanted buttons if they exist
-    const longTermButton = document.getElementById("startLongTermRun");
-    if (longTermButton) longTermButton.remove();
-
-    const scenariosButton = document.getElementById("startLongTermScenariosRun");
-    if (scenariosButton) scenariosButton.remove();
-
+    this.setupModeNavigation();
+    this.setupSliderSearch();
+    this.setupPresets();
+    this.setupFullRunForm();
+    this.setupReportPanel();
+    this.setupHelpPopup();
     this.setupFullRunButton();
+  }
+
+  /**
+   * Click-to-toggle help popup in the top bar. Closes on outside click or Escape.
+   */
+  setupHelpPopup() {
+    const btn = document.getElementById("help-btn");
+    const popup = document.getElementById("help-popup");
+    if (!btn || !popup) return;
+
+    const close = () => {
+      popup.hidden = true;
+      btn.setAttribute("aria-expanded", "false");
+    };
+    const open = () => {
+      popup.hidden = false;
+      btn.setAttribute("aria-expanded", "true");
+    };
+
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (popup.hidden) open();
+      else close();
+    });
+
+    // Click outside closes the popup.
+    document.addEventListener("click", (e) => {
+      if (popup.hidden) return;
+      if (popup.contains(e.target) || btn.contains(e.target)) return;
+      close();
+    });
+
+    // Escape closes the popup.
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && !popup.hidden) close();
+    });
   }
 
   initializeSimMain() {
@@ -66,102 +100,259 @@ export class SimUi {
     );
     this.simMain.setSatelliteSizeFactor(satellitesSizeValue);
 
-    // Add a report button (adjust container as per your UI structure)
-    const reportButton = document.createElement("button");
-    reportButton.textContent = "Deployment Report";
-    reportButton.classList = "large-button";
-    reportButton.addEventListener("click", () => {
-      this.simMain.generateReport();
-    });
-    document.getElementById("generateReportDiv").appendChild(reportButton); // Or append to a specific container
+  }
 
-    // Add collapsible input area
-    const collapsibleContainer = document.createElement("div");
-    collapsibleContainer.style.marginTop = "10px";
-
-    const collapsibleHeader = document.createElement("div");
-    collapsibleHeader.style.cursor = "pointer";
-    collapsibleHeader.style.display = "flex";
-    collapsibleHeader.style.alignItems = "center";
-    collapsibleHeader.innerHTML = '<span id="arrow">▶</span> <span>Full Run Parameters</span>';
-
-    const collapsibleContent = document.createElement("div");
-    collapsibleContent.style.display = "none";
-    collapsibleContent.style.marginTop = "10px";
-
-    // Load saved parameters from localStorage or use defaults
-    const savedImprovementScores = localStorage.getItem("fullRunImprovementScores") || "256,512,1024";
-    const savedDates = localStorage.getItem("fullRunDates") || "2034-08-19,2027-02-19";
-    const savedRingCounts = localStorage.getItem("fullRunRingCounts") || "2,3,4,5,6";
-    const savedMbps = localStorage.getItem("fullRunMbps") || "25,50,100";
-
-    collapsibleContent.innerHTML = `
-       <div style="margin-bottom: 10px;">
-        <label>Improvement Scores (comma-separated): </label>
-        <input type="text" id="fullRunImprovementScores" value="${savedImprovementScores}" style="width: 300px;">
-      </div>
-      <div style="margin-bottom: 10px;">
-        <label>Dates (yyyy-mm-dd, comma-separated): </label>
-        <input type="text" id="fullRunDates" value="${savedDates}" style="width: 300px;">
-      </div>
-      <div style="margin-bottom: 10px;">
-        <label>Ring Counts (comma-separated): </label>
-        <input type="text" id="fullRunRingCounts" value="${savedRingCounts}" style="width: 300px;">
-      </div>
-      <div style="margin-bottom: 10px;">
-        <label>In-ring Mbps (comma-separated): </label>
-        <input type="text" id="fullRunMbps" value="${savedMbps}" style="width: 300px;">
-      </div>
-    
-    `;
-
-    collapsibleHeader.addEventListener("click", () => {
-      const arrow = document.getElementById("arrow");
-      if (collapsibleContent.style.display === "none") {
-        collapsibleContent.style.display = "block";
-        arrow.textContent = "▼";
-      } else {
-        collapsibleContent.style.display = "none";
-        arrow.textContent = "▶";
-      }
-    });
-
-    collapsibleContainer.appendChild(collapsibleHeader);
-    collapsibleContainer.appendChild(collapsibleContent);
-
-    document.getElementById("generateReportDiv").appendChild(collapsibleContainer);
-
-    // Add event listeners to save parameters on input change
-    const saveParameters = () => {
-      const datesInput = document.getElementById("fullRunDates").value;
-      const ringCountsInput = document.getElementById("fullRunRingCounts").value;
-      const mbpsInput = document.getElementById("fullRunMbps").value;
-      const improvementScoresInput = document.getElementById("fullRunImprovementScores").value;
-
-      localStorage.setItem("fullRunDates", datesInput);
-      localStorage.setItem("fullRunRingCounts", ringCountsInput);
-      localStorage.setItem("fullRunMbps", mbpsInput);
-      localStorage.setItem("fullRunImprovementScores", improvementScoresInput);
+  /**
+   * Sets up the Full Run form fields (loads saved values, persists on change).
+   * The form markup itself lives in index.html (#run-pane).
+   */
+  setupFullRunForm() {
+    const defaults = {
+      fullRunImprovementScores: "256,512,1024",
+      fullRunDates: "2034-08-19,2027-02-19",
+      fullRunRingCounts: "2,3,4,5,6",
+      fullRunMbps: "25,50,100",
     };
 
-    // Save on blur (when user clicks away) and Enter key press
-    ["fullRunDates", "fullRunRingCounts", "fullRunMbps", "fullRunImprovementScores"].forEach((id) => {
+    for (const [id, fallback] of Object.entries(defaults)) {
       const input = document.getElementById(id);
-      input.addEventListener("blur", saveParameters);
+      if (!input) continue;
+      input.value = localStorage.getItem(id) || fallback;
+      const persist = () => localStorage.setItem(id, input.value);
+      input.addEventListener("blur", persist);
       input.addEventListener("keydown", (e) => {
-        if (e.key === "Enter") {
-          saveParameters();
+        if (e.key === "Enter") persist();
+      });
+    }
+  }
+
+  /**
+   * Wires the top-bar mode tabs and left-rail icon buttons.
+   * Three modes: configure, report, run.
+   */
+  setupModeNavigation() {
+    this.activeMode = null;
+    const modeDrawer = document.getElementById("mode-drawer");
+    const configurePane = document.getElementById("configure-pane");
+    const runPane = document.getElementById("run-pane");
+    const reportPanel = document.getElementById("report-panel");
+
+    const setActiveButtons = (mode) => {
+      document.querySelectorAll("[data-mode]").forEach((btn) => {
+        btn.classList.toggle("active", btn.dataset.mode === mode);
+      });
+    };
+
+    const closeDrawer = () => {
+      modeDrawer.hidden = true;
+      modeDrawer.setAttribute("aria-hidden", "true");
+      configurePane.hidden = true;
+      runPane.hidden = true;
+    };
+
+    const closeReportPanel = () => {
+      reportPanel.hidden = true;
+      reportPanel.setAttribute("aria-hidden", "true");
+    };
+
+    const openMode = (mode) => {
+      // Toggle off if clicking the active mode again
+      if (this.activeMode === mode) {
+        this.activeMode = null;
+        setActiveButtons(null);
+        closeDrawer();
+        closeReportPanel();
+        return;
+      }
+      this.activeMode = mode;
+      setActiveButtons(mode);
+
+      if (mode === "configure" || mode === "run") {
+        closeReportPanel();
+        modeDrawer.hidden = false;
+        modeDrawer.setAttribute("aria-hidden", "false");
+        configurePane.hidden = mode !== "configure";
+        runPane.hidden = mode !== "run";
+      } else if (mode === "report") {
+        closeDrawer();
+        reportPanel.hidden = false;
+        reportPanel.setAttribute("aria-hidden", "false");
+        // Show a placeholder until generation finishes
+        const body = document.getElementById("report-panel-body");
+        if (body && !body.querySelector(".report")) {
+          body.innerHTML = `<p class="empty-state">Generating report from current configuration…</p>`;
         }
+        this.simMain.generateReport();
+      }
+    };
+
+    document.querySelectorAll("[data-mode]").forEach((btn) => {
+      btn.addEventListener("click", () => openMode(btn.dataset.mode));
+    });
+
+    document.querySelectorAll("[data-close-drawer]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        this.activeMode = null;
+        setActiveButtons(null);
+        closeDrawer();
+        closeReportPanel();
       });
     });
 
-    // Add the Full Run button
-    const fullRunButton = document.createElement("button");
-    fullRunButton.textContent = "Start Full Run";
-    fullRunButton.id = "startFullRun";
-    fullRunButton.classList = "large-button";
-    document.getElementById("generateReportDiv").appendChild(fullRunButton);
+    // Refresh report button
+    const refreshBtn = document.getElementById("report-refresh-btn");
+    if (refreshBtn) {
+      refreshBtn.addEventListener("click", () => this.simMain.generateReport());
+    }
+
+    // Open Configure by default so first-time users see the controls.
+    openMode("configure");
   }
+
+  /**
+   * Wires the in-page report panel (close button is already covered by data-close-drawer).
+   * Hook reserved for future deep-linking / event listeners.
+   */
+  setupReportPanel() {
+    // No-op for now — close & refresh wiring lives in setupModeNavigation.
+  }
+
+  /**
+   * Filter sliders by label text. Sections with no visible children collapse and hide.
+   */
+  setupSliderSearch() {
+    const search = document.getElementById("slider-search");
+    if (!search) return;
+    search.addEventListener("input", () => {
+      const q = search.value.trim().toLowerCase();
+      const sections = document.querySelectorAll(".slider-section");
+      sections.forEach((section) => {
+        const rows = section.querySelectorAll(".slider-container");
+        let anyVisible = false;
+        rows.forEach((row) => {
+          const text = (row.dataset.search || "").toLowerCase();
+          const match = !q || text.includes(q);
+          row.classList.toggle("filtered-out", !match);
+          if (match) anyVisible = true;
+        });
+        section.classList.toggle("filtered-out", !anyVisible);
+        // While searching, expand matching sections; restore on clear.
+        const content = section.querySelector(".slider-section-content");
+        const header = section.querySelector(".slider-section-header");
+        if (content && header) {
+          if (q && anyVisible) {
+            content.classList.add("active");
+            header.classList.add("expanded");
+          } else if (!q) {
+            // Leave existing state alone
+          }
+        }
+      });
+    });
+  }
+
+  /**
+   * Presets dropdown — save / load named snapshots of all slider values.
+   * Stored as { [presetName]: { [fullSliderId]: internalValue } } under "marslinkPresets".
+   */
+  setupPresets() {
+    const select = document.getElementById("presets-select");
+    const saveBtn = document.getElementById("save-preset-btn");
+    const deleteBtn = document.getElementById("delete-preset-btn");
+    if (!select || !saveBtn) return;
+
+    const STORAGE_KEY = "marslinkPresets";
+    const loadAll = () => {
+      try {
+        return JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+      } catch {
+        return {};
+      }
+    };
+    const saveAll = (presets) => localStorage.setItem(STORAGE_KEY, JSON.stringify(presets));
+
+    const refreshOptions = () => {
+      const presets = loadAll();
+      const current = select.value;
+      select.innerHTML = `<option value="">Presets…</option>`;
+      for (const name of Object.keys(presets)) {
+        const opt = document.createElement("option");
+        opt.value = name;
+        opt.textContent = name;
+        select.appendChild(opt);
+      }
+      if (current && presets[current]) select.value = current;
+    };
+
+    const snapshot = () => {
+      const snap = {};
+      for (const section in this.slidersData) {
+        for (const sliderId in this.slidersData[section]) {
+          const fullId = `${section}.${sliderId}`;
+          const input = this.sliders[section]?.[sliderId];
+          if (!input) continue;
+          // For radio groups, the "input" is a container; read the checked one.
+          if (input.classList && input.classList.contains("radio-container")) {
+            const checked = input.querySelector("input[type=radio]:checked");
+            snap[fullId] = checked ? checked.value : this.slidersData[section][sliderId].value;
+          } else {
+            snap[fullId] = input.value;
+          }
+        }
+      }
+      return snap;
+    };
+
+    const apply = (snap) => {
+      for (const [fullId, value] of Object.entries(snap)) {
+        const [section, sliderId] = fullId.split(".");
+        const input = this.sliders[section]?.[sliderId];
+        if (!input) continue;
+        if (input.classList && input.classList.contains("radio-container")) {
+          const radio = input.querySelector(`input[type=radio][value="${CSS.escape(String(value))}"]`);
+          if (radio) {
+            radio.checked = true;
+            radio.dispatchEvent(new Event("change", { bubbles: true }));
+          }
+        } else {
+          input.value = value;
+          // Fire input/change so listeners (and the numeric companion) sync.
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+          input.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      }
+    };
+
+    saveBtn.addEventListener("click", () => {
+      const name = prompt("Save current configuration as preset:");
+      if (!name) return;
+      const presets = loadAll();
+      presets[name] = snapshot();
+      saveAll(presets);
+      refreshOptions();
+      select.value = name;
+    });
+
+    deleteBtn?.addEventListener("click", () => {
+      const name = select.value;
+      if (!name) return;
+      if (!confirm(`Delete preset "${name}"?`)) return;
+      const presets = loadAll();
+      delete presets[name];
+      saveAll(presets);
+      refreshOptions();
+    });
+
+    select.addEventListener("change", () => {
+      const name = select.value;
+      if (!name) return;
+      const presets = loadAll();
+      if (presets[name]) apply(presets[name]);
+    });
+
+    refreshOptions();
+  }
+
 
   saveToJson(object, fileName) {
     // Convert the object to JSON
@@ -377,16 +568,24 @@ export class SimUi {
    */
   createSliders() {
     const slidersContainer = document.getElementById("sliders-container");
+    slidersContainer.innerHTML = "";
 
     for (const section in this.slidersData) {
+      // Section wrapper (so search filter can hide the whole group when empty)
+      const sectionWrapper = document.createElement("div");
+      sectionWrapper.className = "slider-section";
+
       const sectionHeader = document.createElement("h3");
       sectionHeader.className = "slider-section-header";
-      sectionHeader.textContent = section.replace(/_/g, " ").charAt(0).toUpperCase() + section.replace(/_/g, " ").slice(1);
-      slidersContainer.appendChild(sectionHeader);
+      const sectionLabel = section.replace(/_/g, " ");
+      sectionHeader.textContent = sectionLabel.charAt(0).toUpperCase() + sectionLabel.slice(1);
+      sectionWrapper.appendChild(sectionHeader);
 
       const sectionContent = document.createElement("div");
       sectionContent.className = "slider-section-content";
-      slidersContainer.appendChild(sectionContent);
+      sectionWrapper.appendChild(sectionContent);
+
+      slidersContainer.appendChild(sectionWrapper);
 
       this.sliders[section] = {};
       this.sliderContainers[section] = {};
@@ -411,7 +610,6 @@ export class SimUi {
             min = -Math.floor(steps / 2);
             max = Math.floor(steps / 2);
           } else {
-            // use the min max from data
             min = slider.min;
             max = slider.max;
           }
@@ -457,8 +655,10 @@ export class SimUi {
               : parseFloat(validSavedValue)
             : slider.value;
 
+        // ───── Row container ─────
         const sliderContainer = document.createElement("div");
         sliderContainer.className = "slider-container";
+        sliderContainer.dataset.search = `${slider.label || ""} ${sectionLabel}`.toLowerCase();
 
         // Check display condition
         if (slider.displayCondition) {
@@ -468,12 +668,19 @@ export class SimUi {
           }
         }
 
+        // ───── Top row: label + numeric input (range only) ─────
+        const rowTop = document.createElement("div");
+        rowTop.className = "slider-row-top";
+
         const label = document.createElement("label");
         label.setAttribute("for", fullSliderId);
         label.className = "slider-label";
         label.textContent = slider.label;
+        if (slider.description) label.title = slider.description;
+        rowTop.appendChild(label);
 
         let input;
+        let numericInput = null;
         let displayValue;
 
         if (slider.type === "select" || slider.type === "dropdown") {
@@ -484,9 +691,7 @@ export class SimUi {
             const optionElem = document.createElement("option");
             optionElem.value = option;
             optionElem.textContent = option;
-            if (option === sliderValue) {
-              optionElem.selected = true;
-            }
+            if (option === sliderValue) optionElem.selected = true;
             input.appendChild(optionElem);
           }
           displayValue = sliderValue;
@@ -499,9 +704,7 @@ export class SimUi {
             radio.name = fullSliderId;
             radio.value = option;
             radio.id = `${fullSliderId}-${option}`;
-            if (option === sliderValue) {
-              radio.checked = true;
-            }
+            if (option === sliderValue) radio.checked = true;
             const radioLabel = document.createElement("label");
             radioLabel.setAttribute("for", radio.id);
             radioLabel.textContent = option;
@@ -510,14 +713,11 @@ export class SimUi {
 
             radio.addEventListener("change", () => {
               if (radio.checked) {
-                const newValue = radio.value;
-                // No valueSpan to update for "radio"
-                this.updateValues(fullSliderId, newValue);
+                this.updateValues(fullSliderId, radio.value);
               }
             });
           });
           input = radioContainer;
-          // Do not set displayValue for "radio"
         } else {
           input = document.createElement("input");
           input.type = "range";
@@ -528,79 +728,129 @@ export class SimUi {
           input.step = step;
           input.value = sliderValue;
           displayValue = this.mapSliderValueToUserFacing(slider, sliderValue);
-        }
 
-        // Create valueSpan only if the slider type is not "radio"
-        let valueSpan;
-        if (slider.type !== "radio") {
-          valueSpan = document.createElement("span");
-          valueSpan.id = `${fullSliderId}-value`;
-          if (slider.type === "select" || slider.type === "dropdown") {
-            valueSpan.textContent = displayValue + slider.unit;
-          } else {
-            valueSpan.textContent = this.formatNumber(displayValue) + slider.unit;
+          // Inline editable numeric input (user-facing value)
+          numericInput = document.createElement("input");
+          numericInput.type = "number";
+          numericInput.className = "slider-value-input";
+          numericInput.id = `${fullSliderId}-value`;
+          numericInput.value = this.formatNumericValue(displayValue);
+          rowTop.appendChild(numericInput);
+
+          if ((slider.unit || "").trim()) {
+            const unitEl = document.createElement("span");
+            unitEl.className = "slider-unit";
+            unitEl.textContent = slider.unit.trim();
+            rowTop.appendChild(unitEl);
           }
         }
 
-        // Append elements to the slider container
-        sliderContainer.appendChild(label);
+        // For non-range types, no top row numeric — just the label is enough on the top.
+        sliderContainer.appendChild(rowTop);
         sliderContainer.appendChild(input);
-        if (slider.type !== "radio") {
-          sliderContainer.appendChild(valueSpan);
-        }
         sectionContent.appendChild(sliderContainer);
 
         this.sliders[section][sliderId] = input;
         this.sliderContainers[section][sliderId] = sliderContainer;
 
+        // ───── Wire change handlers ─────
         if (slider.type === "select" || slider.type === "dropdown") {
           input.addEventListener("change", () => {
-            const newValue = input.value;
-            valueSpan.textContent = newValue + slider.unit;
-            this.updateValues(fullSliderId, newValue);
+            this.updateValues(fullSliderId, input.value);
           });
         } else if (slider.type !== "radio") {
-          if (fullSliderId === "simulation.calctimeSec") {
-            // For calctimeSec, update display on input, but update value only on change (release)
-            input.addEventListener("input", () => {
-              let newValue = parseFloat(input.value);
-              let displayValue = this.mapSliderValueToUserFacing(slider, newValue);
-              valueSpan.textContent = this.formatNumber(displayValue) + slider.unit;
-            });
-            input.addEventListener("change", () => {
-              let newValue = parseFloat(input.value);
-              this.updateValues(fullSliderId, newValue);
-            });
-          } else {
-            input.addEventListener("input", () => {
-              let newValue = parseFloat(input.value);
-              let displayValue = this.mapSliderValueToUserFacing(slider, newValue);
-              valueSpan.textContent = this.formatNumber(displayValue) + slider.unit;
-              this.updateValues(fullSliderId, newValue);
+          const isCalcTime = fullSliderId === "simulation.calctimeSec";
+
+          // Slider → numeric input
+          const onSliderInput = (commit) => {
+            const newValue = parseFloat(input.value);
+            const userVal = this.mapSliderValueToUserFacing(slider, newValue);
+            if (numericInput && document.activeElement !== numericInput) {
+              numericInput.value = this.formatNumericValue(userVal);
+            }
+            if (commit) this.updateValues(fullSliderId, newValue);
+          };
+
+          input.addEventListener("input", () => onSliderInput(!isCalcTime));
+          if (isCalcTime) input.addEventListener("change", () => onSliderInput(true));
+
+          // Numeric input → slider
+          if (numericInput) {
+            const commitNumeric = () => {
+              const userVal = parseFloat(numericInput.value);
+              if (isNaN(userVal)) {
+                numericInput.value = this.formatNumericValue(this.mapSliderValueToUserFacing(slider, parseFloat(input.value)));
+                return;
+              }
+              const internal = this.clampInternalValue(this.mapUserFacingToSliderValue(slider, userVal), min, max);
+              input.value = internal;
+              const snappedUser = this.mapSliderValueToUserFacing(slider, internal);
+              numericInput.value = this.formatNumericValue(snappedUser);
+              this.updateValues(fullSliderId, internal);
+            };
+            numericInput.addEventListener("change", commitNumeric);
+            numericInput.addEventListener("keydown", (e) => {
+              if (e.key === "Enter") {
+                commitNumeric();
+                numericInput.blur();
+              }
             });
           }
         }
 
         slider.value =
-          slider.type === "select" || slider.type === "dropdown" || slider.type === "radio" ? sliderValue : parseFloat(sliderValue);
+          slider.type === "select" || slider.type === "dropdown" || slider.type === "radio"
+            ? sliderValue
+            : parseFloat(sliderValue);
       }
     }
 
-    // Add section toggle event listeners
+    // Section toggle handlers
     const headers = document.querySelectorAll(".slider-section-header");
-    headers.forEach((header) => {
+    headers.forEach((header, i) => {
       header.addEventListener("click", () => {
         const content = header.nextElementSibling;
-        if (content.classList.contains("active")) {
-          content.classList.remove("active");
-        } else {
-          document.querySelectorAll(".slider-section-content.active").forEach((activeContent) => {
-            activeContent.classList.remove("active");
-          });
-          content.classList.add("active");
-        }
+        const expanded = content.classList.toggle("active");
+        header.classList.toggle("expanded", expanded);
       });
+      // Open the first section by default for discoverability
+      if (i === 0) {
+        header.classList.add("expanded");
+        header.nextElementSibling.classList.add("active");
+      }
     });
+  }
+
+  /**
+   * Inverse of mapSliderValueToUserFacing — converts a user-typed value
+   * back into the internal slider position.
+   */
+  mapUserFacingToSliderValue(slider, userValue) {
+    if (slider.scale === "pow2") {
+      if (userValue <= 0) return slider.min;
+      return Math.round(Math.log2(userValue));
+    } else if (slider.scale === "pow10") {
+      if (userValue <= 0) return slider.min;
+      return Math.round(Math.log10(userValue));
+    }
+    return userValue;
+  }
+
+  clampInternalValue(value, min, max) {
+    return Math.min(max, Math.max(min, value));
+  }
+
+  /**
+   * Format a numeric value for display in the inline number input.
+   * Keeps small numbers precise; trims to 4 significant digits otherwise.
+   */
+  formatNumericValue(num) {
+    if (num === null || num === undefined || isNaN(num)) return "";
+    const abs = Math.abs(num);
+    if (abs === 0) return "0";
+    if (abs >= 1000) return Math.round(num).toString();
+    if (abs >= 1) return Number(num.toFixed(2)).toString();
+    return Number(num.toPrecision(3)).toString();
   }
 
   /**

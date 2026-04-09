@@ -1192,11 +1192,15 @@ export class SimMain {
     return summary;
   }
   /**
-   * Generates an HTML report from the stored reportData and opens it in a new tab.
+   * Generates the deployment report and renders it into the in-page #report-panel.
    */
   generateReport() {
     if (!this.missionProfiles) {
-      console.error("Report data not available. Run the simulation first.");
+      const body = document.getElementById("report-panel-body");
+      if (body) {
+        body.innerHTML = `<p class="empty-state">Waiting for simulation data… try again in a moment.</p>`;
+      }
+      console.warn("Report data not available yet.");
       return;
     }
     const costs = {
