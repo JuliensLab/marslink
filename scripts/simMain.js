@@ -574,6 +574,12 @@ export class SimMain {
       const fmtMbps = (v) => v >= 1000 ? `${(v / 1000).toFixed(1)} Gbps` : `${Math.round(v)} Mbps`;
       const fmtNum = (v) => v >= 1000 ? `${(v / 1000).toFixed(1)}` : `${Math.round(v)}`;
       const pct = (flow, cap) => cap > 0 ? `${Math.round(flow / cap * 100)}%` : "";
+      // Format min|avg|max with shared unit (chosen by the smallest value)
+      const fmtRange = (...vals) => {
+        const unit = Math.min(...vals) >= 1000 ? "Gbps" : "Mbps";
+        const fmt = unit === "Gbps" ? (v) => (v / 1000).toFixed(1) : (v) => Math.round(v);
+        return vals.map(fmt).join("|") + " " + unit;
+      };
       const showFlow = this.linksColors === "Flow";
 
       // Capacity data: inring link capacities per ring
@@ -582,32 +588,31 @@ export class SimMain {
       const earthCap = { side1: 0, side2: 0 };
       const marsCap = { side1: 0, side2: 0 };
 
-      // Planet links connect to 2 ring satellites — find the inring link capacity at each
-      // The planetLinks array has the 2 ground links; we need the inring links adjacent to those sats
-      // For now, use min inring as the per-side bottleneck capacity
-      if (earthInring.length > 0) {
-        const min = Math.min(...earthInring);
-        earthCap.side1 = min; earthCap.side2 = min;
-      }
-      if (marsInring.length > 0) {
-        const min = Math.min(...marsInring);
-        marsCap.side1 = min; marsCap.side2 = min;
-      }
+      // Per-side capacity = actual capacity of the 2 planet-to-ring links
+      const earthPlanetLinks = ringCapacities["ring_earth"]?.planetLinks || [];
+      const earthCaps = earthPlanetLinks.map((l) => l.cap).sort((a, b) => b - a);
+      earthCap.side1 = earthCaps[0] || 0;
+      earthCap.side2 = earthCaps[1] || 0;
+
+      const marsPlanetLinks = ringCapacities["ring_mars"]?.planetLinks || [];
+      const marsCaps = marsPlanetLinks.map((l) => l.cap).sort((a, b) => b - a);
+      marsCap.side1 = marsCaps[0] || 0;
+      marsCap.side2 = marsCaps[1] || 0;
 
       // Flow data: actual flow on planet-to-satellite links
       const earthFlow = { side1: 0, side2: 0 };
       const marsFlow = { side1: 0, side2: 0 };
       if (networkData?.links) {
-        const earthLinks = networkData.links
-          .filter((l) => l.fromId === "Earth" || l.toId === "Earth")
-          .map((l) => (l.gbpsFlow || 0) * 1000).sort((a, b) => b - a);
-        earthFlow.side1 = earthLinks[0] || 0;
-        earthFlow.side2 = earthLinks[1] || 0;
-        const marsLinks = networkData.links
-          .filter((l) => l.fromId === "Mars" || l.toId === "Mars")
-          .map((l) => (l.gbpsFlow || 0) * 1000).sort((a, b) => b - a);
-        marsFlow.side1 = marsLinks[0] || 0;
-        marsFlow.side2 = marsLinks[1] || 0;
+        const getFlows = (planetName) => {
+          const flows = networkData.links
+            .filter((l) => l.fromId === planetName || l.toId === planetName)
+            .map((l) => (l.gbpsFlow || 0) * 1000).sort((a, b) => b - a);
+          return { side1: flows[0] || 0, side2: flows[1] || 0 };
+        };
+        const ef = getFlows("Earth");
+        earthFlow.side1 = ef.side1; earthFlow.side2 = ef.side2;
+        const mf = getFlows("Mars");
+        marsFlow.side1 = mf.side1; marsFlow.side2 = mf.side2;
       }
 
       // Pick values based on mode
@@ -634,11 +639,61 @@ export class SimMain {
         return `${"-".repeat(padL)}${core}${"-".repeat(padR)}  ${label}\n`;
       };
 
+      // Adapted rings pipe string (shared by compact and expanded)
+      const W = 17;
+      const pipeCount = rs ? Math.min(rs.routeCount, W) : 0;
+      const pad = rs ? Math.floor((W - pipeCount) / 2) : 0;
+      const pipes = rs ? " ".repeat(pad) + "\u2502".repeat(pipeCount) : "";
+
+      // Active route count (flow mode)
+      let activeRoutes = 0;
+      if (showFlow && networkData?.links) {
+        activeRoutes = networkData.links.filter((l) => l.gbpsFlow > 0 && (
+          (l.fromId.startsWith("ring_earth") && l.toId.startsWith("ring_adapt")) ||
+          (l.fromId.startsWith("ring_adapt") && l.toId.startsWith("ring_earth"))
+        )).length;
+      }
+      const adaptedFlowPct = rs && rs.totalThroughput > 0 ? pct(actualFlowMbps, rs.totalThroughput) : "";
+
+      // Bottleneck analysis (always based on capacity)
+      const segments = [];
+      if (earthCapTotal > 0) segments.push({ name: "earth ring", cap: earthCapTotal });
+      if (rs) segments.push({ name: "adapted rings", cap: rs.totalThroughput });
+      if (marsCapTotal > 0) segments.push({ name: "mars ring", cap: marsCapTotal });
+      let bottleneckLine = "";
+      if (segments.length > 1) {
+        const minCap = Math.min(...segments.map((s) => s.cap));
+        const maxCap = Math.max(...segments.map((s) => s.cap));
+        if (maxCap > 0 && (maxCap - minCap) / maxCap > 0.01) {
+          const bottleneck = segments.reduce((a, b) => (a.cap < b.cap ? a : b));
+          bottleneckLine = `Bottleneck: ${bottleneck.name}`;
+        } else {
+          bottleneckLine = `Balanced system`;
+        }
+      }
+
       html += `<div style="margin-top: 10px;">`;
+
+      // --- Toggle ---
       html += `<div style="cursor: pointer; display: flex; align-items: center;">`;
-      html += `<span id="capacity-arrow">▼</span> <span>Capacity Details</span>`;
+      html += `<span id="capacity-arrow">▶</span> <span>Expand</span>`;
       html += `</div>`;
-      html += `<div id="capacity-content" style="display: block; margin-top: 10px;">`;
+
+      // --- Compact summary (visible when collapsed) ---
+      html += `<pre id="capacity-compact" style="font-family: monospace; font-size: 11px; line-height: 1.4; margin: 0; white-space: pre;">`;
+      if (showFlow) {
+        html += planetLine(earth.side1, "\u25CF", earth.side2, `${fmtMbps(earthTotal)}, ${pct(earthTotal, earthCapTotal)}`, -2);
+        if (rs) html += `${pipes}  ${fmtMbps(actualFlowMbps)}, ${adaptedFlowPct}\n`;
+        html += planetLine(mars.side1, "\u2022", mars.side2, `${fmtMbps(marsTotal)}, ${pct(marsTotal, marsCapTotal)}`, 2);
+      } else {
+        html += planetLine(earth.side1, "\u25CF", earth.side2, fmtMbps(earthTotal), -2);
+        if (rs) html += `${pipes}  ${fmtMbps(rs.totalThroughput)}\n`;
+        html += planetLine(mars.side1, "\u2022", mars.side2, fmtMbps(marsTotal), 2);
+      }
+      if (actualFlowMbps > 0) html += `Flow: ${fmtMbps(actualFlowMbps)}\n`;
+      if (bottleneckLine) html += `${bottleneckLine}\n`;
+      html += `</pre>`;
+      html += `<div id="capacity-content" style="display: none; margin-top: 4px;">`;
       html += `<pre style="font-family: monospace; font-size: 11px; line-height: 1.4; margin: 0; white-space: pre;">`;
 
       // Earth section
@@ -646,7 +701,7 @@ export class SimMain {
         if (!showFlow && earthInring.length > 0) {
           const eMin = Math.min(...earthInring), eMax = Math.max(...earthInring);
           const eAvg = earthInring.reduce((a, b) => a + b, 0) / earthInring.length;
-          html += `ring Earth ${fmtNum(eMin)}|${fmtNum(eAvg)}|${fmtNum(eMax)} Mbps\n`;
+          html += `ring Earth ${fmtRange(eMin, eAvg, eMax)}\n`;
         }
         const earthLabel = showFlow
           ? `Earth (${fmtMbps(earthTotal)}, ${pct(earthTotal, earthCapTotal)})`
@@ -656,18 +711,14 @@ export class SimMain {
 
       // Adapted rings section
       if (rs) {
-        const W = 17;
-        const pipeCount = Math.min(rs.routeCount, W);
-        const pad = Math.floor((W - pipeCount) / 2);
-        const pipes = " ".repeat(pad) + "\u2502".repeat(pipeCount);
         if (showFlow) {
-          const adaptedFlowPct = rs.totalThroughput > 0 ? pct(actualFlowMbps, rs.totalThroughput) : "";
-          html += `${pipes}  ${fmtMbps(actualFlowMbps)} (${adaptedFlowPct})\n`;
-          html += `${pipes}  ${rs.routeCount} routes\n`;
+          html += `${pipes}  ${fmtMbps(actualFlowMbps)}, ${adaptedFlowPct}\n`;
+          html += `${pipes}  ${activeRoutes}/${rs.routeCount} routes active\n`;
+          html += `${pipes}  ${fmtRange(rs.minThroughput, rs.avgThroughput, rs.maxThroughput)}\n`;
         } else {
           html += `${pipes}  ${fmtMbps(rs.totalThroughput)}\n`;
           html += `${pipes}  ${rs.routeCount} routes\n`;
-          html += `${pipes}  ${rs.minThroughput.toFixed(1)}|${rs.avgThroughput.toFixed(1)}|${rs.maxThroughput.toFixed(1)} Mbps\n`;
+          html += `${pipes}  ${fmtRange(rs.minThroughput, rs.avgThroughput, rs.maxThroughput)}\n`;
         }
         html += `${pipes}  ${(rs.minLatency / 60).toFixed(1)}|${(rs.avgLatency / 60).toFixed(1)}|${(rs.maxLatency / 60).toFixed(1)} min\n`;
       }
@@ -681,27 +732,12 @@ export class SimMain {
         if (!showFlow && marsInring.length > 0) {
           const mMin = Math.min(...marsInring), mMax = Math.max(...marsInring);
           const mAvg = marsInring.reduce((a, b) => a + b, 0) / marsInring.length;
-          html += `ring Mars ${fmtNum(mMin)}|${fmtNum(mAvg)}|${fmtNum(mMax)} Mbps\n`;
+          html += `ring Mars ${fmtRange(mMin, mAvg, mMax)}\n`;
         }
       }
 
-      // Bottleneck analysis (always based on capacity)
-      const segments = [];
-      if (earthCapTotal > 0) segments.push({ name: "earth ring", cap: earthCapTotal });
-      if (rs) segments.push({ name: "adapted rings", cap: rs.totalThroughput });
-      if (marsCapTotal > 0) segments.push({ name: "mars ring", cap: marsCapTotal });
-      if (segments.length > 1) {
-        html += `\n`;
-        if (actualFlowMbps > 0) html += `Flow: ${fmtMbps(actualFlowMbps)}\n`;
-        const minCap = Math.min(...segments.map((s) => s.cap));
-        const maxCap = Math.max(...segments.map((s) => s.cap));
-        if (maxCap > 0 && (maxCap - minCap) / maxCap > 0.01) {
-          const bottleneck = segments.reduce((a, b) => (a.cap < b.cap ? a : b));
-          html += `Bottleneck: ${bottleneck.name}`;
-        } else {
-          html += `Balanced system`;
-        }
-      }
+      if (actualFlowMbps > 0) html += `\nFlow: ${fmtMbps(actualFlowMbps)}\n`;
+      if (bottleneckLine) html += bottleneckLine;
 
       html += `</pre>`;
       html += `</div>`;

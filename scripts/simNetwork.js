@@ -81,9 +81,10 @@ export class SimNetwork {
       positions[name] = positionMap.get(name) || null;
     });
 
-    // Helper Function to Add Edges (Bidirectional capacity)
-    // Links are undirected — flow can use either direction.
-    // Output reports the absolute flow on each link (capped at capacity).
+    // Helper Function to Add Edges (Bidirectional capacity for undirected links)
+    // Both directions get capacity C — max-flow selects whichever direction is needed.
+    // The NET directed flow on each physical link is still ≤ C after the algorithm
+    // completes (because any real reverse flow cancels forward flow).
     const addEdge = (fromId, toId, capacity, latency) => {
       if (!graph[fromId].includes(toId)) {
         graph[fromId].push(toId);
@@ -92,10 +93,10 @@ export class SimNetwork {
         graph[toId].push(fromId);
       }
       const edgeKey = `${fromId}_${toId}`;
-      capacities[edgeKey] = capacity;
-      latencies[edgeKey] = latency;
       const reverseEdgeKey = `${toId}_${fromId}`;
+      capacities[edgeKey] = capacity;
       capacities[reverseEdgeKey] = capacity;
+      latencies[edgeKey] = latency;
       latencies[reverseEdgeKey] = latency;
     };
 
@@ -162,13 +163,14 @@ export class SimNetwork {
       const forwardEdgeKey = `${fromNodeId}_${toNodeId}`;
       const reverseEdgeKey = `${toNodeId}_${fromNodeId}`;
 
-      // Calculate flow on this link (forward-only, capped at link capacity)
-      const forwardFlow = flows[forwardEdgeKey] || 0;
-      const reverseFlow = flows[reverseEdgeKey] || 0;
-      const absFlow = Math.min(Math.abs(forwardFlow - reverseFlow), gbpsCapacity);
+      // Net directed flow: flows[forwardEdgeKey] already contains the NET signed
+      // flow (positive = fromId→toId, negative = toId→fromId) because residual
+      // updates at augmentation time naturally compute it.
+      const netFlow = flows[forwardEdgeKey] || 0;
+      const absFlow = Math.abs(netFlow);
 
       if (absFlow > 0) {
-        const flowDir = forwardFlow >= reverseFlow;
+        const flowDir = netFlow >= 0;
         outputLinks.push({
           fromId: flowDir ? fromId : toId,
           toId: flowDir ? toId : fromId,

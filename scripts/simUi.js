@@ -774,19 +774,26 @@ export class SimUi {
       const arrow = document.getElementById(`${id}-arrow`);
       if (!arrow) continue;
       const content = document.getElementById(`${id}-content`);
+      const compact = document.getElementById(`${id}-compact`);
       // Restore previous state
       const saved = this._arrowStates[id];
       if (saved) {
         content.style.display = saved;
         arrow.textContent = saved === "none" ? "▶" : "▼";
+        if (compact) compact.style.display = saved === "none" ? "block" : "none";
       }
+      const label = arrow.parentElement.querySelector("span:last-child");
       arrow.parentElement.addEventListener("click", () => {
         if (content.style.display === "none") {
           content.style.display = "block";
           arrow.textContent = "▼";
+          if (compact) compact.style.display = "none";
+          if (label) label.textContent = "Compact";
         } else {
           content.style.display = "none";
           arrow.textContent = "▶";
+          if (compact) compact.style.display = "block";
+          if (label) label.textContent = "Expand";
         }
       });
     }
