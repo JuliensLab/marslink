@@ -82,6 +82,9 @@ export class SimTime {
     if (typeof factor !== "number" || isNaN(factor)) {
       throw new Error("Time acceleration factor must be a number.");
     }
+    if (!isFinite(factor)) {
+      throw new Error("Time acceleration factor must be finite.");
+    }
     this.timeAccelerationFactor = factor;
   }
 }

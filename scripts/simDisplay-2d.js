@@ -479,8 +479,6 @@ export class SimDisplay {
       const maxFlow = flows.length > 0 ? Math.max(...flows) : 1;
       const minFlow = flows.length > 0 ? Math.min(...flows) : 0;
 
-      console.log("Max flow:", maxFlow, "Min flow:", minFlow);
-
       const interpolateColor = (t) => {
         const colMin = {
           r: (this.styles.links.active.colormin >> 16) & 0xff,

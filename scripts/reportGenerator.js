@@ -44,6 +44,10 @@ function formatNumber(num, precision = 0) {
   }
 }
 
+function esc(str) {
+  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
 export async function generateReport(missionProfiles, resultTrees, costs, satellites) {
   // remove
   // const costs = {
@@ -53,8 +57,6 @@ export async function generateReport(missionProfiles, resultTrees, costs, satell
   //   laserPortsPerSatellite: this.simLinkBudget.maxLinksPerSatellite,
   // };
 
-  console.log("missionProfiles", missionProfiles);
-  console.log("resultTrees", resultTrees);
   const response = await fetch("reportTemplate.html");
   let template = await response.text();
 
@@ -64,7 +66,6 @@ export async function generateReport(missionProfiles, resultTrees, costs, satell
     if (!actualSatCountPerRing[sat.ringName]) actualSatCountPerRing[sat.ringName] = 0;
     actualSatCountPerRing[sat.ringName]++;
   });
-  console.log("Actual satellites per ring:", actualSatCountPerRing);
 
   let totalsSections = "";
   totalsSections += `<div class="totals-section">`;
@@ -119,7 +120,7 @@ export async function generateReport(missionProfiles, resultTrees, costs, satell
   totalsSections += `<th>Deployment Flights</th>`;
   totalsSections += `<th>Tanker Flights</th>`;
   totalsSections += `<th>Sats / Deployment Flight</th>`;
-  for (let propellantType of allPropellantTypes) totalsSections += `<th>${propellantType} (t)</th>`;
+  for (let propellantType of allPropellantTypes) totalsSections += `<th>${esc(propellantType)} (t)</th>`;
   totalsSections += `</tr>`;
 
   let totalDeploymentFlights_count = 0;
@@ -132,10 +133,8 @@ export async function generateReport(missionProfiles, resultTrees, costs, satell
     const totalTankerFlightsForOrbit = orbitData.tankersPerFlight * orbitData.deploymentFlights_count;
     totalTankerFlights += totalTankerFlightsForOrbit;
 
-    console.log(`Orbit ${orbitId}: ${orbitData.satCount} satellites`);
-
     totalsSections += `<tr>`;
-    totalsSections += `<td>${orbitId}</td>`;
+    totalsSections += `<td>${esc(orbitId)}</td>`;
     totalsSections += `<td>${orbitData.satCount.toLocaleString()}</td>`;
     totalsSections += `<td>${(orbitData.satCount * costs.laserPortsPerSatellite).toLocaleString()}</td>`;
     totalsSections += `<td>${orbitData.deploymentFlights_count.toLocaleString()}</td>`;
@@ -149,8 +148,6 @@ export async function generateReport(missionProfiles, resultTrees, costs, satell
     }
     totalsSections += `</tr>`;
   }
-
-  console.log("Total satellites in deployment report:", totalSatCount);
 
   totalsSections += `<tr>`;
   totalsSections += `<th>Totals</th>`;
@@ -180,7 +177,7 @@ export async function generateReport(missionProfiles, resultTrees, costs, satell
 
   // Add headers for each propellant type
   for (let propellantType of allPropellantTypes) {
-    totalsSections += `<th>${propellantType}</th>`;
+    totalsSections += `<th>${esc(propellantType)}</th>`;
   }
   totalsSections += `<th>Total</th></tr>`;
 
@@ -204,14 +201,6 @@ export async function generateReport(missionProfiles, resultTrees, costs, satell
   }
   const tankerCapacity_kg = 100000; // kg per tanker launch
   const calculatedTankerCount = Math.ceil(total_tankerPropellant_kg / tankerCapacity_kg);
-  console.log(
-    "Total tanker propellant:",
-    total_tankerPropellant_kg,
-    "kg, Tanker capacity:",
-    tankerCapacity_kg,
-    "kg, Calculated tanker count:",
-    calculatedTankerCount
-  );
 
   // Process each orbit
   for (const [orbitId, orbitData] of Object.entries(orbits)) {
@@ -228,7 +217,6 @@ export async function generateReport(missionProfiles, resultTrees, costs, satell
         ? orbitData.propellant[propellantType].selfPropulsion_kg + orbitData.propellant[propellantType].tankerPropellant_kg
         : 0;
       const cost = (mass_kg * (propellantCostsPerKg[propellantType] || 0)) / 1000000; // Convert to $M
-      console.log(orbitId, propellantType, propellantCostsPerKg[propellantType], mass_kg, cost);
       propellantCostsForOrbit[propellantType] = cost;
       totalPropellantCost += cost;
       grandTotalPropellantCosts[propellantType] += cost;
@@ -237,7 +225,7 @@ export async function generateReport(missionProfiles, resultTrees, costs, satell
     const totalCostForOrbit = starshipCost + tankerCost + satelliteCost + laserCost + totalPropellantCost;
     // Add row for this orbit (updated)
     totalsSections += `<tr>`;
-    totalsSections += `<td>${orbitId}</td>`;
+    totalsSections += `<td>${esc(orbitId)}</td>`;
     totalsSections += `<td>${formatNumber(starshipCost)}</td>`;
     totalsSections += `<td>${formatNumber(tankerCost)}</td>`;
     totalsSections += `<td>${formatNumber(satelliteCost)}</td>`;
@@ -261,15 +249,6 @@ export async function generateReport(missionProfiles, resultTrees, costs, satell
   grandTotalTankerCost = calculatedTankerCount * costs.costPerLaunchMillionUSD;
   const tankerCostAdjustment = grandTotalTankerCost - plannedTankerCost;
   grandTotalCostAll += tankerCostAdjustment;
-
-  console.log(
-    "Planned tanker cost:",
-    plannedTankerCost,
-    "Adjusted tanker cost:",
-    grandTotalTankerCost,
-    "Adjustment:",
-    tankerCostAdjustment
-  );
 
   // Add grand total row
   totalsSections += `<tr>`;
@@ -295,7 +274,7 @@ export async function generateReport(missionProfiles, resultTrees, costs, satell
   totalsSections += `<tr><th>Propellant Type</th><th>Cost ($ per kg)</th></tr>`;
   for (let propellantType of allPropellantTypes) {
     const cost = propellantCostsPerKg[propellantType] || 0;
-    totalsSections += `<tr><td>${propellantType}</td><td>${cost.toFixed(2)}</td></tr>`;
+    totalsSections += `<tr><td>${esc(propellantType)}</td><td>${cost.toFixed(2)}</td></tr>`;
   }
   totalsSections += `</table>`;
 
@@ -317,7 +296,7 @@ export async function generateReport(missionProfiles, resultTrees, costs, satell
   let orbitSections = "";
   resultTrees.forEach((orbitTree) => {
     orbitSections += `<div class="orbit-section">`;
-    orbitSections += `<h2>${orbitTree.ringName}</h2>`;
+    orbitSections += `<h2>${esc(orbitTree.ringName)}</h2>`;
     const propellants = {};
     for (let data of Object.values(orbitTree.vehicles)) {
       if (!Object.keys(propellants).includes(data.propellantType))
@@ -330,7 +309,7 @@ export async function generateReport(missionProfiles, resultTrees, costs, satell
     orbitSections += `<table>`;
     orbitSections += `<tr><th>Propellant type</th><th>Propellant used for<br>one deployment flight (t)</th><th>Propellant used for<br>all ${orbitTree.deploymentFlights_count} deployment flights (t)</th></tr>`;
     for (let [propellantType, data] of Object.entries(propellants))
-      orbitSections += `<tr><td>${propellantType}</td><td>${Math.round(
+      orbitSections += `<tr><td>${esc(propellantType)}</td><td>${Math.round(
         (data.selfPropulsion_kg + data.tankerPropellant_kg) / 1000
       ).toLocaleString()}</td><td>${Math.round(
         (orbitTree.deploymentFlights_count * (data.selfPropulsion_kg + data.tankerPropellant_kg)) / 1000
@@ -341,7 +320,7 @@ export async function generateReport(missionProfiles, resultTrees, costs, satell
     orbitSections += `Table below valid for one deployment flight.`;
     orbitSections += `<tr><th>Vehicle</th><th>Propellant type</th><th>ISP (s)</th><th>Empty mass<br>(t)</th><th>Propellant used for<br>self propulsion (t)</th><th>Payload</th></tr>`;
     for (let [vehicleId, data] of Object.entries(orbitTree.vehicles))
-      orbitSections += `<tr><td>${vehicleId}${data.count ? " x" + data.count : ""}</td><td>${data.propellantType}</td><td>${
+      orbitSections += `<tr><td>${esc(vehicleId)}${data.count ? " x" + data.count : ""}</td><td>${esc(data.propellantType)}</td><td>${
         data.isp_s
       }</td><td>${
         data.count ? data.dryMass_kg / 1000 + " (single)<br>" + (data.count * data.dryMass_kg) / 1000 + " (all)" : data.dryMass_kg / 1000
@@ -349,11 +328,10 @@ export async function generateReport(missionProfiles, resultTrees, costs, satell
         data.count
           ? data.propellantLoaded_kg / 1000 + " (single)<br>" + (data.count * data.propellantLoaded_kg) / 1000 + " (all)"
           : data.propellantLoaded_kg / 1000
-      }</td><td>${getPayloadForVehicle(orbitTree.vehicles, vehicleId)}</td></tr>`;
+      }</td><td>${esc(getPayloadForVehicle(orbitTree.vehicles, vehicleId))}</td></tr>`;
     orbitSections += `</table>`;
     orbitSections += `</div>`;
     orbitSections += `<div class="console tree">`;
-    console.log(orbitTree.vehicles);
     for (let tree of orbitTree.trees) {
       orbitSections += printTree("&nbsp;", orbitTree.vehicles, tree, 0).join("<br>");
       orbitSections += "<br><br>";

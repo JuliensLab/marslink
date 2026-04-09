@@ -83,8 +83,7 @@ export class SimDeployment {
     }
     if (!this.earth.name) {
       throw new Error("Earth not found in planets array.");
-    } else {
-    } //console.log("Earth", JSON.stringify(this.earth, null, 2));
+    }
 
     if (!starshipPerformance[variant]) {
       throw new Error(`Invalid Starship variant: ${variant}. Choose from 'flight3', 'starship2', or 'starship3'.`);
@@ -106,6 +105,7 @@ export class SimDeployment {
       ring_mars: emptyMass + ringPorts.ring_mars * laserTerminalMass,
       circular_rings: emptyMass + ringPorts.circular_rings * laserTerminalMass,
       eccentric_rings: emptyMass + ringPorts.eccentric_rings * laserTerminalMass,
+      adapted_rings: emptyMass + (ringPorts.adapted_rings || 0) * laserTerminalMass,
     };
     // Update the vehicle properties to the maximum dry mass for compatibility
     this.vehicleProperties.satellite.dryMass_kg = Math.max(...Object.values(this.dryMasses));
@@ -116,6 +116,7 @@ export class SimDeployment {
     if (ringName === "ring_mars") return this.dryMasses.ring_mars;
     if (ringName.startsWith("ring_circ")) return this.dryMasses.circular_rings;
     if (ringName.startsWith("ring_ecce")) return this.dryMasses.eccentric_rings;
+    if (ringName.startsWith("ring_adapt")) return this.dryMasses.adapted_rings;
     return this.satelliteEmptyMass; // fallback
   }
 
@@ -334,11 +335,6 @@ export class SimDeployment {
     // get vehicle propellant already used in future maneuvers
     const usedPropellantMass_kg = Math.ceil(this.getUsedPropellantMass_kg(vehicles, vehicleId));
     const maxPropellantForThisManeuver_kg = vehicles[vehicleId].propellantCapacity_kg - usedPropellantMass_kg;
-    // console.log("vehicle", vehicleId, JSON.stringify(vehicles[vehicleId], null, 2));
-    // console.log("usedPropellantMass_kg", usedPropellantMass_kg);
-    // console.log("vehicles[vehicleId].propellantCapacity_kg", vehicles[vehicleId].propellantCapacity_kg);
-    // console.log("maxPropellantForThisManeuver_kg", maxPropellantForThisManeuver_kg);
-    // console.log("propellantRequired_kg", propellantRequired_kg);
     if (propellantRequired_kg > maxPropellantForThisManeuver_kg) {
       // booster flight required, just use the propellant capacity of the vehicle
       const secondStage_usedPropellant_kg = maxPropellantForThisManeuver_kg;
@@ -441,8 +437,6 @@ export class SimDeployment {
     this.addManeuverByPropellantRequired(vehicles, vehicleId, "Station keeping", argon_kg);
     sat.stationKeepingArgon_kg = argon_kg; // for reporting
     sat.propellantCapacity_kg = Math.max(sat.propellantCapacity_kg, sat.propellantLoaded_kg);
-
-    // console.log(`${vehicleId}: Station-keeping argon = ${argon_kg} kg (${total_annual_dv_ms.toFixed(1)} m/s/yr)`);
   }
 
   /**
@@ -464,8 +458,6 @@ export class SimDeployment {
     this.addManeuverByDeltaVRequired(vehicles, vehicleId, "Deorbit burn 2 (circularization at Earth)", deorbitDeltaV2);
     this.addManeuverByDeltaVRequired(vehicles, vehicleId, "Deorbit burn 1 (departure from ring)", deorbitDeltaV1);
     this.addManeuverByDeltaVRequired(vehicles, vehicleId, "Deorbit inclination change", outbound.deltaV_inclination);
-
-    // console.log(`${vehicleId}: Deorbit Δv = ${(deorbitDeltaV1 + deorbitDeltaV2 + outbound.deltaV_inclination).toFixed(1)} km/s`);
   }
 
   /**
@@ -477,7 +469,6 @@ export class SimDeployment {
     const results_by_orbit = [];
     for (const targetOrbitElements of targetOrbitElementsArray) {
       if (targetOrbitElements == null) {
-        // console.log("targetOrbitElements is null, skipping");
         continue;
       }
       let counter = 0;
@@ -487,18 +478,7 @@ export class SimDeployment {
         if (counter++ > 10) throw new Error("Too many iterations");
         missionProfile = this.getMissionProfileOneOrbit(targetOrbitElements, maxSatCountPerDeploymentFlight_fromLoop);
         if (missionProfile.error) {
-          // console.log(
-          //   "Error: ",
-          //   missionProfile.excess,
-          //   "with ",
-          //   missionProfile.satCountPerDeploymentFlight,
-          //   "now using ",
-          //   missionProfile.satCountPerDeploymentFlight - 1,
-          //   "satellites per deployment flight"
-          // );
           maxSatCountPerDeploymentFlight_fromLoop = missionProfile.satCountPerDeploymentFlight - 1;
-        } else {
-          // console.log("OK, using ", missionProfile.result.satCountPerDeploymentFlight);
         }
         if (maxSatCountPerDeploymentFlight_fromLoop <= 0) {
           throw new Error("Max satellites per deployment flight is less than 1");
@@ -513,7 +493,6 @@ export class SimDeployment {
         orbits: missionProfile.result.orbits,
       };
       results_by_orbit.push(result);
-      // console.log(result);
     }
     return { byOrbit: results_by_orbit };
   }
@@ -585,13 +564,10 @@ export class SimDeployment {
 
     // compute number of tanker launches required
     const totalStarshipPropellantRequired_kg = this.getUsedPropellantMass_kg(vehicles, "Starship");
-    // console.log("totalStarshipPropellantRequired_kg", totalStarshipPropellantRequired_kg);
     const tankerLaunchesPerDeploymentFlight_count = Math.ceil(
       totalStarshipPropellantRequired_kg / this.vehicleProperties.tanker.tankerPropellantCapacity_kg
     );
-    // console.log("tankerLaunchesPerDeploymentFlight_count", tankerLaunchesPerDeploymentFlight_count);
     const tankerPropellantRequired_kg = totalStarshipPropellantRequired_kg / tankerLaunchesPerDeploymentFlight_count;
-    // console.log("tankerLaunchesPerDeploymentFlight_count", tankerLaunchesPerDeploymentFlight_count);
     for (let i = tankerLaunchesPerDeploymentFlight_count - 1; i >= 0; i--) {
       this.addVehicle(vehicles, `Tanker${i}`, this.vehicleProperties.tanker);
       this.addManeuverByPropellantRequired(

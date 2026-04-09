@@ -27,11 +27,14 @@ export class SimLinkBudget {
     };
 
     this.techImprovementFactor = Math.pow(2, technologyConfig["laser_technology.improvement-factor"]);
-    console.log("//// this.techImprovementFactor", this.techImprovementFactor);
+
+    // Solar exclusion: sun radius * margin multiplier (0 = disabled)
+    const margin = technologyConfig["simulation.solarExclusionMargin"] || 0;
+    this.solarExclusionRadiusAU = SIM_CONSTANTS.SUN_RADIUS_AU * margin;
+    this.solarExclusionRadiusSqAU = this.solarExclusionRadiusAU * this.solarExclusionRadiusAU;
 
     // Invalidate Gbps cache when tech config changes
-    this._gbpsCache = new Float64Array(1024);
-    this._gbpsCacheValid = new Uint8Array(1024);
+    this._gbpsCache = new Map();
     // Precompute constant factor: techImprovementFactor * baseGbps * baseDistanceKm²
     this._gbpsFactor = this.techImprovementFactor * this.baseGbps * this.baseDistanceKm * this.baseDistanceKm;
   }
@@ -44,17 +47,11 @@ export class SimLinkBudget {
   // Bucketed cache: distances rounded to 100km share the same result
   calculateGbps(distanceKm) {
     if (isNaN(distanceKm) || distanceKm <= 0) return 0;
-    const bucket = (distanceKm / 100) | 0; // integer bucket index
-    if (bucket < 1024 && this._gbpsCacheValid && this._gbpsCacheValid[bucket]) {
-      return this._gbpsCache[bucket];
-    }
-    const result = this._gbpsFactor
-      ? this._gbpsFactor / (distanceKm * distanceKm)
-      : this.techImprovementFactor * this.baseGbps * Math.pow(this.baseDistanceKm / distanceKm, 2);
-    if (bucket < 1024 && this._gbpsCacheValid) {
-      this._gbpsCache[bucket] = result;
-      this._gbpsCacheValid[bucket] = 1;
-    }
+    const bucket = (distanceKm / 100) | 0; // 100km buckets
+    const cached = this._gbpsCache.get(bucket);
+    if (cached !== undefined) return cached;
+    const result = this._gbpsFactor / (distanceKm * distanceKm);
+    this._gbpsCache.set(bucket, result);
     return result;
   }
 

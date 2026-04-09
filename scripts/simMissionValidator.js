@@ -228,8 +228,6 @@ export class SimMissionValidator {
   displayTrees(vehicles, trees) {
     for (const tree of trees) {
       const stringArray = printTree(" ", vehicles, tree, 0);
-      //for (let string of stringArray) console.log(string);
-      console.log(stringArray.join("\n") + "\n\n");
     }
   }
 }

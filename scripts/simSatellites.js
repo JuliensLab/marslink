@@ -67,7 +67,6 @@ export class SimSatellites {
     for (let config of satellitesConfig) newSatellites.push(...this.generateSatellites(config));
     this.satellites = newSatellites.slice(0, this.maxSatCount);
     this.setOrbitalElements(satellitesConfig);
-    // console.log(`${this.satellites.length} SATELLITES`);
   }
 
   setOrbitalElements(satellitesConfig) {
@@ -82,7 +81,6 @@ export class SimSatellites {
       }
     }
     this.orbitalElements = newOrbitalElements;
-    console.log(this.orbitalElements);
 
     // Precompute ring crossings
     this.ringCrossings = new Map();
@@ -109,7 +107,6 @@ export class SimSatellites {
     this.computeSuitableRanges("earth");
     this.computeSuitableRanges("mars");
 
-    console.log(this.ringCrossings);
   }
 
   computeSuitableRanges(target) {
@@ -375,14 +372,11 @@ export class SimSatellites {
       const sourceDist = sourcePositions[0].distanceToSun;
       const targetDist = targetPositions[0].distanceToSun;
       if (sourceDist > targetDist) {
-        // console.log(`No crossings. Source (${sourceDist}) > Target (${targetDist}). Outside.`);
         outside = [0, 360];
       } else {
-        // console.log(`No crossings. Source (${sourceDist}) <= Target (${targetDist}). Inside.`);
         inside = [0, 360];
       }
     } else if (unique.length >= 2) {
-      // console.log(`Multiple crossings found: ${unique.length} crossings.`);
       // Determine which range is inside by checking distance at midpoint
       const midAngle = (unique[0] + unique[1]) / 2;
       const sourcePos = this.getOrbitPositionAtAngle(sourceEle, midAngle);
@@ -477,7 +471,7 @@ export class SimSatellites {
     if (!crossings) return "ALLOWED 2";
 
     const solarAngle = satellite.position.solarAngle;
-    if (isNaN(solarAngle)) console.log(`NaN solarAngle in getRadialZone for satellite:`, satellite);
+    if (isNaN(solarAngle)) return "UNKNOWN";
     const angle = ((solarAngle % 360) + 360) % 360;
 
     const insideEarth = this.isAngleInRange(angle, crossings.earth.inside);
@@ -554,14 +548,12 @@ export class SimSatellites {
         const orbitCircumferenceKm = 2 * Math.PI * this.convertAUtoKM(a);
         const inringAvgDistKm = gradientOneSideStartMbps ? orbitCircumferenceKm / satCountIfFullRing : null;
         const inringAvgMbps = gradientOneSideStartMbps ? this.calculateGbps(inringAvgDistKm) * 1000 : null;
-        // if (gradientOneSideStartMbps) console.log("inringAvgDistKm", inringAvgDistKm, "inringAvgMbps", inringAvgMbps);
         let perInterringLinkMbps = gradientOneSideStartMbps ? gradientOneSideStartMbps / (satCountIfFullRing / 2) : null;
         let requiredThroughputMbps = gradientOneSideStartMbps;
 
         let satId = 0;
         let longiDeg = 0;
         while (longiDeg < sideExtensionDeg - longIncrement) {
-          // console.log("longiDeg", longiDeg, "sideExtensionDeg", sideExtensionDeg);
           // calculate next distance
           const nextDistKm = this.calculateKm(requiredThroughputMbps / 1000);
           // convert to degrees
@@ -607,11 +599,8 @@ export class SimSatellites {
         }
 
         while (longiDeg < sideExtensionDeg - longIncrement) {
-          // console.log("longiDeg", longiDeg, "sideExtensionDeg", sideExtensionDeg);
           const selectedIncrement = longIncrement;
           longiDeg += selectedIncrement;
-
-          // console.log("selectedIncrement", selectedIncrement, "longiDeg", longiDeg);
 
           satellites.push(
             this.generateSatellite(
@@ -755,7 +744,6 @@ export class SimSatellites {
         }
       }
     }
-    // console.log(ringName, satellites);
     return satellites;
   }
 

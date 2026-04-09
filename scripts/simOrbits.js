@@ -56,18 +56,28 @@ export function helioCoords(ele, date) {
   let M = (ele.n * D + l - p) % 360; // M = n * D + M0, where M0 = l - p at epoch
   if (M < 0) M += 360; // Ensure M is positive
 
-  // Precompute constants for true anomaly calculation
-  const e2 = e * e; // e²
-  const e3 = e2 * e; // e³
-  const M_rad = M * DEG_TO_RAD; // Mean Anomaly in radians
-  const sinM = Math.sin(M_rad);
-  const sin2M = Math.sin(2 * M_rad);
-  const sin3M = Math.sin(3 * M_rad);
+  // Calculate the True Anomaly (v)
+  let trueAnomaly;
+  const e2 = e * e;
+  const M_rad = M * DEG_TO_RAD;
 
-  // Calculate the True Anomaly (v) using a series expansion
-  // Note: This is a low-order approximation, suitable for low eccentricities (e < 0.3).
-  // For high-eccentricity orbits (e.g., comets), consider solving Kepler's equation iteratively.
-  const trueAnomaly = M + (180 / PI) * ((2 * e - e3 / 4) * sinM + (5 / 4) * e2 * sin2M + (13 / 12) * e3 * sin3M);
+  if (e < 0.2) {
+    // Series expansion — accurate for low eccentricities (e < 0.3)
+    const e3 = e2 * e;
+    const sinM = Math.sin(M_rad);
+    const sin2M = Math.sin(2 * M_rad);
+    const sin3M = Math.sin(3 * M_rad);
+    trueAnomaly = M + (180 / PI) * ((2 * e - e3 / 4) * sinM + (5 / 4) * e2 * sin2M + (13 / 12) * e3 * sin3M);
+  } else {
+    // Newton-Raphson iteration for Kepler's equation: E - e*sin(E) = M
+    let E = M_rad;
+    for (let iter = 0; iter < 20; iter++) {
+      const dE = (E - e * Math.sin(E) - M_rad) / (1 - e * Math.cos(E));
+      E -= dE;
+      if (Math.abs(dE) < 1e-12) break;
+    }
+    trueAnomaly = 2 * Math.atan2(Math.sqrt(1 + e) * Math.sin(E / 2), Math.sqrt(1 - e) * Math.cos(E / 2)) * (180 / PI);
+  }
 
   // Convert true anomaly to radians once
   const trueAnomaly_rad = trueAnomaly * DEG_TO_RAD;

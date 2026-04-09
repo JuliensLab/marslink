@@ -39,10 +39,6 @@ export class SimUi {
         "adapted_rings",
       ])
     );
-    console.log(
-      "Initial satellitesConfig set, improvement-factor:",
-      this.simMain.satellitesConfig ? this.simMain.satellitesConfig["laser_technology.improvement-factor"] : "not set yet"
-    );
     // Set the initial display type
     const displayType = this.slidersData.display["display-type"].value;
     this.simMain.setDisplayType(displayType);
@@ -274,15 +270,6 @@ export class SimUi {
                   satellitesConfig["eccentric_rings.ringcount"] = 0;
                   satellitesConfig["simulation.calctimeSec"] = 100; // No limit
                   satellitesConfig["laser_technology.improvement-factor"] = Math.log2(improvementScore);
-                  console.log(
-                    "Setting improvement-factor in full run:",
-                    satellitesConfig["laser_technology.improvement-factor"],
-                    "for improvementScore:",
-                    improvementScore
-                  );
-                  console.log("////", "improvementScore", improvementScore, satellitesConfig["laser_technology.improvement-factor"]);
-                  console.log("Running simulation with config:", satellitesConfig);
-
                   // Set simTime to the date for deployment
                   const originalSimTime = this.simMain.simTime.getDate();
                   const targetDate = new Date(date);
@@ -319,7 +306,6 @@ export class SimUi {
 
           // Store data in localStorage for the results page
           localStorage.setItem("marslinkFullRunResults", JSON.stringify(data));
-          console.log("Full Run Simulation Result:", data);
 
           // Open the results webpage
           window.open("results/fullrun/index.html");
@@ -462,9 +448,6 @@ export class SimUi {
                 validSavedValue = null;
               }
             }
-          }
-          if (validSavedValue === null && fullSliderId === "laser_technology.improvement-factor") {
-            console.log("Invalid saved value for improvement-factor:", savedValue, "resetting to default");
           }
         }
         let sliderValue =
@@ -666,9 +649,6 @@ export class SimUi {
         case "laser_technology.current-throughput-gbps":
         case "laser_technology.current-distance-km":
         case "laser_technology.improvement-factor":
-          if (sliderId === "laser_technology.improvement-factor") {
-            console.log("Dispatching update for improvement-factor, newValue:", newValue);
-          }
         case "ring_earth.laser-ports-per-satellite":
         case "ring_mars.laser-ports-per-satellite":
         case "circular_rings.laser-ports-per-satellite":
@@ -678,6 +658,7 @@ export class SimUi {
         case "simulation.maxDistanceAU":
         case "simulation.maxSatCount":
         case "simulation.calctimeSec":
+        case "simulation.solarExclusionMargin":
         case "simulation.failed-satellites-slider":
         case "ring_earth.match-circular-rings":
         case "ring_earth.side-extension-degrees-slider":
@@ -761,8 +742,9 @@ export class SimUi {
           // Keep booleans as booleans
           config[`${categoryKey}.${sliderKey}`] = value;
         } else {
-          // Parse numbers as float
-          config[`${categoryKey}.${sliderKey}`] = parseFloat(value);
+          // Parse numbers as float, fall back to default if NaN
+          const num = parseFloat(value);
+          config[`${categoryKey}.${sliderKey}`] = isNaN(num) ? sliderData.value : num;
         }
       }
     }
@@ -778,22 +760,35 @@ export class SimUi {
   }
 
   updateInfoAreaCosts(html) {
+    // Preserve collapsed/expanded state across re-renders
+    if (!this._arrowStates) this._arrowStates = {};
+    const arrows = ["capacity", "cost"];
+    for (const id of arrows) {
+      const existing = document.getElementById(`${id}-content`);
+      if (existing) this._arrowStates[id] = existing.style.display;
+    }
+
     document.getElementById("info-area-costs").innerHTML = html;
-    const arrows = ["Capacity", "cost"];
-    for (const arrow of arrows) {
-      const capacityArrow = document.getElementById(`${arrow}-arrow`);
-      if (capacityArrow) {
-        const capacityContent = document.getElementById(`${arrow}-content`);
-        capacityArrow.parentElement.addEventListener("click", () => {
-          if (capacityContent.style.display === "none") {
-            capacityContent.style.display = "block";
-            capacityArrow.textContent = "▼";
-          } else {
-            capacityContent.style.display = "none";
-            capacityArrow.textContent = "▶";
-          }
-        });
+
+    for (const id of arrows) {
+      const arrow = document.getElementById(`${id}-arrow`);
+      if (!arrow) continue;
+      const content = document.getElementById(`${id}-content`);
+      // Restore previous state
+      const saved = this._arrowStates[id];
+      if (saved) {
+        content.style.display = saved;
+        arrow.textContent = saved === "none" ? "▶" : "▼";
       }
+      arrow.parentElement.addEventListener("click", () => {
+        if (content.style.display === "none") {
+          content.style.display = "block";
+          arrow.textContent = "▼";
+        } else {
+          content.style.display = "none";
+          arrow.textContent = "▶";
+        }
+      });
     }
   }
 
