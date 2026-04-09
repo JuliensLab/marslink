@@ -908,21 +908,50 @@ export class SimMain {
     const planets = this.simSolarSystem.updatePlanetsPositions(simDate);
 
     let satellites;
+    const isConfigApply = !!this.newSatellitesConfig;
+    const timings = isConfigApply ? {} : null;
+    const mark = (name, startPerf) => {
+      if (timings) timings[name] = Math.round(performance.now() - startPerf);
+    };
+
+    // Cache possibleLinks across the config-apply and link-update phases
+    // so we don't rebuild the topology twice per slider change.
+    let cachedPossibleLinks = null;
+
     if (this.newSatellitesConfig) {
+      let tPhase = performance.now();
       this.simSatellites.setSatellitesConfig(this.newSatellitesConfig);
+      mark("setSatellitesConfig", tPhase);
+
+      tPhase = performance.now();
       this.missionProfiles = this.simDeployment.getMissionProfile(this.simSatellites.getOrbitalElements());
+      mark("getMissionProfile", tPhase);
+
+      tPhase = performance.now();
       this.resultTrees = new SimMissionValidator(this.missionProfiles, {
         costPerLaunch: this.costPerLaunch,
         costPerSatellite: this.costPerSatellite,
         costPerLaserTerminal: this.costPerLaserTerminal,
         laserPortsPerSatellite: this.simLinkBudget.maxLinksPerSatellite,
       });
+      mark("missionValidator", tPhase);
+
+      tPhase = performance.now();
       satellites = this.simSatellites.updateSatellitesPositions(simDate);
       this.satellitesCount = satellites.length;
+      mark("updatePositions(config)", tPhase);
       console.log(`[Marslink] Config applied: ${this.satellitesCount} satellites`);
-      const possibleLinks = this.simNetwork.getPossibleLinks(planets, satellites);
+
+      tPhase = performance.now();
+      cachedPossibleLinks = this.simNetwork.getPossibleLinks(planets, satellites);
+      mark("getPossibleLinks(config)", tPhase);
+
       this.routeSummary = this.simNetwork.routeSummary;
-      this.capacityInfo = this.calculateCapacityInfo(possibleLinks);
+
+      tPhase = performance.now();
+      this.capacityInfo = this.calculateCapacityInfo(cachedPossibleLinks);
+      mark("calculateCapacityInfo", tPhase);
+
       this.pendingUpdates.add('links');
       this.pendingUpdates.add('config');
       this.newSatellitesConfig = null;
@@ -934,32 +963,45 @@ export class SimMain {
       this.previousLinkUpdateSimDate = simDate;
 
       let perf = performance.now();
-      const possibleLinks = this.simNetwork.getPossibleLinks(planets, satellites);
-      this.routeSummary = this.simNetwork.routeSummary;
+      // Reuse the topology we just built during config-apply when available
+      const possibleLinks = cachedPossibleLinks || this.simNetwork.getPossibleLinks(planets, satellites);
+      if (!cachedPossibleLinks) this.routeSummary = this.simNetwork.routeSummary;
       const topoMs = Math.round(performance.now() - perf);
+      if (timings) timings.getPossibleLinks = topoMs;
 
+      let tPhase = performance.now();
       this.removeLinks();
       this.simDisplay.updatePossibleLinks(possibleLinks);
       this.simDisplay.setSatellites(satellites);
       this.simDisplay.updatePositions(planets, satellites);
       this.ui.updateSimTime(simDate);
+      mark("displayPossibleLinks", tPhase);
 
       if (this.linksColors === "Flow" && (this.simLinkBudget.calctimeMs > 0 || this.pendingUpdates.has('config') || this.pendingUpdates.has('display'))) {
         perf = performance.now();
         const networkData = this.simNetwork.getNetworkData(planets, satellites, possibleLinks, this.simLinkBudget.calctimeMs);
         const flowMs = Math.round(performance.now() - perf);
-        console.log(`[Marslink] Links: ${possibleLinks.length} (${topoMs}ms) | Flow: ${networkData.maxFlowGbps?.toFixed(1) ?? '?'} Gbps (${flowMs}ms)`);
+        if (timings) timings.getNetworkData = flowMs;
+        const algoName = this.simLinkBudget.flowAlgorithm || "default";
+        console.log(`[Marslink] Links: ${possibleLinks.length} (${topoMs}ms) | Flow: ${networkData.maxFlowGbps?.toFixed(1) ?? '?'} Gbps (${flowMs}ms, ${algoName})`);
         this.maxFlowGbps = networkData.maxFlowGbps;
         this.lastNetworkData = networkData;
+
+        tPhase = performance.now();
         this.simDisplay.updateActiveLinks(networkData.links);
+        mark("updateActiveLinks", tPhase);
 
         if (this.ui) {
+          tPhase = performance.now();
           const binSize = 60 * 5;
           const latencyData = this.simNetwork.calculateLatencies(networkData, binSize);
+          mark("calculateLatencies", tPhase);
 
+          tPhase = performance.now();
           this.ui.updateInfoAreaCosts(this.getCostsHtml(this.calculateCosts(networkData.maxFlowGbps, this.resultTrees), networkData));
           this.ui.updateInfoAreaData(this.getInfoAreaHTML(networkData, latencyData));
           this.makeLatencyChart(latencyData, binSize);
+          mark("infoArea+chart", tPhase);
         }
       } else {
         this.ui.updateInfoAreaCosts(this.getCostsHtml(null, this.lastNetworkData));
@@ -969,6 +1011,11 @@ export class SimMain {
       this.pendingUpdates.delete('links');
       this.pendingUpdates.delete('config');
       this.pendingUpdates.delete('display');
+
+      if (timings) {
+        const parts = Object.entries(timings).map(([k, v]) => `${k}=${v}ms`).join(" | ");
+        console.log(`[Marslink] Phases: ${parts}`);
+      }
     } else {
       this.simDisplay.updatePositions(planets, satellites);
     }

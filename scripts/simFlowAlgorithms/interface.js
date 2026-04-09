@@ -55,12 +55,14 @@
 
 import { edmondsKarp } from "./edmondsKarp.js";
 import { pushRelabel } from "./pushRelabel.js";
+import { topologyAware } from "./topologyAware.js";
 
 /** Registry of available max-flow algorithms. */
 export const FLOW_ALGORITHMS = {
   "edmonds-karp": edmondsKarp,
   "push-relabel": pushRelabel,
+  "topology-aware": topologyAware,
 };
 
 /** The algorithm used when none is explicitly specified. */
-export const DEFAULT_ALGORITHM = "push-relabel";
+export const DEFAULT_ALGORITHM = "topology-aware";

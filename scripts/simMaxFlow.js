@@ -14,10 +14,11 @@ import { calculateLatencies } from "./simFlowAlgorithms/latencies.js";
 import { FLOW_ALGORITHMS, DEFAULT_ALGORITHM } from "./simFlowAlgorithms/interface.js";
 import { edmondsKarp } from "./simFlowAlgorithms/edmondsKarp.js";
 import { pushRelabel } from "./simFlowAlgorithms/pushRelabel.js";
+import { topologyAware } from "./simFlowAlgorithms/topologyAware.js";
 
 // Re-exports for existing callers
 export { simplifyNetwork, desimplifyNetwork, calculateLatencies };
-export { edmondsKarp, pushRelabel };
+export { edmondsKarp, pushRelabel, topologyAware };
 
 /**
  * Compute max flow using the specified algorithm (or default).
@@ -30,11 +31,13 @@ export { edmondsKarp, pushRelabel };
  * @param {number}                   input.perfStart
  * @param {number}                   input.calctimeMs
  * @param {string}                   [input.algorithm]  - Key in FLOW_ALGORITHMS. Defaults to DEFAULT_ALGORITHM.
+ * @param {Object}                   [input.topology]   - Structured topology info (used by topology-aware algorithm).
+ * @param {Map<string,number>}       [input.nodeIds]    - name → node ID map (for topology-aware).
  * @returns {{ maxFlow: number, flows: Object<string, number> } | null}
  */
-export function computeMaxFlow({ graph, capacities, source, sink, perfStart, calctimeMs, algorithm }) {
+export function computeMaxFlow({ graph, capacities, source, sink, perfStart, calctimeMs, algorithm, topology, nodeIds }) {
   const name = algorithm || DEFAULT_ALGORITHM;
   const algo = FLOW_ALGORITHMS[name];
   if (!algo) throw new Error(`Unknown max-flow algorithm: ${name}`);
-  return algo({ graph, capacities, source, sink, perfStart, calctimeMs });
+  return algo({ graph, capacities, source, sink, perfStart, calctimeMs, topology, nodeIds });
 }

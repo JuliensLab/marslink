@@ -58,20 +58,21 @@ export class TopologyBuilder {
 
   // Active topology methods
 
-  intraRing(rings, positions, linkCounts, finalLinks) {
+  intraRing(rings, positions, linkCounts, finalLinks, existingLinks) {
     // Create neighbor links for all rings (including Mars and Earth)
-
-    // Initialize a Set for existing links for O(1) lookup
-    const existingLinks = new Set(finalLinks.map((link) => `${link.fromId}-${link.toId}`));
+    // existingLinks is a shared Set of "${fromId}-${toId}" keys, mutated here.
 
     const AU_IN_KM = this.AU_IN_KM;
 
     let linksAdded = 0;
 
+    const maxDistanceAU = this.simLinkBudget.maxDistanceAU;
+
     // Iterate through each ring
     for (const [ringName, ringSatellites] of Object.entries(rings)) {
-      // Skip rings with satellites that have exactly 2 ports
-      if (this.simLinkBudget.getMaxLinksPerRing(ringName) === 2) continue;
+      // Cache the ring's max-links value once (was called 3× per inner iteration)
+      const maxLinksPerRing = this.simLinkBudget.getMaxLinksPerRing(ringName);
+      if (maxLinksPerRing === 2) continue;
 
       // Pre-build name->satellite Map for O(1) neighbor lookup
       const satByName = new Map();
@@ -79,21 +80,24 @@ export class TopologyBuilder {
 
       for (const satellite of ringSatellites) {
         // Early termination if satellite has reached max links
-        if (linkCounts[satellite.name] >= this.simLinkBudget.getMaxLinksPerRing(satellite.ringName)) {
-          continue;
-        }
+        if (linkCounts[satellite.name] >= maxLinksPerRing) continue;
+
+        // Cache the satellite's position once
+        const satPos = positions[satellite.name];
+        if (!satPos) continue;
+        const satSolar = satPos.solarAngle;
+        const satName = satellite.name;
 
         for (const neighborName of satellite.neighbors) {
-          // Ensure neighbor exists
-          if (!positions[neighborName]) continue;
+          // Cache neighbor position
+          const neighPos = positions[neighborName];
+          if (!neighPos) continue;
 
           // Early termination if neighbor has reached max links
-          if (linkCounts[neighborName] >= this.simLinkBudget.getMaxLinksPerRing(satellite.ringName)) {
-            continue;
-          }
+          if (linkCounts[neighborName] >= maxLinksPerRing) continue;
 
           // Order the IDs lexicographically to avoid duplicate links
-          const [fromId, toId] = satellite.name < neighborName ? [satellite.name, neighborName] : [neighborName, satellite.name];
+          const [fromId, toId] = satName < neighborName ? [satName, neighborName] : [neighborName, satName];
 
           const linkKey = `${fromId}-${toId}`;
 
@@ -101,8 +105,7 @@ export class TopologyBuilder {
           if (existingLinks.has(linkKey)) continue;
 
           // Determine directions (considering circular solar angles)
-          const satSolar = positions[satellite.name].solarAngle;
-          const neighSolar = positions[neighborName].solarAngle;
+          const neighSolar = neighPos.solarAngle;
           const delta = (neighSolar - satSolar + 360) % 360;
           let directionSat, directionNeigh;
           if (delta <= 180) {
@@ -119,12 +122,12 @@ export class TopologyBuilder {
           if (satellite[directionSat] !== null || neighborSat[directionNeigh] !== null) continue;
 
           // Calculate distances and other metrics
-          const distanceAU = this.calculateDistanceAU(positions[satellite.name], positions[neighborName]);
+          const distanceAU = this.calculateDistanceAU(satPos, neighPos);
 
           // Enforce maximum distance constraint
-          if (distanceAU > this.simLinkBudget.maxDistanceAU) continue;
+          if (distanceAU > maxDistanceAU) continue;
           // Solar blinding check
-          if (this.isSolarBlinded(positions[satellite.name], positions[neighborName])) continue;
+          if (this.isSolarBlinded(satPos, neighPos)) continue;
 
           const distanceKm = distanceAU * AU_IN_KM;
           const gbpsCapacity = this.calculateGbps(distanceKm);
@@ -154,7 +157,7 @@ export class TopologyBuilder {
           linksAdded++;
 
           // Early termination if satellite has reached max links after adding
-          if (linkCounts[satellite.name] >= this.simLinkBudget.getMaxLinksPerRing(satellite.ringName)) {
+          if (linkCounts[satName] >= maxLinksPerRing) {
             break; // Exit the neighbors loop for this satellite
           }
         }
@@ -163,7 +166,7 @@ export class TopologyBuilder {
 
   }
 
-  interAdaptedRings(rings, positions, linkCounts, finalLinks, targetDepartureAngle = 0, satellites) {
+  interAdaptedRings(rings, positions, linkCounts, finalLinks, targetDepartureAngle = 0, satellites, existingLinks) {
     const circularRingNames = Object.keys(rings).filter((ringName) => ringName.startsWith("ring_adapt_"));
 
     if (circularRingNames.length === 0) return;
@@ -186,7 +189,6 @@ export class TopologyBuilder {
     // Sort by index (Earth -> Mars direction)
     ringList.sort((a, b) => a.index - b.index);
 
-    const existingLinks = new Set(finalLinks.map((l) => `${l.fromId}-${l.toId}`));
     const AU_IN_KM = this.AU_IN_KM;
 
     // Precompute sorted satellites per ring
@@ -198,9 +200,15 @@ export class TopologyBuilder {
         .sort((a, b) => a.position.solarAngle - b.position.solarAngle);
     });
 
+    // Cache max-links per ring once (avoids repeated lookups in hot loops)
+    const ringMaxLinks = new Map();
+    ringList.forEach((ring) => {
+      ringMaxLinks.set(ring.name, this.simLinkBudget.getMaxLinksPerRing(ring.name));
+    });
+
     // Pre-mark unavailable ports for 3-port rings
     ringList.forEach((ring) => {
-      const maxLinks = this.simLinkBudget.getMaxLinksPerRing(ring.name);
+      const maxLinks = ringMaxLinks.get(ring.name);
       if (maxLinks !== 3) return;
       ringSatellites[ring.name].forEach((sat, i) => {
         if (i % 2 === 0) sat.outwards = "premarked";
@@ -209,6 +217,7 @@ export class TopologyBuilder {
     });
 
     const normalizeAngle = (deg) => ((deg % 360) + 360) % 360;
+    const maxDistanceAU = this.simLinkBudget.maxDistanceAU;
 
     // Now: Only connect each ring to its IMMEDIATE NEXT (index +1)
     for (let i = 0; i < ringList.length - 1; i++) {
@@ -227,42 +236,52 @@ export class TopologyBuilder {
       const rInner = inner.radius;
       const rOuter = outer.radius;
       const departureRad = (targetDepartureAngle * Math.PI) / 180;
+      const innerMaxLinks = ringMaxLinks.get(inner.name);
+      const outerMaxLinks = ringMaxLinks.get(outer.name);
+      const isFirstRing = inner.index === ringList[0].index;
 
       const candidates = [];
 
-      innerSats.forEach((innerSat) => {
+      for (let idx = 0; idx < innerSats.length; idx++) {
+        const innerSat = innerSats[idx];
         // Port & link budget checks
-        const maxLinks = this.simLinkBudget.getMaxLinksPerRing(innerSat.ringName);
-        const isFirstRing = inner.index === ringList[0].index;
-        const canConnectOut = isFirstRing && maxLinks === 3 ? innerSats.indexOf(innerSat) % 2 === 1 : linkCounts[innerSat.name] < maxLinks;
+        const canConnectOut = isFirstRing && innerMaxLinks === 3 ? idx % 2 === 1 : linkCounts[innerSat.name] < innerMaxLinks;
 
-        if (!canConnectOut || innerSat.outwards !== null) return;
+        if (!canConnectOut || innerSat.outwards !== null) continue;
+
+        // Cache inner sat position once
+        const innerPos = positions[innerSat.name];
+        if (!innerPos) continue;
 
         // Approximate ideal target solar angle using geometry
         const distEst = rOuter - rInner;
         const tanOffset = distEst * Math.tan(departureRad);
         const angularOffsetRad = Math.atan2(tanOffset, rOuter);
-        const idealTargetSolarAngle = normalizeAngle(innerSat.position.solarAngle + (angularOffsetRad * 180) / Math.PI);
+        const idealTargetSolarAngle = normalizeAngle(innerPos.solarAngle + (angularOffsetRad * 180) / Math.PI);
 
         // Binary search for closest satellites
-        let idx = 0;
-        while (idx < outerAngles.length && outerAngles[idx] < idealTargetSolarAngle) idx++;
-        const neighbors = [outerSats[(idx - 1 + outerSats.length) % outerSats.length], outerSats[idx % outerSats.length]];
+        let oIdx = 0;
+        while (oIdx < outerAngles.length && outerAngles[oIdx] < idealTargetSolarAngle) oIdx++;
+        const n1 = outerSats[(oIdx - 1 + outerSats.length) % outerSats.length];
+        const n2 = outerSats[oIdx % outerSats.length];
 
-        neighbors.forEach((outerSat) => {
-          if (outerSat.inwards !== null) return;
-          if (linkCounts[outerSat.name] >= this.simLinkBudget.getMaxLinksPerRing(outerSat.ringName)) return;
+        for (const outerSat of [n1, n2]) {
+          if (outerSat.inwards !== null) continue;
+          if (linkCounts[outerSat.name] >= outerMaxLinks) continue;
 
-          const distanceAU = this.calculateDistanceAU(positions[innerSat.name], positions[outerSat.name]);
-          if (distanceAU > this.simLinkBudget.maxDistanceAU) return;
-          if (this.isSolarBlinded(positions[innerSat.name], positions[outerSat.name])) return;
+          const outerPos = positions[outerSat.name];
+          if (!outerPos) continue;
+
+          const distanceAU = this.calculateDistanceAU(innerPos, outerPos);
+          if (distanceAU > maxDistanceAU) continue;
+          if (this.isSolarBlinded(innerPos, outerPos)) continue;
 
           const distanceKm = distanceAU * AU_IN_KM;
           const gbps = this.calculateGbps(distanceKm);
 
           candidates.push({ from: innerSat, to: outerSat, distanceAU, distanceKm, gbps });
-        });
-      });
+        }
+      }
 
       // Sort by distance (shortest = best)
       candidates.sort((a, b) => a.distanceAU - b.distanceAU);
@@ -273,8 +292,8 @@ export class TopologyBuilder {
 
       for (const { from, to, distanceAU, distanceKm, gbps } of candidates) {
         if (used.has(from.name) || used.has(to.name)) continue;
-        if (linkCounts[from.name] >= this.simLinkBudget.getMaxLinksPerRing(from.ringName)) continue;
-        if (linkCounts[to.name] >= this.simLinkBudget.getMaxLinksPerRing(to.ringName)) continue;
+        if (linkCounts[from.name] >= innerMaxLinks) continue;
+        if (linkCounts[to.name] >= outerMaxLinks) continue;
         if (from.outwards !== null || to.inwards !== null) continue;
 
         const [fId, tId] = from.name < to.name ? [from.name, to.name] : [to.name, from.name];
@@ -303,7 +322,7 @@ export class TopologyBuilder {
     }
   }
 
-  planetToCircularRings(rings, positions, linkCounts, finalLinks, planetRingName, targetDepartureAngle = 0) {
+  planetToCircularRings(rings, positions, linkCounts, finalLinks, planetRingName, targetDepartureAngle = 0, existingLinks) {
     // Setup
     const planetRingSatellites = rings[planetRingName] || [];
     const circularRingNames = Object.keys(rings).filter(
@@ -371,7 +390,6 @@ export class TopologyBuilder {
     candidates.sort((a, b) => a.distanceAU - b.distanceAU);
 
     // Assign links greedily
-    const existingLinks = new Set(finalLinks.map((link) => `${link.fromId}-${link.toId}`));
     let linksAdded = 0;
     for (const cand of candidates) {
       const from = cand.from;
@@ -422,9 +440,8 @@ export class TopologyBuilder {
    * Mars connects to the closest ring_mars satellites.
    * Uses high capacity (effectively infinite) so the bottleneck is the constellation, not the ground link.
    */
-  planetToRingSatellites(filteredPlanets, rings, positions, linkCounts, finalLinks) {
+  planetToRingSatellites(filteredPlanets, rings, positions, linkCounts, finalLinks, existingLinks) {
     const AU_IN_KM = this.AU_IN_KM;
-    const existingLinks = new Set(finalLinks.map((l) => `${l.fromId}-${l.toId}`));
 
     const planetRingMap = {
       Earth: "ring_earth",
@@ -556,7 +573,7 @@ export class TopologyBuilder {
       }
     });
 
-    // Calculate and return summary
+    // Calculate and return summary + individual routes
     if (routes.length > 0) {
       const totalThroughput = routes.reduce((sum, r) => sum + r.throughputMbps, 0);
       const throughputs = routes.map((r) => r.throughputMbps);
@@ -577,6 +594,7 @@ export class TopologyBuilder {
         minLatency,
         avgLatency: weightedAvgLatency,
         maxLatency,
+        routes, // individual routes: { path, throughputMbps, latencySeconds, origin, destination }
       };
     }
     return null;
@@ -1066,20 +1084,196 @@ export class TopologyBuilder {
     });
 
     const finalLinks = []; // Final list of links to return
+    const existingLinks = new Set(); // Shared across all link-adding methods to avoid rebuilding
     const targetDepartureAngle = 0; // Bias for geometric angle in inter-ring connections
 
-    this.intraRing(rings, positions, linkCounts, finalLinks);
+    this.intraRing(rings, positions, linkCounts, finalLinks, existingLinks);
 
-    this.interAdaptedRings(rings, positions, linkCounts, finalLinks, targetDepartureAngle, satellites);
-    this.planetToCircularRings(rings, positions, linkCounts, finalLinks, "ring_mars", targetDepartureAngle);
-    this.planetToCircularRings(rings, positions, linkCounts, finalLinks, "ring_earth", targetDepartureAngle);
+    this.interAdaptedRings(rings, positions, linkCounts, finalLinks, targetDepartureAngle, satellites, existingLinks);
+    this.planetToCircularRings(rings, positions, linkCounts, finalLinks, "ring_mars", targetDepartureAngle, existingLinks);
+    this.planetToCircularRings(rings, positions, linkCounts, finalLinks, "ring_earth", targetDepartureAngle, existingLinks);
 
     // Connect Earth/Mars planets to their own ring only (2 links each: one per angular side)
-    this.planetToRingSatellites(filteredPlanets, rings, positions, linkCounts, finalLinks);
+    this.planetToRingSatellites(filteredPlanets, rings, positions, linkCounts, finalLinks, existingLinks);
 
     // Calculate Earth to Mars routes
     this.routeSummary = this.calculateEarthToMarsRoutes(finalLinks, rings);
 
+    // Capture structured topology info for topology-aware max-flow algorithm
+    this.topologyInfo = this.captureTopologyInfo(rings, finalLinks);
+
     return finalLinks;
+  }
+
+  /**
+   * Captures structured topology info for the topology-aware max-flow algorithm.
+   * Returns ring chains (ordered from planet-connected sat outward), planet links,
+   * and individual routes. Returns null if structure is incomplete.
+   *
+   * Ring naming convention:
+   *   ring_earth-N    = positive-side chain  (planet → -0 → -1 → ... → -K)
+   *   ring_earth--N   = negative-side chain  (planet → --0 → --1 → ... → --K)
+   *
+   * @param {Object} rings - { ringName: [satellite objects...] }
+   * @param {Array} finalLinks
+   * @returns {Object|null}
+   */
+  captureTopologyInfo(rings, finalLinks) {
+    const earthRing = rings["ring_earth"] || [];
+    const marsRing = rings["ring_mars"] || [];
+    if (earthRing.length === 0 || marsRing.length === 0) return null;
+    if (!this.routeSummary || !this.routeSummary.routes) return null;
+
+    // Build ordered chains by parsing sat names.
+    // A name like "ring_earth-3" has suffix "-3" (positive side).
+    // A name like "ring_earth--3" has suffix "--3" (negative side).
+    const buildChains = (ringSats, ringName) => {
+      const positive = new Map(); // idx -> name
+      const negative = new Map();
+      const prefix = ringName + "-";
+      for (const sat of ringSats) {
+        const name = sat.name;
+        if (!name.startsWith(prefix)) continue;
+        const suffix = name.slice(prefix.length);
+        if (suffix.startsWith("-")) {
+          // Negative side: "-N" → N
+          const idx = parseInt(suffix.slice(1));
+          if (!isNaN(idx)) negative.set(idx, name);
+        } else {
+          // Positive side: "N"
+          const idx = parseInt(suffix);
+          if (!isNaN(idx)) positive.set(idx, name);
+        }
+      }
+      const toOrderedList = (map) => {
+        const keys = Array.from(map.keys()).sort((a, b) => a - b);
+        return keys.map((k) => map.get(k));
+      };
+      return {
+        positive: toOrderedList(positive),
+        negative: toOrderedList(negative),
+      };
+    };
+
+    const earthChains = buildChains(earthRing, "ring_earth");
+    const marsChains = buildChains(marsRing, "ring_mars");
+
+    // Find planet links (Earth→sat and Mars→sat)
+    const earthPlanetLinks = finalLinks.filter((l) => l.fromId === "Earth" || l.toId === "Earth");
+    const marsPlanetLinks = finalLinks.filter((l) => l.fromId === "Mars" || l.toId === "Mars");
+
+    // Build a lookup map for quick link retrieval
+    const linkByKey = new Map();
+    for (const link of finalLinks) {
+      linkByKey.set(`${link.fromId}_${link.toId}`, link);
+      linkByKey.set(`${link.toId}_${link.fromId}`, link);
+    }
+
+    // --- Collapse ring chains into segments between "important" sats ---
+    // A ring sat is "important" if it has a connection outside intra-ring:
+    //   - planet link (ring_earth-0 → Earth)
+    //   - outwards/inwards link to an adapted ring sat
+    // Segments between important sats are pure degree-2 chains that can be
+    // collapsed into a single virtual edge with capacity=min and latency=sum.
+    const hasExtraRingLink = (satName, ringPrefix) => {
+      // Look for any link from satName to a non-ring sat
+      const neighbors = [];
+      const linkKey1 = linkByKey.get(`${satName}_`);
+      // Scan linkByKey is expensive; instead iterate finalLinks filtered by satName.
+      // Build an outgoing-link index once instead (below).
+      return neighbors;
+    };
+
+    // Build per-sat outgoing link index for the ring sats
+    const satOutgoing = new Map(); // satName -> [link, ...]
+    for (const link of finalLinks) {
+      const a = link.fromId;
+      const b = link.toId;
+      if (!satOutgoing.has(a)) satOutgoing.set(a, []);
+      satOutgoing.get(a).push(link);
+      if (!satOutgoing.has(b)) satOutgoing.set(b, []);
+      satOutgoing.get(b).push(link);
+    }
+
+    // Collapse a single chain (e.g. earthChains.positive) into segments.
+    // Returns array of segments: [{ from, to, capacity, latency, physicalEdges: [...], virtualKey }]
+    // where physicalEdges is the list of edge keys (both directions) in the segment.
+    // `from` is the important sat closer to the planet (index 0 side).
+    // The first segment may start at chain[0] if it's important.
+    const collapseChain = (chain, ringPrefix, ringSegmentPrefix) => {
+      if (chain.length === 0) return [];
+
+      // Identify important sats: any sat in the chain with a link to a non-chain neighbor.
+      // Chain neighbors are predictable: chain[i-1] and chain[i+1] in the same chain.
+      const chainSet = new Set(chain);
+      const importantIndices = [];
+      for (let i = 0; i < chain.length; i++) {
+        const satName = chain[i];
+        const outgoing = satOutgoing.get(satName) || [];
+        let hasExtra = false;
+        for (const link of outgoing) {
+          const other = link.fromId === satName ? link.toId : link.fromId;
+          if (!chainSet.has(other)) {
+            hasExtra = true;
+            break;
+          }
+        }
+        if (hasExtra) importantIndices.push(i);
+      }
+
+      // Build segments between consecutive important sats.
+      // Also: if chain[0] is important, we need a "segment" that's just the sat itself
+      // (the planet link connects to it). Segments only cover intra-ring walks.
+      const segments = [];
+      let segmentId = 0;
+      for (let s = 0; s < importantIndices.length - 1; s++) {
+        const startIdx = importantIndices[s];
+        const endIdx = importantIndices[s + 1];
+        // Walk intra-ring links from chain[startIdx] to chain[endIdx]
+        let minCap = Infinity;
+        let sumLat = 0;
+        const physicalEdges = [];
+        let valid = true;
+        for (let i = startIdx; i < endIdx; i++) {
+          const key = `${chain[i]}_${chain[i + 1]}`;
+          const link = linkByKey.get(key);
+          if (!link) { valid = false; break; }
+          if (link.gbpsCapacity < minCap) minCap = link.gbpsCapacity;
+          sumLat += link.latencySeconds;
+          physicalEdges.push({ from: chain[i], to: chain[i + 1] });
+        }
+        if (!valid || minCap === Infinity) continue;
+        segments.push({
+          from: chain[startIdx],
+          to: chain[endIdx],
+          capacity: minCap,
+          latency: sumLat,
+          physicalEdges,
+          virtualKey: `${ringSegmentPrefix}_${segmentId++}`,
+        });
+      }
+      return segments;
+    };
+
+    const earthCollapsed = {
+      positive: collapseChain(earthChains.positive, "ring_earth", "seg_earth_pos"),
+      negative: collapseChain(earthChains.negative, "ring_earth", "seg_earth_neg"),
+    };
+    const marsCollapsed = {
+      positive: collapseChain(marsChains.positive, "ring_mars", "seg_mars_pos"),
+      negative: collapseChain(marsChains.negative, "ring_mars", "seg_mars_neg"),
+    };
+
+    return {
+      earthChains, // { positive: [...names], negative: [...names] }
+      marsChains,
+      earthCollapsed, // { positive: [...segments], negative: [...segments] }
+      marsCollapsed,
+      earthPlanetLinks,
+      marsPlanetLinks,
+      linkByKey,
+      allLinks: finalLinks,
+      routes: this.routeSummary.routes,
+    };
   }
 }

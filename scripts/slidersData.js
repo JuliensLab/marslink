@@ -120,8 +120,8 @@ export const slidersData = {
     flowAlgorithm: {
       type: "radio",
       label: "Max-flow algorithm",
-      options: ["push-relabel", "edmonds-karp"],
-      value: "push-relabel",
+      options: ["topology-aware", "push-relabel", "edmonds-karp"],
+      value: "topology-aware",
       unit: "",
     },
   },

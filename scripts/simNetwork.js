@@ -28,6 +28,7 @@ export class SimNetwork {
   getPossibleLinks(planets, satellites) {
     const links = this.topology.buildTopology(planets, satellites);
     this.routeSummary = this.topology.routeSummary;
+    this.topologyInfo = this.topology.topologyInfo;
     return links;
   }
 
@@ -68,30 +69,22 @@ export class SimNetwork {
     const graph = {}; // Adjacency list representation
     const capacities = {}; // Edge capacities
     const latencies = {}; // Edge latencies
-    const positions = {}; // Node positions for reference
 
-    // Pre-build name->position Map for O(1) lookups
-    const positionMap = new Map();
-    for (const planet of planets) positionMap.set(planet.name, planet.position);
-    for (const satellite of satellites) positionMap.set(satellite.name, satellite.position);
-
-    // Initialize graph nodes
-    nodeIds.forEach((id, name) => {
+    // Initialize graph nodes as empty adjacency lists
+    nodeIds.forEach((id) => {
       graph[id] = [];
-      positions[name] = positionMap.get(name) || null;
     });
 
     // Helper Function to Add Edges (Bidirectional capacity for undirected links)
     // Both directions get capacity C — max-flow selects whichever direction is needed.
     // The NET directed flow on each physical link is still ≤ C after the algorithm
     // completes (because any real reverse flow cancels forward flow).
+    //
+    // Note: finalLinks is deduplicated upstream in buildTopology (via existingLinks
+    // Set), so we can skip the includes() check and push directly.
     const addEdge = (fromId, toId, capacity, latency) => {
-      if (!graph[fromId].includes(toId)) {
-        graph[fromId].push(toId);
-      }
-      if (!graph[toId].includes(fromId)) {
-        graph[toId].push(fromId);
-      }
+      graph[fromId].push(toId);
+      graph[toId].push(fromId);
       const edgeKey = `${fromId}_${toId}`;
       const reverseEdgeKey = `${toId}_${fromId}`;
       capacities[edgeKey] = capacity;
@@ -123,9 +116,15 @@ export class SimNetwork {
     const source = nodeIds.get("Earth");
     const sink = nodeIds.get("Mars");
 
+    const algorithm = this.simLinkBudget.flowAlgorithm;
+    // Topology-aware skips simplification — it needs the original ring chains.
+    const useSimplification = algorithm !== "topology-aware";
+
     // --- STEP 1: SIMPLIFY ---
     const simplificationStack = [];
-    simplifyNetwork(graph, capacities, latencies, source, sink, simplificationStack);
+    if (useSimplification) {
+      simplifyNetwork(graph, capacities, latencies, source, sink, simplificationStack);
+    }
 
     // --- STEP 2: RUN MAX FLOW ---
     // Uses the algorithm selected in simLinkBudget.flowAlgorithm (from the
@@ -138,14 +137,17 @@ export class SimNetwork {
       sink,
       perfStart,
       calctimeMs,
-      algorithm: this.simLinkBudget.flowAlgorithm,
+      algorithm,
+      topology: this.topologyInfo,
+      nodeIds,
     });
 
     if (maxFlowResult === null) return { links: [], maxFlowGbps: 0, error: "timed out" };
 
     // --- STEP 3: DESIMPLIFY ---
-    // Restore the graph structure and map flows back to physical satellites
-    desimplifyNetwork(graph, maxFlowResult.flows, simplificationStack);
+    if (useSimplification) {
+      desimplifyNetwork(graph, maxFlowResult.flows, simplificationStack);
+    }
 
     // --- STEP 4: OUTPUT GENERATION ---
     // Now graph and flows match the original physical satellites.
@@ -194,7 +196,6 @@ export class SimNetwork {
       capacities, // Edge capacities
       flows, // Flow per edge
       nodeIds, // Map of node names to IDs
-      positions, // Node positions
       error: null,
     };
   }
