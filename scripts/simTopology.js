@@ -28,6 +28,34 @@ export class TopologyBuilder {
     return Math.sqrt(Math.pow(position.x, 2) + Math.pow(position.y, 2) + Math.pow(position.z, 2));
   }
 
+  // Returns true if the link between posA and posB is blinded by the sun.
+  // A link is blinded when, from either endpoint's perspective, the other
+  // endpoint appears within (sun angular radius + margin) of the sun center.
+  isSolarBlinded(posA, posB) {
+    const marginRad = this.simLinkBudget.solarExclusionRad || 0;
+    if (marginRad <= 0) return false;
+    const sunR = SIM_CONSTANTS.SUN_RADIUS_AU;
+
+    const checkEndpoint = (p, other) => {
+      // Vector from p to sun (origin) = -p
+      const distToSun = Math.sqrt(p.x * p.x + p.y * p.y + p.z * p.z);
+      if (distToSun <= sunR) return true; // inside the sun (shouldn't happen)
+      // Vector from p to other
+      const dx = other.x - p.x, dy = other.y - p.y, dz = other.z - p.z;
+      const distToOther = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      if (distToOther === 0) return false;
+      // Angle between (-p) and (other - p) — dot product / magnitudes
+      const dot = -p.x * dx - p.y * dy - p.z * dz;
+      const cosAngle = dot / (distToSun * distToOther);
+      // Sun angular radius from p
+      const sunAngularRad = Math.asin(Math.min(1, sunR / distToSun));
+      const threshold = Math.cos(sunAngularRad + marginRad);
+      return cosAngle > threshold;
+    };
+
+    return checkEndpoint(posA, posB) || checkEndpoint(posB, posA);
+  }
+
   // Active topology methods
 
   intraRing(rings, positions, linkCounts, finalLinks) {
@@ -95,6 +123,8 @@ export class TopologyBuilder {
 
           // Enforce maximum distance constraint
           if (distanceAU > this.simLinkBudget.maxDistanceAU) continue;
+          // Solar blinding check
+          if (this.isSolarBlinded(positions[satellite.name], positions[neighborName])) continue;
 
           const distanceKm = distanceAU * AU_IN_KM;
           const gbpsCapacity = this.calculateGbps(distanceKm);
@@ -225,6 +255,7 @@ export class TopologyBuilder {
 
           const distanceAU = this.calculateDistanceAU(positions[innerSat.name], positions[outerSat.name]);
           if (distanceAU > this.simLinkBudget.maxDistanceAU) return;
+          if (this.isSolarBlinded(positions[innerSat.name], positions[outerSat.name])) return;
 
           const distanceKm = distanceAU * AU_IN_KM;
           const gbps = this.calculateGbps(distanceKm);
@@ -321,16 +352,16 @@ export class TopologyBuilder {
       const dest1 = sortedDestinations[idx1];
       const dest2 = sortedDestinations[idx2];
 
-      // Add candidates if distance is within limit
+      // Add candidates if distance is within limit and not solar-blinded
       if (dest1) {
         const dist1 = this.calculateDistanceAU(positions[origin.name], positions[dest1.name]);
-        if (dist1 <= this.simLinkBudget.maxDistanceAU) {
+        if (dist1 <= this.simLinkBudget.maxDistanceAU && !this.isSolarBlinded(positions[origin.name], positions[dest1.name])) {
           candidates.push({ from: origin, to: dest1, distanceAU: dist1 });
         }
       }
       if (dest2 && dest2 !== dest1) {
         const dist2 = this.calculateDistanceAU(positions[origin.name], positions[dest2.name]);
-        if (dist2 <= this.simLinkBudget.maxDistanceAU) {
+        if (dist2 <= this.simLinkBudget.maxDistanceAU && !this.isSolarBlinded(positions[origin.name], positions[dest2.name])) {
           candidates.push({ from: origin, to: dest2, distanceAU: dist2 });
         }
       }
@@ -436,6 +467,7 @@ export class TopologyBuilder {
         const [fromId, toId] = planet.name < sat.name ? [planet.name, sat.name] : [sat.name, planet.name];
         const key = `${fromId}-${toId}`;
         if (existingLinks.has(key)) continue;
+        if (this.isSolarBlinded(planetPos, positions[sat.name])) continue;
 
         const distanceKm = distanceAU * AU_IN_KM;
         const gbpsCapacity = this.calculateGbps(distanceKm);
@@ -599,6 +631,7 @@ export class TopologyBuilder {
 
             // Enforce maximum distance constraint
             if (distanceAU > this.simLinkBudget.maxDistanceAU) continue;
+            if (this.isSolarBlinded(positions[eccSatellite.name], positions[targetSatellite.name])) continue;
 
             const distanceKm = distanceAU * AU_IN_KM;
             const gbpsCapacity = this.calculateGbps(distanceKm);
@@ -781,6 +814,7 @@ export class TopologyBuilder {
 
           const distanceAU = this.calculateDistanceAU(positions[innerSat.name], positions[outerSat.name]);
           if (distanceAU > this.simLinkBudget.maxDistanceAU) return;
+          if (this.isSolarBlinded(positions[innerSat.name], positions[outerSat.name])) return;
 
           const distanceKm = distanceAU * AU_IN_KM;
           const gbps = this.calculateGbps(distanceKm);
@@ -893,6 +927,7 @@ export class TopologyBuilder {
           const distanceAU = this.calculateDistanceAU(positions[eccSatellite.name], positions[circSatellite.name]);
           // Enforce maximum distance constraint
           if (distanceAU > this.simLinkBudget.maxDistanceAU) return;
+          if (this.isSolarBlinded(positions[eccSatellite.name], positions[circSatellite.name])) return;
 
           const distanceKm = distanceAU * this.AU_IN_KM;
           const gbpsCapacity = this.calculateGbps(distanceKm);

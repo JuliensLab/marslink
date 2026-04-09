@@ -658,7 +658,7 @@ export class SimUi {
         case "simulation.maxDistanceAU":
         case "simulation.maxSatCount":
         case "simulation.calctimeSec":
-        case "simulation.solarExclusionMargin":
+        case "simulation.solarExclusionDeg":
         case "simulation.failed-satellites-slider":
         case "ring_earth.match-circular-rings":
         case "ring_earth.side-extension-degrees-slider":
