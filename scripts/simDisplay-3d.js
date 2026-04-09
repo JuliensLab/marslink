@@ -303,17 +303,21 @@ export class SimDisplay {
   createTextSprite(text) {
     const canvas = document.createElement("canvas");
     const context = canvas.getContext("2d");
-    const fontSize = 48;
-    context.font = `${fontSize}px Arial`;
+    const scale = 4; // render at 4x resolution for crisp text
+    const fontSize = 48 * scale;
+    context.font = `bold ${fontSize}px Arial`;
     const textWidth = context.measureText(text).width;
-    canvas.width = textWidth + 20;
-    canvas.height = fontSize + 20;
+    canvas.width = textWidth + 20 * scale;
+    canvas.height = fontSize + 20 * scale;
+    context.font = `bold ${fontSize}px Arial`; // re-set after canvas resize
+    context.clearRect(0, 0, canvas.width, canvas.height); // transparent background
     context.fillStyle = "rgba(255, 255, 255, 1)";
-    context.fillText(text, 10, fontSize + 5);
+    context.fillText(text, 10 * scale, fontSize + 5 * scale);
     const texture = new THREE.CanvasTexture(canvas);
-    const spriteMaterial = new THREE.SpriteMaterial({ map: texture });
+    texture.minFilter = THREE.LinearFilter;
+    const spriteMaterial = new THREE.SpriteMaterial({ map: texture, transparent: true });
     const sprite = new THREE.Sprite(spriteMaterial);
-    sprite.scale.set(0.05, 0.05, 1); // Adjust scale as needed
+    sprite.scale.set(0.005, 0.005, 1);
     return sprite;
   }
 

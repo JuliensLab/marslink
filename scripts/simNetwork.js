@@ -81,7 +81,9 @@ export class SimNetwork {
       positions[name] = positionMap.get(name) || null;
     });
 
-    // Helper Function to Add Edges (Bidirectional)
+    // Helper Function to Add Edges (Bidirectional capacity)
+    // Links are undirected — flow can use either direction.
+    // Output reports the absolute flow on each link (capped at capacity).
     const addEdge = (fromId, toId, capacity, latency) => {
       if (!graph[fromId].includes(toId)) {
         graph[fromId].push(toId);
@@ -93,8 +95,8 @@ export class SimNetwork {
       capacities[edgeKey] = capacity;
       latencies[edgeKey] = latency;
       const reverseEdgeKey = `${toId}_${fromId}`;
-      capacities[reverseEdgeKey] = capacity; // Same capacity in reverse
-      latencies[reverseEdgeKey] = latency; // Same latency in reverse
+      capacities[reverseEdgeKey] = capacity;
+      latencies[reverseEdgeKey] = latency;
     };
 
     // Add All Links (Bidirectional)
@@ -160,32 +162,21 @@ export class SimNetwork {
       const forwardEdgeKey = `${fromNodeId}_${toNodeId}`;
       const reverseEdgeKey = `${toNodeId}_${fromNodeId}`;
 
-      // Calculate Net Flow (Forward - Reverse)
+      // Calculate flow on this link (forward-only, capped at link capacity)
       const forwardFlow = flows[forwardEdgeKey] || 0;
       const reverseFlow = flows[reverseEdgeKey] || 0;
-      const netFlow = forwardFlow - reverseFlow;
+      const absFlow = Math.min(Math.abs(forwardFlow - reverseFlow), gbpsCapacity);
 
-      if (netFlow > 0) {
+      if (absFlow > 0) {
+        const flowDir = forwardFlow >= reverseFlow;
         outputLinks.push({
-          fromId: fromId,
-          toId: toId,
+          fromId: flowDir ? fromId : toId,
+          toId: flowDir ? toId : fromId,
           distanceAU: Math.round(distanceAU * 1e6) / 1e6,
           distanceKm: Math.round(distanceKm),
           latencySeconds: Math.round(latencySeconds * 10) / 10,
           gbpsCapacity: Math.round(gbpsCapacity * 1e6) / 1e6,
-          gbpsFlow: Math.round(netFlow * 1e6) / 1e6,
-        });
-      }
-      // Optionally, handle negative flows if needed
-      else if (netFlow < 0) {
-        outputLinks.push({
-          fromId: toId,
-          toId: fromId,
-          distanceAU: Math.round(distanceAU * 1e6) / 1e6,
-          distanceKm: Math.round(distanceKm),
-          latencySeconds: Math.round(latencySeconds * 10) / 10,
-          gbpsCapacity: Math.round(gbpsCapacity * 1e6) / 1e6,
-          gbpsFlow: Math.round(-netFlow * 1e6) / 1e6,
+          gbpsFlow: Math.round(absFlow * 1e6) / 1e6,
         });
       }
     });

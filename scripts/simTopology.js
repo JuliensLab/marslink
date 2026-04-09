@@ -438,8 +438,7 @@ export class TopologyBuilder {
         if (existingLinks.has(key)) continue;
 
         const distanceKm = distanceAU * AU_IN_KM;
-        // High capacity — ground segment shouldn't be the bottleneck
-        const gbpsCapacity = 1000;
+        const gbpsCapacity = this.calculateGbps(distanceKm);
         const latencySeconds = this.calculateLatency(distanceKm);
 
         finalLinks.push({ fromId, toId, distanceAU, distanceKm, latencySeconds, gbpsCapacity });
@@ -1040,7 +1039,7 @@ export class TopologyBuilder {
     this.planetToCircularRings(rings, positions, linkCounts, finalLinks, "ring_mars", targetDepartureAngle);
     this.planetToCircularRings(rings, positions, linkCounts, finalLinks, "ring_earth", targetDepartureAngle);
 
-    // Connect Earth/Mars planets to their nearest ring satellites
+    // Connect Earth/Mars planets to their own ring only (2 links each: one per angular side)
     this.planetToRingSatellites(filteredPlanets, rings, positions, linkCounts, finalLinks);
 
     // Calculate Earth to Mars routes
