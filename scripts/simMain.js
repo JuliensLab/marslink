@@ -23,7 +23,6 @@ export class SimMain {
   constructor() {
     this.previousLinkUpdateSimDate = 0;
     this.newSatellitesConfig = null;
-    this.appliedSatellitesConfig = null; // last config sent to the worker
     this.pendingUpdates = new Set(); // tracks: 'links', 'config', 'display', 'satellites_display'
 
     // Initialize simulation components
@@ -32,23 +31,7 @@ export class SimMain {
     this.simLinkBudget = new SimLinkBudget();
     this.simDeployment = new SimDeployment(this.simSolarSystem.getSolarSystemData().planets);
     this.simSatellites = new SimSatellites(this.simLinkBudget, this.simSolarSystem.getSolarSystemData().planets);
-    // simNetwork is kept on the main thread ONLY for the longTermRun batch
-    // path. The live updateLoop pipeline runs in the worker (see simWorker.js).
     this.simNetwork = new SimNetwork(this.simLinkBudget, this.simSatellites);
-
-    // --- Spawn the heavy-pipeline worker ---
-    // The worker owns its own SimSatellites/SimNetwork/etc. and handles
-    // setSatellitesConfig + getPossibleLinks + getNetworkData + latencies in
-    // the background, so the 3D camera stays at 60 fps during slider drags.
-    this.simWorker = new Worker(new URL("./simWorker.js?v=4.5", import.meta.url), { type: "module" });
-    this.simWorker.onmessage = (event) => this.handleWorkerMessage(event);
-    this.simWorker.onerror = (event) => {
-      console.error("[Marslink] Worker error:", event.message, event);
-    };
-    this.simWorker.postMessage({ type: "init" });
-    this.lastRequestId = 0;
-    this.latestResultRequestId = 0;
-
     // Do not instantiate simDisplay here; it will be set by setDisplayType
     this.simDisplay = null;
     this.linksColors = null;
@@ -64,11 +47,7 @@ export class SimMain {
 
     this.latencyChartInstance = null;
     this.missionProfiles = null; // Initialize reportData storage
-    this.resultTrees = []; // populated from worker results
     this.capacityInfo = null;
-    this.routeSummary = null;
-    this.lastNetworkData = null;
-    this.maxFlowGbps = 0;
 
     this.startSimulationLoop();
   }
@@ -159,16 +138,9 @@ export class SimMain {
    * @param {number} factor - Multiplier for satellites size.
    */
   setSatelliteSizeFactor(factor) {
-    const wasZero = this.satelliteSizeFactor === 0;
-    const isZero = factor === 0;
     this.satelliteSizeFactor = factor;
     if (this.simDisplay && typeof this.simDisplay.setSizeFactors === "function") {
       this.simDisplay.setSizeFactors(this.sunSizeFactor, this.planetsSizeFactor, this.satelliteSizeFactor);
-    }
-    // Crossing the 0 boundary changes whether satellite meshes are drawn at all,
-    // so we need to rebuild the instanced display from the current sat list.
-    if (wasZero !== isZero) {
-      this.pendingUpdates.add("satellites_display");
     }
   }
 
@@ -429,10 +401,6 @@ export class SimMain {
   }
 
   setSatellitesConfig(uiConfig) {
-    // Stash the latest uiConfig so the worker dispatch in updateLoop can
-    // forward it on the next applyConfig.
-    this._lastUiConfig = uiConfig;
-
     const satellitesConfig = [];
 
     this.simLinkBudget.setTechnologyConfig(uiConfig);
@@ -555,16 +523,6 @@ export class SimMain {
     this.costPerLaunch = costConfig["economics.launch-cost-slider"];
     this.costPerSatellite = costConfig["economics.satellite-cost-slider"];
     this.costPerLaserTerminal = costConfig["economics.laser-terminal-cost-slider"];
-    // The cost values are baked into resultTrees inside the worker (via
-    // SimMissionValidator's costs argument). When the user moves a cost
-    // slider we need a fresh worker pass — otherwise the displayed totals
-    // would still reflect the previous slider position. The flag also
-    // applies to the "satellite-empty-mass" slider, which feeds into the
-    // deployment-vehicles calc.
-    this.pendingUpdates.add("links");
-    // Also update the info area immediately with whatever resultTrees we
-    // currently have, so the change is at least partly reflected before the
-    // worker reply lands.
     if (this.ui) this.ui.updateInfoAreaCosts(this.getCostsHtml(this.calculateCosts(this.maxFlowGbps, this.resultTrees), this.lastNetworkData));
   }
 
@@ -954,161 +912,129 @@ export class SimMain {
 
   /**
    * The core update loop that advances the simulation by one frame.
-   *
-   * Per-frame work (always runs, ~few ms):
-   *   - advance simTime, recompute planet + satellite positions
-   *   - update simDisplay positions (matrices in-place)
-   *
-   * Heavy work (delegated to the worker, runs in the background):
-   *   - getPossibleLinks, getNetworkData, calculateLatencies, mission profile,
-   *     mission validator, capacityInfo
-   *
-   * The main thread also runs `simSatellites.setSatellitesConfig` itself
-   * whenever `newSatellitesConfig` is set, because the per-frame display
-   * needs the resulting satellite list immediately. The worker independently
-   * runs the same setSatellitesConfig in parallel — both can finish in
-   * roughly the same wall-clock time without ever blocking the camera.
+   * It updates the positions of planets, satellites, and the display.
+   * The links are updated asynchronously when the worker sends data.
    */
   updateLoop() {
     const simDate = this.simTime.getDate();
     const planets = this.simSolarSystem.updatePlanetsPositions(simDate);
 
-    // --- Phase 1: apply pending sat-config locally (for the display) ---
-    let configJustApplied = false;
+    let satellites;
+    const isConfigApply = !!this.newSatellitesConfig;
+    const timings = isConfigApply ? {} : null;
+    const mark = (name, startPerf) => {
+      if (timings) timings[name] = Math.round(performance.now() - startPerf);
+    };
+
+    // Cache possibleLinks across the config-apply and link-update phases
+    // so we don't rebuild the topology twice per slider change.
+    let cachedPossibleLinks = null;
+
     if (this.newSatellitesConfig) {
-      const t0 = performance.now();
+      let tPhase = performance.now();
       this.simSatellites.setSatellitesConfig(this.newSatellitesConfig);
-      const setMs = Math.round(performance.now() - t0);
-      this.satellitesCount = this.simSatellites.getSatellites().length;
-      console.log(`[Marslink] Main: setSatellitesConfig=${setMs}ms (${this.satellitesCount} sats)`);
-      this.appliedSatellitesConfig = this.newSatellitesConfig;
-      this.newSatellitesConfig = null;
-      this.pendingUpdates.add("links");
-      this.pendingUpdates.add("config");
-      this.pendingUpdates.add("satellites_display");
-      configJustApplied = true;
-    }
+      mark("setSatellitesConfig", tPhase);
 
-    // --- Phase 2: compute current satellite positions for the display ---
-    const satellites = this.simSatellites.updateSatellitesPositions(simDate);
+      tPhase = performance.now();
+      this.missionProfiles = this.simDeployment.getMissionProfile(this.simSatellites.getOrbitalElements());
+      mark("getMissionProfile", tPhase);
 
-    // --- Phase 3: dispatch heavy work to the worker if needed ---
-    const needsLinkRefresh =
-      this.pendingUpdates.has("links") ||
-      Math.abs(simDate - this.previousLinkUpdateSimDate) > 1000 * 60 * 60 * 24;
-
-    if (needsLinkRefresh && this.appliedSatellitesConfig && this._lastUiConfig) {
-      this.previousLinkUpdateSimDate = simDate;
-      this.lastRequestId++;
-      const computeFlow =
-        this.linksColors === "Flow" &&
-        (this.simLinkBudget.calctimeMs > 0 ||
-          this.pendingUpdates.has("config") ||
-          this.pendingUpdates.has("display"));
-      this.simWorker.postMessage({
-        type: "applyConfig",
-        requestId: this.lastRequestId,
-        uiConfig: this._lastUiConfig,
-        satellitesConfig: this.appliedSatellitesConfig,
-        simDate,
-        computeFlow,
+      tPhase = performance.now();
+      this.resultTrees = new SimMissionValidator(this.missionProfiles, {
+        costPerLaunch: this.costPerLaunch,
+        costPerSatellite: this.costPerSatellite,
+        costPerLaserTerminal: this.costPerLaserTerminal,
+        laserPortsPerSatellite: this.simLinkBudget.maxLinksPerSatellite,
       });
-      // Clear the flags now — the worker reply (or staleness drop) is the
-      // only signal we need going forward.
-      this.pendingUpdates.delete("links");
-      this.pendingUpdates.delete("config");
-      this.pendingUpdates.delete("display");
+      mark("missionValidator", tPhase);
+
+      tPhase = performance.now();
+      satellites = this.simSatellites.updateSatellitesPositions(simDate);
+      this.satellitesCount = satellites.length;
+      mark("updatePositions(config)", tPhase);
+      console.log(`[Marslink] Config applied: ${this.satellitesCount} satellites`);
+
+      tPhase = performance.now();
+      cachedPossibleLinks = this.simNetwork.getPossibleLinks(planets, satellites);
+      mark("getPossibleLinks(config)", tPhase);
+
+      this.routeSummary = this.simNetwork.routeSummary;
+
+      tPhase = performance.now();
+      this.capacityInfo = this.calculateCapacityInfo(cachedPossibleLinks);
+      mark("calculateCapacityInfo", tPhase);
+
+      this.pendingUpdates.add('links');
+      this.pendingUpdates.add('config');
+      this.newSatellitesConfig = null;
+    } else {
+      satellites = this.simSatellites.updateSatellitesPositions(simDate);
+    }
+
+    if (this.pendingUpdates.has('links') || Math.abs(simDate - this.previousLinkUpdateSimDate) > 1000 * 60 * 60 * 24) {
+      this.previousLinkUpdateSimDate = simDate;
+
+      let perf = performance.now();
+      // Reuse the topology we just built during config-apply when available
+      const possibleLinks = cachedPossibleLinks || this.simNetwork.getPossibleLinks(planets, satellites);
+      if (!cachedPossibleLinks) this.routeSummary = this.simNetwork.routeSummary;
+      const topoMs = Math.round(performance.now() - perf);
+      if (timings) timings.getPossibleLinks = topoMs;
+
+      let tPhase = performance.now();
+      this.removeLinks();
+      this.simDisplay.updatePossibleLinks(possibleLinks);
+      this.simDisplay.setSatellites(satellites);
+      this.simDisplay.updatePositions(planets, satellites);
       this.ui.updateSimTime(simDate);
-    }
+      mark("displayPossibleLinks", tPhase);
 
-    // --- Phase 4: per-frame display updates ---
-    if (configJustApplied && this.simDisplay) {
-      // Rebuild instanced meshes immediately for the new sat list. Links
-      // remain stale until the worker reply arrives, but the satellite dots
-      // are correct from this very frame.
-      this.simDisplay.setSatellites(satellites);
-      this.pendingUpdates.delete("satellites_display");
-    }
-    if (this.simDisplay) this.simDisplay.updatePositions(planets, satellites);
+      if (this.linksColors === "Flow" && (this.simLinkBudget.calctimeMs > 0 || this.pendingUpdates.has('config') || this.pendingUpdates.has('display'))) {
+        perf = performance.now();
+        const networkData = this.simNetwork.getNetworkData(planets, satellites, possibleLinks, this.simLinkBudget.calctimeMs);
+        const flowMs = Math.round(performance.now() - perf);
+        if (timings) timings.getNetworkData = flowMs;
+        const algoName = this.simLinkBudget.flowAlgorithm || "default";
+        console.log(`[Marslink] Links: ${possibleLinks.length} (${topoMs}ms) | Flow: ${networkData.maxFlowGbps?.toFixed(1) ?? '?'} Gbps (${flowMs}ms, ${algoName})`);
+        this.maxFlowGbps = networkData.maxFlowGbps;
+        this.lastNetworkData = networkData;
 
-    if (this.pendingUpdates.has("satellites_display")) {
-      this.simDisplay.setSatellites(satellites);
-      this.pendingUpdates.delete("satellites_display");
-    }
-  }
+        tPhase = performance.now();
+        this.simDisplay.updateActiveLinks(networkData.links);
+        mark("updateActiveLinks", tPhase);
 
-  /**
-   * Receives results from the worker and pushes them into the display + UI.
-   * Stale results (older than the most recent applyConfig requestId) are
-   * dropped so a fast slider drag doesn't render every intermediate state.
-   */
-  handleWorkerMessage(event) {
-    const msg = event.data;
-    if (!msg || typeof msg !== "object") return;
+        if (this.ui) {
+          tPhase = performance.now();
+          const binSize = 60 * 5;
+          const latencyData = this.simNetwork.calculateLatencies(networkData, binSize);
+          mark("calculateLatencies", tPhase);
 
-    if (msg.type === "ready") {
-      console.log("[Marslink] Worker ready");
-      return;
-    }
-
-    if (msg.type === "error") {
-      console.error("[Marslink] Worker error:", msg.message, msg.stack || "");
-      return;
-    }
-
-    if (msg.type !== "result") return;
-
-    // Drop stale results — only the most-recent in-flight request matters.
-    if (msg.requestId < this.lastRequestId) {
-      // A newer request is in flight; ignore this one.
-      return;
-    }
-    this.latestResultRequestId = msg.requestId;
-
-    // --- Cache the worker output ---
-    this.lastNetworkData = msg.networkData || null;
-    this.maxFlowGbps = msg.networkData ? msg.networkData.maxFlowGbps || 0 : 0;
-    this.capacityInfo = msg.capacityInfo || null;
-    this.routeSummary = msg.routeSummary || null;
-    this.missionProfiles = msg.missionProfilesData || null;
-    this.resultTrees = msg.resultTreesData || [];
-    if (typeof msg.satellitesCount === "number") this.satellitesCount = msg.satellitesCount;
-
-    // --- Push into the display ---
-    if (this.simDisplay) {
-      this.simDisplay.updatePossibleLinks(msg.possibleLinks || []);
-      this.simDisplay.updateActiveLinks(msg.networkData ? msg.networkData.links || [] : []);
-    }
-
-    // --- Push into the info area / latency chart ---
-    if (this.ui) {
-      this.ui.updateInfoAreaCosts(
-        this.getCostsHtml(this.calculateCosts(this.maxFlowGbps, this.resultTrees), this.lastNetworkData)
-      );
-      if (msg.networkData && msg.latencyData) {
-        this.ui.updateInfoAreaData(this.getInfoAreaHTML(msg.networkData, msg.latencyData));
-        this.makeLatencyChart(msg.latencyData, 60 * 5);
+          tPhase = performance.now();
+          this.ui.updateInfoAreaCosts(this.getCostsHtml(this.calculateCosts(networkData.maxFlowGbps, this.resultTrees), networkData));
+          this.ui.updateInfoAreaData(this.getInfoAreaHTML(networkData, latencyData));
+          this.makeLatencyChart(latencyData, binSize);
+          mark("infoArea+chart", tPhase);
+        }
       } else {
+        this.ui.updateInfoAreaCosts(this.getCostsHtml(null, this.lastNetworkData));
         this.ui.updateInfoAreaData("");
         this.makeLatencyChart(null);
       }
+      this.pendingUpdates.delete('links');
+      this.pendingUpdates.delete('config');
+      this.pendingUpdates.delete('display');
+
+      if (timings) {
+        const parts = Object.entries(timings).map(([k, v]) => `${k}=${v}ms`).join(" | ");
+        console.log(`[Marslink] Phases: ${parts}`);
+      }
+    } else {
+      this.simDisplay.updatePositions(planets, satellites);
     }
 
-    // --- Logging (mirrors the old [Marslink] Phases line) ---
-    const algoName = this.simLinkBudget.flowAlgorithm || "default";
-    const flowGbps =
-      msg.networkData && typeof msg.networkData.maxFlowGbps === "number"
-        ? msg.networkData.maxFlowGbps.toFixed(1)
-        : "?";
-    const linksCount = msg.possibleLinks ? msg.possibleLinks.length : 0;
-    console.log(
-      `[Marslink] Worker reply: ${linksCount} links | Flow ${flowGbps} Gbps (${algoName}) | total=${msg.totalMs}ms`
-    );
-    if (msg.timings) {
-      const parts = Object.entries(msg.timings)
-        .map(([k, v]) => `${k}=${v}ms`)
-        .join(" | ");
-      console.log(`[Marslink] Worker phases: ${parts}`);
+    if (this.pendingUpdates.has('satellites_display')) {
+      this.simDisplay.setSatellites(satellites);
+      this.pendingUpdates.delete('satellites_display');
     }
   }
 
