@@ -31,6 +31,9 @@
       <button class="mode-tab" data-mode="report" role="tab">
         <span class="tab-icon" aria-hidden="true">▤</span> Deployment
       </button>
+      <button class="mode-tab" data-mode="sensitivity" role="tab">
+        <span class="tab-icon" aria-hidden="true">◫</span> Sensitivity
+      </button>
       <button class="mode-tab" data-mode="run" role="tab">
         <span class="tab-icon" aria-hidden="true">▶</span> Full Run
       </button>
@@ -110,6 +113,53 @@
       <div class="drawer-body" id="sliders-container"></div>
     </div>
 
+    <!-- Sensitivity pane -->
+    <div id="sensitivity-pane" class="drawer-pane" hidden>
+      <header class="drawer-header">
+        <h2>Sensitivity Analysis</h2>
+        <button class="icon-btn drawer-close" data-close-drawer aria-label="Close">×</button>
+      </header>
+      <div class="drawer-body" style="padding: var(--s-4);">
+        <p class="muted">
+          Sweep relay ring count and laser tech improvement. Earth/Mars rings auto-size via simple config logic.
+        </p>
+
+        <div class="form-group">
+          <label>Relay ring count</label>
+          <div style="display:flex; gap:var(--s-2); align-items:center;">
+            <input type="number" id="sens-ring-start" value="10" min="1" max="100" style="width:60px;">
+            <span class="muted">to</span>
+            <input type="number" id="sens-ring-end" value="50" min="1" max="100" style="width:60px;">
+            <span class="muted">step</span>
+            <input type="number" id="sens-ring-step" value="5" min="1" max="50" style="width:50px;">
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>Laser tech improvement</label>
+          <div style="display:flex; gap:var(--s-2); align-items:center;">
+            <input type="number" id="sens-tech-start" value="4" min="1" max="1048576" style="width:80px;">
+            <span class="muted">to</span>
+            <input type="number" id="sens-tech-end" value="64" min="1" max="1048576" style="width:80px;">
+            <span class="muted">step</span>
+            <select id="sens-tech-progression" style="width:80px;">
+              <option value="pow2" selected>x2</option>
+              <option value="linear">linear</option>
+            </select>
+            <input type="number" id="sens-tech-step" value="2" min="1" max="100" style="width:50px; display:none;" title="Linear step">
+          </div>
+        </div>
+
+        <div style="margin-top:var(--s-3);">
+          <button id="startSensitivity" class="btn btn-primary" style="width:100%;">Run Sensitivity</button>
+        </div>
+        <div id="sens-progress-wrap" style="margin-top:var(--s-2); display:none;">
+          <div class="progress-bar-container"><div id="sens-progress-bar" class="progress-bar" style="width:0%;"></div></div>
+          <span id="sens-progress-text" class="muted">0%</span>
+        </div>
+      </div>
+    </div>
+
     <!-- Run pane -->
     <div id="run-pane" class="drawer-pane" hidden>
       <header class="drawer-header">
@@ -180,6 +230,7 @@
     <div class="bottom-bar-left">
       <div id="simTime" class="sim-time-display">—</div>
       <div id="fps-counter" class="fps-counter" aria-label="Frames per second">— fps</div>
+      <div id="worker-status" class="worker-status" aria-label="Worker cache status" title="-1 / 0 / +1 window cache: ✓=ready ◐=links ready, flow computing ⏳=computing —=empty">— — —</div>
     </div>
     <div class="disclaimer">
       Object sizes not to scale · Distances to scale · Not affiliated with SpaceX ·

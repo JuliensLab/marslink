@@ -129,6 +129,17 @@ export const slidersData = {
       scale: "linear",
       updateLongTermScore: true,
     },
+    linkUpdateIntervalHours: {
+      label: "Link update interval",
+      description: "Sim-time between link/flow recomputations. Lower = more responsive to orbital drift, higher = less CPU. The worker prefetches the next window.",
+      min: 1,
+      max: 168,
+      value: 24,
+      step: 1,
+      unit: " h",
+      scale: "linear",
+      updateLongTermScore: false,
+    },
     flowAlgorithm: {
       type: "radio",
       label: "Max-flow algorithm",

@@ -21,8 +21,8 @@ export class SimMain {
   }
 
   constructor() {
-    this.previousLinkUpdateSimDate = 0;
     this.newSatellitesConfig = null;
+    this.appliedSatellitesConfig = null;
     this.pendingUpdates = new Set(); // tracks: 'links', 'config', 'display', 'satellites_display'
 
     // Initialize simulation components
@@ -31,7 +31,26 @@ export class SimMain {
     this.simLinkBudget = new SimLinkBudget();
     this.simDeployment = new SimDeployment(this.simSolarSystem.getSolarSystemData().planets);
     this.simSatellites = new SimSatellites(this.simLinkBudget, this.simSolarSystem.getSolarSystemData().planets);
+    // simNetwork kept on main thread ONLY for the longTermRun batch path
     this.simNetwork = new SimNetwork(this.simLinkBudget, this.simSatellites);
+
+    // --- Worker + triple-buffered window cache (-1/0/+1) ---
+    this.simWorker = new Worker(new URL("./simWorker.js", import.meta.url), { type: "module" });
+    this.simWorker.onmessage = (event) => this.handleWorkerMessage(event);
+    this.simWorker.onerror = (event) => console.error("[Marslink] Worker error:", event.message);
+    this.simWorker.postMessage({ type: "init" });
+    this.workerReady = false;
+    this.workerBusy = false;
+    this.lastRequestId = 0;
+    this.inFlightWindowIdx = null; // windowIdx currently being computed by worker
+
+    // Window cache: Map<windowIdx, { configEpoch, ...result }>
+    this.WINDOW_DURATION = 1000 * 60 * 60 * 24; // 24h sim time
+    this.windowCache = new Map();
+    this.configEpoch = 0;
+    this.displayedWindowIdx = null;
+    this.previousSimDate = 0; // for detecting time direction
+
     // Do not instantiate simDisplay here; it will be set by setDisplayType
     this.simDisplay = null;
     this.linksColors = null;
@@ -46,8 +65,12 @@ export class SimMain {
     console.log("[Marslink] Simulation initialized");
 
     this.latencyChartInstance = null;
-    this.missionProfiles = null; // Initialize reportData storage
+    this.missionProfiles = null;
+    this.resultTrees = [];
     this.capacityInfo = null;
+    this.routeSummary = null;
+    this.lastNetworkData = null;
+    this.maxFlowGbps = 0;
 
     this.startSimulationLoop();
   }
@@ -408,7 +431,21 @@ export class SimMain {
   }
 
   setSatellitesConfig(uiConfig) {
+    this._lastUiConfig = uiConfig;
     const satellitesConfig = [];
+
+    // Link update interval slider → window duration for the -1/0/+1 cache
+    const linkUpdateHours = uiConfig["simulation.linkUpdateIntervalHours"];
+    if (typeof linkUpdateHours === "number" && linkUpdateHours > 0) {
+      const newDuration = linkUpdateHours * 60 * 60 * 1000;
+      if (newDuration !== this.WINDOW_DURATION) {
+        this.WINDOW_DURATION = newDuration;
+        // Window boundaries changed — invalidate cache
+        this.windowCache.clear();
+        this.displayedWindowIdx = null;
+        this.pendingUpdates.add("links");
+      }
+    }
 
     this.simLinkBudget.setTechnologyConfig(uiConfig);
     if (this.simLinkBudget.calctimeMs !== this.previousCalctimeMs) {
@@ -1041,137 +1078,297 @@ export class SimMain {
     return html;
   }
 
+  // ─── Worker dispatch helpers ──────────────────────────────────────────
+
   /**
-   * The core update loop that advances the simulation by one frame.
-   * It updates the positions of planets, satellites, and the display.
-   * The links are updated asynchronously when the worker sends data.
+   * Post a compute request to the worker for a given window.
+   * Only one request in flight at a time; if the worker is busy, the caller
+   * should wait (the next frame will retry via prefetch).
+   */
+  dispatchWorker(windowIdx, simDate) {
+    if (!this.workerReady || !this._lastUiConfig || !this.appliedSatellitesConfig) return;
+    this.lastRequestId++;
+    this.workerBusy = true;
+    this.inFlightWindowIdx = windowIdx;
+    const computeFlow =
+      this.linksColors === "Flow" &&
+      (this.simLinkBudget.calctimeMs > 0 || this.pendingUpdates.has("config") || this.pendingUpdates.has("display"));
+    this.simWorker.postMessage({
+      type: "compute",
+      requestId: this.lastRequestId,
+      windowIdx,
+      configEpoch: this.configEpoch,
+      uiConfig: this._lastUiConfig,
+      satellitesConfig: this.appliedSatellitesConfig,
+      simDate,
+      computeFlow,
+    });
+    this.updateWorkerStatus();
+  }
+
+  /**
+   * Apply a cached window result to the display + UI.
+   */
+  applyWindowResult(result) {
+    this.lastNetworkData = result.networkData || null;
+    this.maxFlowGbps = result.networkData ? result.networkData.maxFlowGbps || 0 : 0;
+    this.capacityInfo = result.capacityInfo || null;
+    this.routeSummary = result.routeSummary || null;
+    this.missionProfiles = result.missionProfilesData || null;
+    this.resultTrees = result.resultTreesData || [];
+    if (typeof result.satellitesCount === "number") this.satellitesCount = result.satellitesCount;
+
+    if (this.simDisplay) {
+      this.simDisplay.updatePossibleLinks(result.possibleLinks || []);
+      this.simDisplay.updateActiveLinks(result.networkData ? result.networkData.links || [] : []);
+    }
+    if (this.ui) {
+      this.ui.updateInfoAreaCosts(
+        this.getCostsHtml(this.calculateCosts(this.maxFlowGbps, this.resultTrees), this.lastNetworkData, result.latencyData)
+      );
+      this.ui.updateInfoAreaData("");
+      if (result.latencyData) {
+        this.makeLatencyChart(result.latencyData, 60 * 5);
+      } else {
+        this.makeLatencyChart(null);
+      }
+    }
+  }
+
+  /**
+   * Receives results from the worker and stores them in the window cache.
+   */
+  handleWorkerMessage(event) {
+    const msg = event.data;
+    if (!msg || typeof msg !== "object") return;
+
+    if (msg.type === "ready") {
+      this.workerReady = true;
+      console.log("[Marslink] Worker ready");
+      // Kick off initial computation if config is already applied
+      if (this.appliedSatellitesConfig && this._lastUiConfig) {
+        const simDate = this.simTime.getDate();
+        const windowIdx = Math.floor(simDate / this.WINDOW_DURATION);
+        this.dispatchWorker(windowIdx, new Date((windowIdx + 0.5) * this.WINDOW_DURATION));
+      }
+      return;
+    }
+
+    if (msg.type === "error") {
+      console.error("[Marslink] Worker error:", msg.message);
+      this.workerBusy = false;
+      this.inFlightWindowIdx = null;
+      this.updateWorkerStatus();
+      return;
+    }
+
+    // --- LINKS-READY: early delivery of possibleLinks before flow is done ---
+    if (msg.type === "links-ready") {
+      if (msg.configEpoch !== this.configEpoch) return; // stale
+      const currentIdx = Math.floor(this.simTime.getDate() / this.WINDOW_DURATION);
+
+      // Store links in a partial cache entry (flow fields will be merged later)
+      const existing = this.windowCache.get(msg.windowIdx);
+      if (!existing || existing.configEpoch !== this.configEpoch) {
+        this.windowCache.set(msg.windowIdx, { ...msg, networkData: null, latencyData: null, partial: true });
+      }
+
+      // If this is the current window, display links immediately
+      if (msg.windowIdx === currentIdx) {
+        this.capacityInfo = msg.capacityInfo || null;
+        this.routeSummary = msg.routeSummary || null;
+        this.missionProfiles = msg.missionProfilesData || null;
+        this.resultTrees = msg.resultTreesData || [];
+        if (typeof msg.satellitesCount === "number") this.satellitesCount = msg.satellitesCount;
+        if (this.simDisplay) {
+          this.simDisplay.updatePossibleLinks(msg.possibleLinks || []);
+        }
+        // Update capacity UI with links data (flow will come later)
+        if (this.ui) {
+          this.ui.updateInfoAreaCosts(
+            this.getCostsHtml(this.calculateCosts(this.maxFlowGbps, this.resultTrees), this.lastNetworkData, null)
+          );
+        }
+        this.displayedWindowIdx = currentIdx;
+      }
+
+      console.log(`[Marslink] Worker links: window ${msg.windowIdx} | ${msg.possibleLinks?.length || 0} links | ${msg.linksMs}ms`);
+      this.updateWorkerStatus();
+      return;
+    }
+
+    // --- RESULT: full result with flow data ---
+    if (msg.type !== "result") return;
+
+    this.workerBusy = false;
+    this.inFlightWindowIdx = null;
+
+    // Drop stale results (old config epoch)
+    if (msg.configEpoch !== this.configEpoch) {
+      this.updateWorkerStatus();
+      return;
+    }
+
+    // Merge flow data into the cached entry (links were already stored by links-ready)
+    const cached = this.windowCache.get(msg.windowIdx);
+    if (cached && cached.configEpoch === this.configEpoch) {
+      cached.networkData = msg.networkData;
+      cached.latencyData = msg.latencyData;
+      cached.timings = msg.timings;
+      cached.totalMs = msg.totalMs;
+      cached.partial = false;
+    } else {
+      this.windowCache.set(msg.windowIdx, msg);
+    }
+
+    // Evict distant windows (keep only -1, 0, +1 relative to current)
+    const currentIdx = Math.floor(this.simTime.getDate() / this.WINDOW_DURATION);
+    for (const key of this.windowCache.keys()) {
+      if (Math.abs(key - currentIdx) > 1) this.windowCache.delete(key);
+    }
+
+    // If this is the current window, apply flow data to display
+    if (msg.windowIdx === currentIdx) {
+      this.applyWindowResult({ ...this.windowCache.get(currentIdx) });
+      this.displayedWindowIdx = currentIdx;
+    }
+
+    // Log
+    const algoName = this.simLinkBudget.flowAlgorithm || "default";
+    const flowGbps = msg.networkData?.maxFlowGbps?.toFixed(1) ?? "—";
+    console.log(
+      `[Marslink] Worker flow: window ${msg.windowIdx} | Flow ${flowGbps} Gbps (${algoName}) | ${msg.totalMs}ms`
+    );
+    if (msg.timings) {
+      console.log(`[Marslink] Worker phases: ${Object.entries(msg.timings).map(([k, v]) => `${k}=${v}ms`).join(" | ")}`);
+    }
+
+    this.updateWorkerStatus();
+  }
+
+  /**
+   * Update the -1/0/+1 status indicator in the bottom bar.
+   */
+  updateWorkerStatus() {
+    const el = document.getElementById("worker-status");
+    if (!el) return;
+    const currentIdx = Math.floor(this.simTime.getDate() / this.WINDOW_DURATION);
+    const slotChar = (idx) => {
+      const cached = this.windowCache.get(idx);
+      if (cached && cached.configEpoch === this.configEpoch) {
+        return cached.partial ? "◐" : "✓"; // ◐ = links ready, flow pending
+      }
+      if (this.inFlightWindowIdx === idx) return "⏳";
+      return "—";
+    };
+    el.textContent = `${slotChar(currentIdx - 1)} ${slotChar(currentIdx)} ${slotChar(currentIdx + 1)}`;
+  }
+
+  // ─── Core update loop ───────────────────────────────────────────────
+
+  /**
+   * Per-frame update loop. Satellite positions update every frame (cheap).
+   * Link/flow computation is delegated to the worker and cached in the
+   * -1/0/+1 window buffer. The main thread never blocks on link computation.
    */
   updateLoop() {
     const simDate = this.simTime.getDate();
-    // Update the sim-time display every frame (cheap textContent write) so the
-    // clock reflects time acceleration regardless of the link-recalc cadence.
     if (this.ui) this.ui.updateSimTime(simDate);
     const planets = this.simSolarSystem.updatePlanetsPositions(simDate);
 
-    let satellites;
-    const isConfigApply = !!this.newSatellitesConfig;
-    const timings = isConfigApply ? {} : null;
-    const mark = (name, startPerf) => {
-      if (timings) timings[name] = Math.round(performance.now() - startPerf);
-    };
-
-    // Cache possibleLinks across the config-apply and link-update phases
-    // so we don't rebuild the topology twice per slider change.
-    let cachedPossibleLinks = null;
-
+    // --- Phase 1: Config change → local sat rebuild + cache invalidation ---
+    let configJustApplied = false;
     if (this.newSatellitesConfig) {
-      let tPhase = performance.now();
+      const t0 = performance.now();
       this.simSatellites.setSatellitesConfig(this.newSatellitesConfig);
-      mark("setSatellitesConfig", tPhase);
-
-      tPhase = performance.now();
-      this.missionProfiles = this.simDeployment.getMissionProfile(this.simSatellites.getOrbitalElements());
-      mark("getMissionProfile", tPhase);
-
-      tPhase = performance.now();
-      this.resultTrees = new SimMissionValidator(this.missionProfiles, {
-        costPerLaunch: this.costPerLaunch,
-        costPerSatellite: this.costPerSatellite,
-        costPerLaserTerminal: this.costPerLaserTerminal,
-        laserPortsPerRing: this.simLinkBudget.maxLinksPerRing,
-        propellantCostsPerKg: this.propellantCostsPerKg,
-        wrightsLawFactor: this.wrightsLawFactor,
-      });
-      mark("missionValidator", tPhase);
-
-      tPhase = performance.now();
-      satellites = this.simSatellites.updateSatellitesPositions(simDate);
-      this.satellitesCount = satellites.length;
-      mark("updatePositions(config)", tPhase);
-      console.log(`[Marslink] Config applied: ${this.satellitesCount} satellites`);
-
-      tPhase = performance.now();
-      cachedPossibleLinks = this.simNetwork.getPossibleLinks(planets, satellites);
-      mark("getPossibleLinks(config)", tPhase);
-
-      this.routeSummary = this.simNetwork.routeSummary;
-
-      tPhase = performance.now();
-      this.capacityInfo = this.calculateCapacityInfo(cachedPossibleLinks);
-      mark("calculateCapacityInfo", tPhase);
-
-      this.pendingUpdates.add('links');
-      this.pendingUpdates.add('config');
+      const setMs = Math.round(performance.now() - t0);
+      this.satellitesCount = this.simSatellites.getSatellites().length;
+      console.log(`[Marslink] Main: setSatellitesConfig=${setMs}ms (${this.satellitesCount} sats)`);
+      this.appliedSatellitesConfig = this.newSatellitesConfig;
       this.newSatellitesConfig = null;
-    } else {
-      satellites = this.simSatellites.updateSatellitesPositions(simDate);
+      configJustApplied = true;
+
+      // Invalidate cache — all windows are stale
+      this.configEpoch++;
+      this.windowCache.clear();
+      this.displayedWindowIdx = null;
+
+      // Clear display links (avoid sat/link name mismatch)
+      if (this.simDisplay) {
+        this.simDisplay.updatePossibleLinks([]);
+        this.simDisplay.updateActiveLinks([]);
+      }
+
+      // Don't add "links"/"config" to pendingUpdates — the configEpoch bump +
+      // windowCache.clear() + displayedWindowIdx=null already cause Phase 3 to
+      // dispatch the worker. Adding them caused a double-dispatch: the first
+      // compute would finish, workerBusy→false, but "links" was still in
+      // pendingUpdates → the else-if branch dispatched window 0 again.
+      this.pendingUpdates.add("satellites_display");
     }
 
-    if (this.pendingUpdates.has('links') || Math.abs(simDate - this.previousLinkUpdateSimDate) > 1000 * 60 * 60 * 24) {
-      this.previousLinkUpdateSimDate = simDate;
+    // --- Phase 2: Per-frame satellite positions ---
+    const satellites = this.simSatellites.updateSatellitesPositions(simDate);
 
-      let perf = performance.now();
-      // Reuse the topology we just built during config-apply when available
-      const possibleLinks = cachedPossibleLinks || this.simNetwork.getPossibleLinks(planets, satellites);
-      if (!cachedPossibleLinks) this.routeSummary = this.simNetwork.routeSummary;
-      const topoMs = Math.round(performance.now() - perf);
-      if (timings) timings.getPossibleLinks = topoMs;
+    // --- Phase 3: Window cache check + worker dispatch ---
+    const currentWindowIdx = Math.floor(simDate / this.WINDOW_DURATION);
+    const timeDirection = simDate >= this.previousSimDate ? 1 : -1;
+    this.previousSimDate = simDate;
 
-      let tPhase = performance.now();
-      this.removeLinks();
-      this.simDisplay.updatePossibleLinks(possibleLinks);
-      this.simDisplay.setSatellites(satellites);
-      this.simDisplay.updatePositions(planets, satellites);
-      this.ui.updateSimTime(simDate);
-      mark("displayPossibleLinks", tPhase);
+    // Compute the representative sim date for a window — the MIDPOINT, so
+    // the link geometry is most accurate across the full window.
+    const windowMidDate = (idx) => new Date((idx + 0.5) * this.WINDOW_DURATION);
 
-      if (this.linksColors === "Flow" && (this.simLinkBudget.calctimeMs > 0 || this.pendingUpdates.has('config') || this.pendingUpdates.has('display'))) {
-        perf = performance.now();
-        const networkData = this.simNetwork.getNetworkData(planets, satellites, possibleLinks, this.simLinkBudget.calctimeMs);
-        const flowMs = Math.round(performance.now() - perf);
-        if (timings) timings.getNetworkData = flowMs;
-        const algoName = this.simLinkBudget.flowAlgorithm || "default";
-        console.log(`[Marslink] Links: ${possibleLinks.length} (${topoMs}ms) | Flow: ${networkData.maxFlowGbps?.toFixed(1) ?? '?'} Gbps (${flowMs}ms, ${algoName})`);
-        this.maxFlowGbps = networkData.maxFlowGbps;
-        this.lastNetworkData = networkData;
-
-        tPhase = performance.now();
-        this.simDisplay.updateActiveLinks(networkData.links);
-        mark("updateActiveLinks", tPhase);
-
-        if (this.ui) {
-          tPhase = performance.now();
-          const binSize = 60 * 5;
-          const latencyData = this.simNetwork.calculateLatencies(networkData, binSize);
-          mark("calculateLatencies", tPhase);
-
-          tPhase = performance.now();
-          this.ui.updateInfoAreaCosts(this.getCostsHtml(this.calculateCosts(networkData.maxFlowGbps, this.resultTrees), networkData, latencyData));
-          this.ui.updateInfoAreaData("");
-          this.makeLatencyChart(latencyData, binSize);
-          mark("infoArea+chart", tPhase);
+    // Check if current window is cached and fresh
+    if (currentWindowIdx !== this.displayedWindowIdx) {
+      const cached = this.windowCache.get(currentWindowIdx);
+      if (cached && cached.configEpoch === this.configEpoch) {
+        // INSTANT SWAP — precomputed window is ready
+        this.applyWindowResult(cached);
+        this.displayedWindowIdx = currentWindowIdx;
+        this.pendingUpdates.delete("links");
+        this.pendingUpdates.delete("config");
+        this.pendingUpdates.delete("display");
+      } else if (!this.workerBusy || this.inFlightWindowIdx !== currentWindowIdx) {
+        // Not cached, not in flight → dispatch worker for current window
+        if (!this.workerBusy) {
+          this.dispatchWorker(currentWindowIdx, windowMidDate(currentWindowIdx));
         }
-      } else {
-        this.ui.updateInfoAreaCosts(this.getCostsHtml(this.calculateCosts(null, this.resultTrees), this.lastNetworkData, null));
-        this.ui.updateInfoAreaData("");
-        this.makeLatencyChart(null);
       }
-      this.pendingUpdates.delete('links');
-      this.pendingUpdates.delete('config');
-      this.pendingUpdates.delete('display');
-
-      if (timings) {
-        const parts = Object.entries(timings).map(([k, v]) => `${k}=${v}ms`).join(" | ");
-        console.log(`[Marslink] Phases: ${parts}`);
+    } else if (this.pendingUpdates.has("links") || this.pendingUpdates.has("display")) {
+      // Same window but needs refresh (e.g., Flow mode toggled)
+      if (!this.workerBusy) {
+        this.windowCache.delete(currentWindowIdx);
+        this.dispatchWorker(currentWindowIdx, windowMidDate(currentWindowIdx));
+        this.pendingUpdates.delete("links");
+        this.pendingUpdates.delete("config");
+        this.pendingUpdates.delete("display");
       }
-    } else {
-      this.simDisplay.updatePositions(planets, satellites);
     }
 
-    if (this.pendingUpdates.has('satellites_display')) {
+    // --- Phase 4: Prefetch next window ---
+    if (!this.workerBusy && this.displayedWindowIdx !== null) {
+      const nextIdx = currentWindowIdx + timeDirection;
+      const nextCached = this.windowCache.get(nextIdx);
+      if (!nextCached || nextCached.configEpoch !== this.configEpoch) {
+        this.dispatchWorker(nextIdx, windowMidDate(nextIdx));
+      }
+    }
+
+    // --- Phase 5: Per-frame display ---
+    if (configJustApplied && this.simDisplay) {
       this.simDisplay.setSatellites(satellites);
-      this.pendingUpdates.delete('satellites_display');
+      this.pendingUpdates.delete("satellites_display");
     }
+    if (this.simDisplay) this.simDisplay.updatePositions(planets, satellites);
+
+    if (this.pendingUpdates.has("satellites_display")) {
+      if (this.simDisplay) this.simDisplay.setSatellites(satellites);
+      this.pendingUpdates.delete("satellites_display");
+    }
+
+    // --- Phase 6: Status indicator ---
+    this.updateWorkerStatus();
   }
 
   startSimulationLoop() {

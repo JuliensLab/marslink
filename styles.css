@@ -802,7 +802,8 @@ select.slider {
   overflow: hidden;
 }
 
-#progress-bar-run {
+#progress-bar-run,
+.progress-bar {
   width: 0%;
   height: 100%;
   background: linear-gradient(90deg, var(--accent), var(--accent-hot));
@@ -1090,6 +1091,18 @@ select.slider {
   border: 1px solid var(--border-1);
   border-radius: var(--r-1);
   background: rgba(255, 255, 255, 0.02);
+}
+
+.worker-status {
+  font-family: ui-monospace, "JetBrains Mono", "SF Mono", Consolas, monospace;
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  padding: 2px 6px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--r-1);
+  background: rgba(255, 255, 255, 0.02);
+  letter-spacing: 2px;
+  cursor: default;
 }
 
 .disclaimer {

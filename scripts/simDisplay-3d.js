@@ -573,44 +573,56 @@ export class SimDisplay {
   }
 
   updateLinksPositions() {
-    const activeLinkSet = new Set(this.activeLinks.map((link) => link.fromId + "_" + link.toId));
-
-    // Filter out active links from possible links
-    const inactiveLinks = this.possibleLinks.filter(
-      (link) => !activeLinkSet.has(link.fromId + "_" + link.toId) && !activeLinkSet.has(link.toId + "_" + link.fromId)
-    );
-    // Combine all links
-    const allLinks = [...this.activeLinks, ...inactiveLinks];
-
-    // Filter to only links with valid positions
-    let validLinks;
     if (this.linksColorsType === "None") {
-      validLinks = [];
-    } else {
-      validLinks = allLinks.filter((link) => {
-        const fromPosition = this.planetPositions[link.fromId] || this.satellitePositions[link.fromId];
-        const toPosition = this.planetPositions[link.toId] || this.satellitePositions[link.toId];
-        return (
-          fromPosition &&
-          toPosition &&
-          !isNaN(fromPosition.x) &&
-          !isNaN(fromPosition.y) &&
-          !isNaN(fromPosition.z) &&
-          !isNaN(toPosition.x) &&
-          !isNaN(toPosition.y) &&
-          !isNaN(toPosition.z)
-        );
-      });
+      this.linksGeometry.setDrawRange(0, 0);
+      if (this.linkLabels.length > 0) this.updateLinkLabels([]);
+      return;
     }
 
-    const numLinks = validLinks.length;
+    // Build active link set using pre-cached keys to avoid per-frame string alloc
+    if (!this._activeLinkSet) this._activeLinkSet = new Set();
+    const activeLinkSet = this._activeLinkSet;
+    activeLinkSet.clear();
+    for (let i = 0; i < this.activeLinks.length; i++) {
+      const link = this.activeLinks[i];
+      activeLinkSet.add(link._key || (link._key = link.fromId + "_" + link.toId));
+    }
+
+    // Count valid links without allocating filter arrays
+    const possible = this.possibleLinks;
+    const active = this.activeLinks;
+    const pPos = this.planetPositions;
+    const sPos = this.satellitePositions;
+
+    // Pre-count to size buffers, then fill in a single pass
+    let numLinks = 0;
+
+    // Active links first
+    for (let i = 0; i < active.length; i++) {
+      const link = active[i];
+      const from = pPos[link.fromId] || sPos[link.fromId];
+      const to = pPos[link.toId] || sPos[link.toId];
+      if (from && to) numLinks++;
+    }
+    // Inactive links
+    const inactiveStart = numLinks;
+    for (let i = 0; i < possible.length; i++) {
+      const link = possible[i];
+      const key = link._key || (link._key = link.fromId + "_" + link.toId);
+      const revKey = link._revKey || (link._revKey = link.toId + "_" + link.fromId);
+      if (activeLinkSet.has(key) || activeLinkSet.has(revKey)) continue;
+      const from = pPos[link.fromId] || sPos[link.fromId];
+      const to = pPos[link.toId] || sPos[link.toId];
+      if (from && to) numLinks++;
+    }
+
     const requiredSize = numLinks * 6;
 
-    // Reuse or grow pre-allocated typed arrays (avoid per-frame allocation)
+    // Reuse or grow pre-allocated typed arrays
     if (!this._linkPositions || this._linkPositions.length < requiredSize) {
-      this._linkPositions = new Float32Array(Math.max(requiredSize, 6000));
-      this._linkColors = new Float32Array(Math.max(requiredSize, 6000));
-      // Create BufferAttributes once; reuse by swapping the array
+      const allocSize = Math.max(requiredSize, 6000);
+      this._linkPositions = new Float32Array(allocSize);
+      this._linkColors = new Float32Array(allocSize);
       this._linkPosAttr = new THREE.BufferAttribute(this._linkPositions, 3);
       this._linkPosAttr.setUsage(THREE.DynamicDrawUsage);
       this._linkColAttr = new THREE.BufferAttribute(this._linkColors, 3);
@@ -622,80 +634,98 @@ export class SimDisplay {
     const positions = this._linkPositions;
     const colors = this._linkColors;
 
-    // Calculate min and max flow for color mapping
-    let maxFlow = 1, minFlow = 0;
-    if (this.linksColorsType === "Flow") {
-      for (const link of this.activeLinks) {
-        const f = link.gbpsFlow;
-        if (f > maxFlow) maxFlow = f;
-        if (f < minFlow) minFlow = f;
+    // Calculate min and max for color mapping
+    let maxVal = 1, minVal = 0;
+    const isFlowMode = this.linksColorsType === "Flow";
+    if (isFlowMode) {
+      for (let i = 0; i < active.length; i++) {
+        const f = active[i].gbpsFlow;
+        if (f > maxVal) maxVal = f;
       }
-    } else if (this.linksColorsType === "Capacity" && validLinks.length > 0) {
-      maxFlow = 0;
-      minFlow = Infinity;
-      for (const link of validLinks) {
-        const c = link.gbpsCapacity;
-        if (c > maxFlow) maxFlow = c;
-        if (c < minFlow) minFlow = c;
+    } else {
+      maxVal = 0; minVal = Infinity;
+      for (let i = 0; i < possible.length; i++) {
+        const c = possible[i].gbpsCapacity;
+        if (c > maxVal) maxVal = c;
+        if (c < minVal) minVal = c;
+      }
+      for (let i = 0; i < active.length; i++) {
+        const c = active[i].gbpsCapacity;
+        if (c > maxVal) maxVal = c;
+        if (c < minVal) minVal = c;
       }
     }
 
-    // Pre-compute color stop THREE.Color objects once (not per-link)
-    const inactiveColor = this._inactiveColor || (this._inactiveColor = new THREE.Color());
-    inactiveColor.set(this.styles.links.inactive.color);
-    const color0 = this._color0 || (this._color0 = new THREE.Color());
-    color0.set(this.styles.links.active.color_0);
-    const colorFixed = this._colorFixed || (this._colorFixed = new THREE.Color());
-    colorFixed.set(this.styles.links.active.color_fixed);
-    const colorMax = this._colorMax || (this._colorMax = new THREE.Color());
-    colorMax.set(this.styles.links.active.color_max);
-    const tmpColor = this._tmpColor || (this._tmpColor = new THREE.Color());
+    // Pre-extract color stop RGB (avoid .set() per frame — only update when styles change)
+    if (!this._colorsCached) {
+      this._colorsCached = true;
+      const c = new THREE.Color();
+      c.set(this.styles.links.inactive.color);
+      this._inR = c.r; this._inG = c.g; this._inB = c.b;
+      c.set(this.styles.links.active.color_0);
+      this._c0R = c.r; this._c0G = c.g; this._c0B = c.b;
+      c.set(this.styles.links.active.color_fixed);
+      this._cfR = c.r; this._cfG = c.g; this._cfB = c.b;
+      c.set(this.styles.links.active.color_max);
+      this._cmR = c.r; this._cmG = c.g; this._cmB = c.b;
+    }
 
-    const flowRange = maxFlow - minFlow;
-    const flowRangeInv = flowRange > 0 ? 1 / flowRange : 0;
+    const valRange = maxVal - minVal;
+    const valRangeInv = valRange > 0 ? 1 / valRange : 0;
+    const threshold = 0.02;
+    const aboveThresholdInv = maxVal > threshold ? 1 / (maxVal - threshold) : 0;
+    const thresholdInv = 1 / threshold;
 
-    for (let i = 0; i < numLinks; i++) {
-      const link = validLinks[i];
-      const isActive = activeLinkSet.has(link.fromId + "_" + link.toId);
+    // Reuse validLinks array for label pass
+    if (!this._validLinks) this._validLinks = [];
+    const validLinks = this._validLinks;
+    validLinks.length = 0;
 
-      const fromPosition = this.planetPositions[link.fromId] || this.satellitePositions[link.fromId];
-      const toPosition = this.planetPositions[link.toId] || this.satellitePositions[link.toId];
+    // Single-pass: write active links, then inactive
+    let idx = 0;
+    const writeLink = (link, isActive) => {
+      const from = pPos[link.fromId] || sPos[link.fromId];
+      const to = pPos[link.toId] || sPos[link.toId];
+      if (!from || !to) return;
 
-      const off = i * 6;
-      positions[off]     = fromPosition.x;
-      positions[off + 1] = fromPosition.y;
-      positions[off + 2] = fromPosition.z;
-      positions[off + 3] = toPosition.x;
-      positions[off + 4] = toPosition.y;
-      positions[off + 5] = toPosition.z;
+      const off = idx * 6;
+      positions[off]     = from.x; positions[off + 1] = from.y; positions[off + 2] = from.z;
+      positions[off + 3] = to.x;   positions[off + 4] = to.y;   positions[off + 5] = to.z;
 
       let r, g, b;
-      if ((this.linksColorsType === "Flow" && isActive) || this.linksColorsType === "Capacity") {
-        const valFlow = this.linksColorsType === "Flow" ? link.gbpsFlow : link.gbpsCapacity;
-        const value = flowRange > 0 ? (valFlow - minFlow) * flowRangeInv * flowRange + minFlow : 0;
-
-        // Interpolate between color stops
-        if (value <= 0.02) {
-          const segmentT = value / 0.02;
-          tmpColor.lerpColors(color0, colorFixed, segmentT);
+      if ((isFlowMode && isActive) || !isFlowMode) {
+        const val = isFlowMode ? link.gbpsFlow : link.gbpsCapacity;
+        if (val <= threshold) {
+          const t = val * thresholdInv;
+          r = this._c0R + (this._cfR - this._c0R) * t;
+          g = this._c0G + (this._cfG - this._c0G) * t;
+          b = this._c0B + (this._cfB - this._c0B) * t;
         } else {
-          const segmentT = maxFlow > 0.02 ? (value - 0.02) / (maxFlow - 0.02) : 0;
-          tmpColor.lerpColors(colorFixed, colorMax, segmentT);
+          const t = (val - threshold) * aboveThresholdInv;
+          r = this._cfR + (this._cmR - this._cfR) * t;
+          g = this._cfG + (this._cmG - this._cfG) * t;
+          b = this._cfB + (this._cmB - this._cfB) * t;
         }
-        r = tmpColor.r; g = tmpColor.g; b = tmpColor.b;
       } else {
-        r = inactiveColor.r; g = inactiveColor.g; b = inactiveColor.b;
+        r = this._inR; g = this._inG; b = this._inB;
       }
 
       colors[off]     = r; colors[off + 1] = g; colors[off + 2] = b;
       colors[off + 3] = r; colors[off + 4] = g; colors[off + 5] = b;
+      idx++;
+      validLinks.push(link);
+    };
+
+    for (let i = 0; i < active.length; i++) writeLink(active[i], true);
+    for (let i = 0; i < possible.length; i++) {
+      const link = possible[i];
+      if (activeLinkSet.has(link._key) || activeLinkSet.has(link._revKey)) continue;
+      writeLink(link, false);
     }
 
-    // Update draw range and flag buffers dirty (no new objects created)
-    this.linksGeometry.setDrawRange(0, numLinks * 2);
+    this.linksGeometry.setDrawRange(0, idx * 2);
     this._linkPosAttr.needsUpdate = true;
     this._linkColAttr.needsUpdate = true;
-    this.linksGeometry.computeBoundingSphere();
 
     // Update link labels (skip cleanup when no labels exist and none requested)
     if (this.linkLabelMode || this.linkLabels.length > 0) {
@@ -709,65 +739,89 @@ export class SimDisplay {
    * @param {Array} validLinks - Array of valid links.
    */
   updateLinkLabels(validLinks) {
-    // Clear existing labels
-    this.linkLabels.forEach((label) => {
-      this.linkLabelsGroup.remove(label);
-      if (label.material.map) label.material.map.dispose();
-      label.material.dispose();
-    });
-    this.linkLabels = [];
-
     // Only show labels when a label mode is active and links are being drawn
-    if (!this.linkLabelMode || this.linksColorsType === "None") return;
+    if (!this.linkLabelMode || this.linksColorsType === "None") {
+      // Hide all pooled labels
+      for (let i = 0; i < this.linkLabels.length; i++) this.linkLabels[i].visible = false;
+      return;
+    }
 
-    validLinks.forEach((link) => {
-      const fromPosition = this.planetPositions[link.fromId] || this.satellitePositions[link.fromId];
-      const toPosition = this.planetPositions[link.toId] || this.satellitePositions[link.toId];
+    // Reuse vector objects to avoid per-link allocation
+    const fromPos = this._labelFromPos || (this._labelFromPos = new THREE.Vector3());
+    const toPos = this._labelToPos || (this._labelToPos = new THREE.Vector3());
+    const fromScreen = this._labelFromScreen || (this._labelFromScreen = new THREE.Vector3());
+    const toScreen = this._labelToScreen || (this._labelToScreen = new THREE.Vector3());
 
-      const fromPos = new THREE.Vector3(fromPosition.x, fromPosition.y, fromPosition.z);
-      const toPos = new THREE.Vector3(toPosition.x, toPosition.y, toPosition.z);
+    const halfW = window.innerWidth / 2;
+    const halfH = window.innerHeight / 2;
+    const pPos = this.planetPositions;
+    const sPos = this.satellitePositions;
+    const isMbps = this.linkLabelMode === "mbps";
+    const isFlowMode = this.linksColorsType === "Flow";
 
-      // Project to screen space
-      const fromScreen = fromPos.clone().project(this.camera);
-      const toScreen = toPos.clone().project(this.camera);
+    let labelIdx = 0;
+    for (let i = 0; i < validLinks.length; i++) {
+      const link = validLinks[i];
+      const from = pPos[link.fromId] || sPos[link.fromId];
+      const to = pPos[link.toId] || sPos[link.toId];
+      if (!from || !to) continue;
 
-      // Check if at least one endpoint is in viewport (NDC -1 to 1)
-      const fromInViewport =
-        fromScreen.x >= -1 && fromScreen.x <= 1 && fromScreen.y >= -1 && fromScreen.y <= 1 && fromScreen.z >= -1 && fromScreen.z <= 1;
-      const toInViewport =
-        toScreen.x >= -1 && toScreen.x <= 1 && toScreen.y >= -1 && toScreen.y <= 1 && toScreen.z >= -1 && toScreen.z <= 1;
-      if (!fromInViewport && !toInViewport) return; // Skip if both endpoints are off-screen
+      fromPos.set(from.x, from.y, from.z);
+      toPos.set(to.x, to.y, to.z);
+      fromScreen.copy(fromPos).project(this.camera);
+      toScreen.copy(toPos).project(this.camera);
 
-      // Calculate screen distance in pixels
-      const screenDist = Math.sqrt(
-        Math.pow(((fromScreen.x - toScreen.x) * window.innerWidth) / 2, 2) +
-          Math.pow(((fromScreen.y - toScreen.y) * window.innerHeight) / 2, 2)
-      );
+      // Skip if both endpoints are off-screen
+      const fIn = fromScreen.x >= -1 && fromScreen.x <= 1 && fromScreen.y >= -1 && fromScreen.y <= 1 && fromScreen.z >= -1 && fromScreen.z <= 1;
+      const tIn = toScreen.x >= -1 && toScreen.x <= 1 && toScreen.y >= -1 && toScreen.y <= 1 && toScreen.z >= -1 && toScreen.z <= 1;
+      if (!fIn && !tIn) continue;
 
-      if (screenDist > 50) {
-        // Create label at midpoint
-        const midPoint = new THREE.Vector3().addVectors(fromPos, toPos).multiplyScalar(0.5);
+      const dx = (fromScreen.x - toScreen.x) * halfW;
+      const dy = (fromScreen.y - toScreen.y) * halfH;
+      if (dx * dx + dy * dy < 2500) continue; // screenDist < 50px (avoid sqrt)
 
-        let labelText = "";
-        if (this.linkLabelMode === "mbps") {
-          let displayMbps = 0;
-          if (this.linksColorsType === "Flow") {
-            displayMbps = Math.round(link.gbpsFlow * 1000);
-          } else if (this.linksColorsType === "Capacity") {
-            displayMbps = Math.round(link.gbpsCapacity * 1000);
-          }
-          labelText = `${displayMbps}`;
-        } else if (this.linkLabelMode === "latency") {
-          const latencySec = link.latencySeconds ?? 0;
-          labelText = latencySec >= 1 ? `${latencySec.toFixed(1)}s` : `${Math.round(latencySec * 1000)}ms`;
+      let labelText;
+      if (isMbps) {
+        const v = isFlowMode ? link.gbpsFlow : link.gbpsCapacity;
+        labelText = `${Math.round(v * 1000)}`;
+      } else {
+        const s = link.latencySeconds ?? 0;
+        labelText = s >= 1 ? `${s.toFixed(1)}s` : `${Math.round(s * 1000)}ms`;
+      }
+
+      // Reuse or create sprite from pool
+      let label;
+      if (labelIdx < this.linkLabels.length) {
+        label = this.linkLabels[labelIdx];
+        // Only recreate texture if text changed
+        if (label._text !== labelText) {
+          if (label.material.map) label.material.map.dispose();
+          const newSprite = this.createTextSprite(labelText);
+          label.material.map = newSprite.material.map;
+          label.material.needsUpdate = true;
+          newSprite.material.dispose();
+          label._text = labelText;
         }
-
-        const label = this.createTextSprite(labelText);
-        label.position.copy(midPoint);
+        label.visible = true;
+      } else {
+        label = this.createTextSprite(labelText);
+        label._text = labelText;
         this.linkLabelsGroup.add(label);
         this.linkLabels.push(label);
       }
-    });
+
+      label.position.set(
+        (from.x + to.x) * 0.5,
+        (from.y + to.y) * 0.5,
+        (from.z + to.z) * 0.5
+      );
+      labelIdx++;
+    }
+
+    // Hide unused pooled labels
+    for (let i = labelIdx; i < this.linkLabels.length; i++) {
+      this.linkLabels[i].visible = false;
+    }
   }
 
   /**

@@ -23,6 +23,7 @@ export class SimUi {
     this.setupSimTimeCycle();
     this.setupLinkLabelToggles();
     this.setupFullRunButton();
+    this.setupSensitivity();
   }
 
   /**
@@ -234,6 +235,7 @@ export class SimUi {
     const modeDrawer = document.getElementById("mode-drawer");
     const simplePane = document.getElementById("simple-pane");
     const configurePane = document.getElementById("configure-pane");
+    const sensitivityPane = document.getElementById("sensitivity-pane");
     const runPane = document.getElementById("run-pane");
     const reportPanel = document.getElementById("report-panel");
 
@@ -248,6 +250,7 @@ export class SimUi {
       modeDrawer.setAttribute("aria-hidden", "true");
       simplePane.hidden = true;
       configurePane.hidden = true;
+      sensitivityPane.hidden = true;
       runPane.hidden = true;
     };
 
@@ -268,12 +271,13 @@ export class SimUi {
       this.activeMode = mode;
       setActiveButtons(mode);
 
-      if (mode === "simple" || mode === "configure" || mode === "run") {
+      if (mode === "simple" || mode === "configure" || mode === "sensitivity" || mode === "run") {
         closeReportPanel();
         modeDrawer.hidden = false;
         modeDrawer.setAttribute("aria-hidden", "false");
         simplePane.hidden = mode !== "simple";
         configurePane.hidden = mode !== "configure";
+        sensitivityPane.hidden = mode !== "sensitivity";
         runPane.hidden = mode !== "run";
       } else if (mode === "report") {
         closeDrawer();
@@ -620,6 +624,36 @@ export class SimUi {
   /**
    * Applies the simple-mode defaults for a given ring count.
    */
+  /**
+   * Estimates min planet-to-ring capacity (Mbps) for a given requiredmbpsbetweensats.
+   * Returns the worst-case (apoapsis) total capacity of both planet-to-satellite links.
+   */
+  _estimatePlanetRingMinCapacity(mbpsBetweenSats, ringType) {
+    const lb = this.simMain.simLinkBudget;
+    const sats = this.simMain.simSatellites;
+    const AU_IN_KM = 149597870.7;
+    const { a, n } = sats.getParams_a_n(ringType);
+    const e = ringType === "Mars" ? 0.0934231 : 0.0166967;
+
+    // Compute sat count (same formula as generateSatellitesConfig with matchCircularRings="no", sideExtension=180)
+    const distKmBetweenSats = lb.calculateKm(mbpsBetweenSats / 1000);
+    const distAuBetweenSats = distKmBetweenSats / AU_IN_KM;
+    const circumferenceAu = 2 * Math.PI * a;
+    const satCount = Math.ceil(circumferenceAu / distAuBetweenSats);
+    if (satCount < 2) return 0;
+
+    // Worst-case: at apoapsis, ring radius = a*(1+e), planet at same radius
+    // Angular spacing = 360/satCount degrees, max offset = half spacing
+    const apo = a * (1 + e);
+    const halfSpacingRad = Math.PI / satCount;
+    // Chord distance at apoapsis for angular offset = halfSpacing
+    const worstDistAu = 2 * apo * Math.sin(halfSpacingRad);
+    const worstDistKm = worstDistAu * AU_IN_KM;
+    const capacityPerLinkGbps = lb.calculateGbps(worstDistKm);
+    // Two links (one on each angular side)
+    return capacityPerLinkGbps * 2 * 1000; // Mbps
+  }
+
   applySimpleDefaults(ringCount) {
     // Estimate adapted rings total throughput to size earth/mars rings
     const lb = this.simMain.simLinkBudget;
@@ -631,9 +665,19 @@ export class SimUi {
     const interRingAu = Dem / (ringCount + 1);
     const interRingKm = lb.convertAUtoKM(interRingAu);
     const perRouteMbps = lb.calculateGbps(interRingKm) * 1000;
-    const totalMbps = routeCount * perRouteMbps;
-    const earthMbps = Math.round(totalMbps * 1.03 * 0.8 / 4) || 50;
-    const marsMbps = Math.round(totalMbps * 1.20 * 0.826 / 4) || 50;
+    const targetMbps = routeCount * perRouteMbps;
+
+    // Initial heuristic for earth/mars ring throughput target
+    let earthMbps = Math.round(targetMbps * 1.03 * 0.8 / 4) || 50;
+    let marsMbps = Math.round(targetMbps * 1.20 * 0.826 / 4) || 50;
+
+    // Feedback loop (2 iterations): estimate actual min capacity, then adjust input to hit target
+    for (let iter = 0; iter < 2; iter++) {
+      const earthMinCap = this._estimatePlanetRingMinCapacity(earthMbps, "Earth");
+      const marsMinCap = this._estimatePlanetRingMinCapacity(marsMbps, "Mars");
+      if (earthMinCap > 0) earthMbps = Math.round(earthMbps * targetMbps / earthMinCap / 2) || 50;
+      if (marsMinCap > 0) marsMbps = Math.round(marsMbps * targetMbps / marsMinCap / 2) || 50;
+    }
 
     this.applySliderValues({
       // Adapted rings
@@ -815,6 +859,136 @@ export class SimUi {
     } else {
       console.error("Start Full Run button or summary container not found.");
     }
+  }
+
+  /**
+   * Sets up the Sensitivity analysis button and sweep logic.
+   */
+  setupSensitivity() {
+    const startBtn = document.getElementById("startSensitivity");
+    if (!startBtn) return;
+
+    const progressWrap = document.getElementById("sens-progress-wrap");
+    const progressBar = document.getElementById("sens-progress-bar");
+    const progressText = document.getElementById("sens-progress-text");
+
+    // Toggle linear step visibility based on progression type
+    const progSelect = document.getElementById("sens-tech-progression");
+    const stepInput = document.getElementById("sens-tech-step");
+    progSelect.addEventListener("change", () => {
+      stepInput.style.display = progSelect.value === "linear" ? "" : "none";
+    });
+
+    startBtn.addEventListener("click", async () => {
+      startBtn.disabled = true;
+      startBtn.textContent = "Running...";
+      progressWrap.style.display = "";
+      progressBar.style.width = "0%";
+      progressText.textContent = "0%";
+
+      try {
+        const ringStart = parseInt(document.getElementById("sens-ring-start").value);
+        const ringEnd = parseInt(document.getElementById("sens-ring-end").value);
+        const ringStep = parseInt(document.getElementById("sens-ring-step").value) || 1;
+
+        const techStart = parseInt(document.getElementById("sens-tech-start").value);
+        const techEnd = parseInt(document.getElementById("sens-tech-end").value);
+        const techProg = progSelect.value;
+        const techLinStep = parseInt(stepInput.value) || 1;
+
+        // Build ring count values
+        const ringValues = [];
+        for (let r = ringStart; r <= ringEnd; r += ringStep) ringValues.push(r);
+
+        // Build laser tech values (user-facing)
+        const techValues = [];
+        if (techProg === "pow2") {
+          for (let t = techStart; t <= techEnd; t *= 2) techValues.push(t);
+        } else {
+          for (let t = techStart; t <= techEnd; t += techLinStep) techValues.push(t);
+        }
+
+        const totalScenarios = ringValues.length * techValues.length;
+        let completed = 0;
+
+        // Save current config to restore later
+        const baseConfig = this.getGroupsConfig([
+          "economics", "simulation", "laser_technology",
+          "ring_mars", "circular_rings", "eccentric_rings", "ring_earth", "adapted_rings",
+        ]);
+        const originalSimTime = this.simMain.simTime.getDate();
+
+        const resultArray = [];
+
+        for (const techUserVal of techValues) {
+          const techInternal = Math.round(Math.log2(techUserVal));
+
+          for (const ringCount of ringValues) {
+            // Apply simple config defaults for this ring count
+            // (this sets adapted rings, disables circular/eccentric, sizes earth/mars)
+            this.applySimpleDefaults(ringCount);
+
+            // Override laser tech
+            this.applySliderValues({ "laser_technology.improvement-factor": techInternal });
+
+            // Get the resulting full config
+            const scenarioConfig = this.getGroupsConfig([
+              "economics", "simulation", "laser_technology",
+              "ring_mars", "circular_rings", "eccentric_rings", "ring_earth", "adapted_rings",
+            ]);
+            scenarioConfig["simulation.calctimeSec"] = 100;
+
+            // Apply and run
+            this.simMain.setSatellitesConfig(scenarioConfig);
+            const result = await this.simMain.longTermRun({ from: "2030-01-01", to: "2030-01-01", stepDays: 1 });
+
+            result.scenario = {
+              ringCount,
+              laserTechImprovement: techUserVal,
+              satellites: result.dataSummary?.possibleLinksCount?.min ?? null,
+            };
+            resultArray.push(result);
+
+            completed++;
+            const pct = Math.round((completed / totalScenarios) * 100);
+            progressBar.style.width = `${pct}%`;
+            progressText.textContent = `${pct}% (${completed}/${totalScenarios})`;
+
+            // Yield to UI
+            await new Promise((r) => setTimeout(r, 0));
+          }
+        }
+
+        // Restore original config
+        for (const [key, val] of Object.entries(baseConfig)) {
+          const [section, sliderId] = key.split(".");
+          const input = this.sliders[section]?.[sliderId];
+          if (!input) continue;
+          if (input.classList && input.classList.contains("radio-container")) {
+            const radio = input.querySelector(`input[type=radio][value="${CSS.escape(String(val))}"]`);
+            if (radio) { radio.checked = true; radio.dispatchEvent(new Event("change", { bubbles: true })); }
+          } else {
+            input.value = val;
+            input.dispatchEvent(new Event("input", { bubbles: true }));
+          }
+        }
+        // Restore sim time
+        this.simMain.simTime.simMsSinceStart = originalSimTime.getTime() - this.simMain.simTime.initDate.getTime();
+        this.simMain.simTime.previousRealMs = performance.now();
+        this.simMain.updateLoop();
+
+        // Store and open results
+        const data = { config: { type: "sensitivity" }, results: resultArray };
+        localStorage.setItem("marslinkSensitivityResults", JSON.stringify(data));
+        window.open("results/fullrun/index.html");
+
+      } catch (error) {
+        console.error("Sensitivity analysis error:", error);
+      } finally {
+        startBtn.disabled = false;
+        startBtn.textContent = "Run Sensitivity";
+      }
+    });
   }
 
   /**
@@ -1233,6 +1407,7 @@ export class SimUi {
         case "simulation.calctimeSec":
         case "simulation.solarExclusionDeg":
         case "simulation.flowAlgorithm":
+        case "simulation.linkUpdateIntervalHours":
         case "simulation.failed-satellites-slider":
         case "ring_earth.match-circular-rings":
         case "ring_earth.side-extension-degrees-slider":
