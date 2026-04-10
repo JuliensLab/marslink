@@ -308,23 +308,37 @@ export function topologyAware({ graph, capacities, source, sink, perfStart, calc
   // flow values.
   //
   // Antisymmetry: flows[u_v] = +f, flows[v_u] = -f.
+  //
+  // CRITICAL: segment.physicalEdges are stored in chain order (chain[i] →
+  // chain[i+1], i.e. away from the planet). But mars-side paths walk the
+  // chain BACKWARDS (route → planet), so the actual flow direction inside
+  // a mars segment is chain[i+1] → chain[i] (toward the planet). When we
+  // propagate, we must flip from/to for mars segments, otherwise the per-
+  // link directions in the flows dict don't form a valid source→sink
+  // subgraph and downstream tools (calculateLatencies, path decomposition)
+  // see disconnected positive-flow components.
+  const marsKeys = new Set();
+  for (const s of marsSegsPos) marsKeys.add(s.virtualKey);
+  for (const s of marsSegsNeg) marsKeys.add(s.virtualKey);
+
+  // Build a virtualKey → segment lookup once instead of scanning 4 arrays
+  // per segmentFlows entry.
+  const segByKey = new Map();
+  for (const segs of [earthSegsPos, earthSegsNeg, marsSegsPos, marsSegsNeg]) {
+    for (const s of segs) segByKey.set(s.virtualKey, s);
+  }
+
   for (const [virtualKey, flow] of segmentFlows) {
     if (flow === 0) continue;
-    // Find the segment. We need to look it up — collect all segments into
-    // a single map for O(1) access, or scan all four arrays. Scan is fine
-    // because total segment count is small compared to paths.
-    let segment = null;
-    for (const segs of [earthSegsPos, earthSegsNeg, marsSegsPos, marsSegsNeg]) {
-      for (const s of segs) {
-        if (s.virtualKey === virtualKey) { segment = s; break; }
-      }
-      if (segment) break;
-    }
+    const segment = segByKey.get(virtualKey);
     if (!segment) continue;
 
+    const reverseDirection = marsKeys.has(virtualKey);
     for (const pe of segment.physicalEdges) {
-      const fromId = nodeIds.get(pe.from);
-      const toId = nodeIds.get(pe.to);
+      const fromName = reverseDirection ? pe.to : pe.from;
+      const toName = reverseDirection ? pe.from : pe.to;
+      const fromId = nodeIds.get(fromName);
+      const toId = nodeIds.get(toName);
       if (fromId === undefined || toId === undefined) continue;
       const fwdKey = `${fromId}_${toId}`;
       const revKey = `${toId}_${fromId}`;
