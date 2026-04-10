@@ -54,6 +54,7 @@ export class SimDisplay {
     this.stopAnimation = false; // Flag to stop animation
     this.sunSizeFactor = 1;
     this.planetSizeFactor = 1;
+    this.roadsterSizeFactor = 1;
     this.satelliteSizeFactor = 1;
     this.currentSatelliteScale = 100; // Default scale to make satellites visible initially
     this.satelliteColorMode = "Zone"; // Default color mode
@@ -348,11 +349,12 @@ export class SimDisplay {
     for (const planetName in this.planets) {
       const planetMesh = this.planets[planetName];
       if (planetMesh) {
-        if (planetMesh.type === "Mesh") {
+        if (planetMesh.isRoadster) {
+          // Roadster uses its own size factor
+          const rf = 0.001 * this.roadsterSizeFactor;
+          planetMesh.scale.set(rf, rf, rf);
+        } else {
           planetMesh.scale.set(planetScaleFactor, planetScaleFactor, planetScaleFactor);
-        } else if (planetMesh.type === "Group") {
-          // For car models
-          planetMesh.scale.set(0.001 * planetsFactor, 0.001 * planetsFactor, 0.001 * planetsFactor);
         }
       }
     }
@@ -368,6 +370,17 @@ export class SimDisplay {
       this._cachedGeometry = newGeometry;
       for (const mesh of this._cachedMeshes) {
         mesh.geometry = newGeometry;
+      }
+    }
+  }
+
+  setRoadsterSizeFactor(factor) {
+    this.roadsterSizeFactor = factor;
+    for (const planetName in this.planets) {
+      const planetMesh = this.planets[planetName];
+      if (planetMesh && planetMesh.isRoadster) {
+        const rf = 0.001 * factor;
+        planetMesh.scale.set(rf, rf, rf);
       }
     }
   }
@@ -426,7 +439,7 @@ export class SimDisplay {
     this._cachedGeometry = null;
 
     if (this.satelliteColorMode === "None") return;
-    if (satellites.length === 0 || this.satelliteSizeFactor <= 1) return;
+    if (satellites.length === 0 || this.satelliteSizeFactor <= 0) return;
 
     const scale = 0.0001;
     const geometry = new THREE.CylinderGeometry(scale, scale, scale * 2, 6);
@@ -685,7 +698,7 @@ export class SimDisplay {
     this.linksGeometry.computeBoundingSphere();
 
     // Update link labels (skip cleanup when no labels exist and none requested)
-    if (this.showLinkLabels || this.linkLabels.length > 0) {
+    if (this.linkLabelMode || this.linkLabels.length > 0) {
       this.updateLinkLabels(validLinks);
     }
   }
@@ -782,10 +795,19 @@ export class SimDisplay {
     }
     const key = event.key.toLowerCase();
     if (key === "l") {
-      this.linkLabelMode = this.linkLabelMode === "latency" ? null : "latency";
+      this.setLinkLabelMode(this.linkLabelMode === "latency" ? null : "latency");
     } else if (key === "m") {
-      this.linkLabelMode = this.linkLabelMode === "mbps" ? null : "mbps";
+      this.setLinkLabelMode(this.linkLabelMode === "mbps" ? null : "mbps");
     }
+  }
+
+  /**
+   * Sets the link-label mode (null | "latency" | "mbps") and notifies listeners
+   * via a window-level CustomEvent so the UI can reflect the active state.
+   */
+  setLinkLabelMode(mode) {
+    this.linkLabelMode = mode;
+    window.dispatchEvent(new CustomEvent("marslink:link-label-mode", { detail: { mode } }));
   }
 
   /**

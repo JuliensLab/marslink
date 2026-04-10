@@ -22,11 +22,14 @@
     </div>
 
     <nav class="mode-tabs" role="tablist">
+      <button class="mode-tab" data-mode="simple" role="tab">
+        <span class="tab-icon" aria-hidden="true">☰</span> Simple
+      </button>
       <button class="mode-tab" data-mode="configure" role="tab">
-        <span class="tab-icon" aria-hidden="true">⚙</span> Configure
+        <span class="tab-icon" aria-hidden="true">⚙</span> Advanced
       </button>
       <button class="mode-tab" data-mode="report" role="tab">
-        <span class="tab-icon" aria-hidden="true">▤</span> Deployment Report
+        <span class="tab-icon" aria-hidden="true">▤</span> Deployment
       </button>
       <button class="mode-tab" data-mode="run" role="tab">
         <span class="tab-icon" aria-hidden="true">▶</span> Full Run
@@ -42,8 +45,9 @@
 
           <h4>Workspaces</h4>
           <ul>
-            <li><strong>Configure</strong> — tune the constellation with sliders. Search, type exact values, save presets.</li>
-            <li><strong>Deployment Report</strong> — fine-grained per-orbit breakdown of vehicles, propellant, and costs.</li>
+            <li><strong>Simple</strong> — quick config with ring count and laser tech sliders.</li>
+            <li><strong>Advanced</strong> — full control over all parameters. Search, type exact values, save presets.</li>
+            <li><strong>Deployment</strong> — per-orbit breakdown of vehicles, propellant, and costs.</li>
             <li><strong>Full Run</strong> — sweep multiple scenarios and compare results.</li>
           </ul>
 
@@ -70,26 +74,22 @@
     </div>
   </header>
 
-  <!-- ─────────────── LEFT RAIL ─────────────── -->
-  <aside id="left-rail">
-    <button class="rail-btn" data-mode="configure" title="Configure">
-      <span aria-hidden="true">⚙</span>
-    </button>
-    <button class="rail-btn" data-mode="report" title="Deployment Report">
-      <span aria-hidden="true">▤</span>
-    </button>
-    <button class="rail-btn" data-mode="run" title="Full Run">
-      <span aria-hidden="true">▶</span>
-    </button>
-  </aside>
-
-  <!-- ─────────────── MODE DRAWER (Configure / Run) ─────────────── -->
+  <!-- ─────────────── MODE DRAWER (Simple / Advanced / Run) ─────────────── -->
   <section id="mode-drawer" hidden aria-hidden="true">
+
+    <!-- Simple config pane -->
+    <div id="simple-pane" class="drawer-pane" hidden>
+      <header class="drawer-header">
+        <h2>Simple Config</h2>
+        <button class="icon-btn drawer-close" data-close-drawer aria-label="Close">×</button>
+      </header>
+      <div class="drawer-body" id="simple-config-container" style="padding: var(--s-4);"></div>
+    </div>
 
     <!-- Configure pane -->
     <div id="configure-pane" class="drawer-pane" hidden>
       <header class="drawer-header">
-        <h2>Configure</h2>
+        <h2>Advanced Config</h2>
         <button class="icon-btn drawer-close" data-close-drawer aria-label="Close">×</button>
       </header>
 
@@ -172,9 +172,6 @@
     <div id="info-area">
       <div id="info-area-costs"></div>
       <div id="info-area-data"></div>
-      <div class="chart-wrap">
-        <canvas id="latencyChart"></canvas>
-      </div>
     </div>
   </aside>
 
@@ -185,7 +182,14 @@
       <div id="fps-counter" class="fps-counter" aria-label="Frames per second">— fps</div>
     </div>
     <div class="disclaimer">
-      Object sizes not to scale · Distances to scale · Not affiliated with SpaceX · L = latency labels · M = Mbps labels
+      Object sizes not to scale · Distances to scale · Not affiliated with SpaceX ·
+      <button type="button" id="kbd-toggle-latency" class="kbd-toggle" data-mode="latency" title="Toggle latency labels (L)">
+        <kbd>L</kbd> latency labels
+      </button>
+      ·
+      <button type="button" id="kbd-toggle-mbps" class="kbd-toggle" data-mode="mbps" title="Toggle Mbps labels (M)">
+        <kbd>M</kbd> Mbps labels
+      </button>
     </div>
   </footer>
 

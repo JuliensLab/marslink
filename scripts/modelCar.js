@@ -49,6 +49,7 @@ export function createCarModel(THREE, planetData, scene, planets, scaleFactor = 
     carModel.castShadow = true;
     carModel.receiveShadow = true;
 
+    carModel.isRoadster = true;
     carModel.params = planetData; // Store parameters if needed
     scene.add(carModel);
     planets[planetData.name] = carModel;

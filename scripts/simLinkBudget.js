@@ -16,8 +16,6 @@ export class SimLinkBudget {
     this.baseDistanceKm = technologyConfig["laser_technology.current-distance-km"];
     this.maxDistanceAU = technologyConfig["simulation.maxDistanceAU"];
     this.calctimeMs = technologyConfig["simulation.calctimeSec"] * 1000;
-    this.maxLinksPerSatellite = technologyConfig["laser_technology.laser-ports-per-satellite"];
-
     this.maxLinksPerRing = {
       ring_earth: technologyConfig["ring_earth.laser-ports-per-satellite"],
       ring_mars: technologyConfig["ring_mars.laser-ports-per-satellite"],
@@ -25,6 +23,9 @@ export class SimLinkBudget {
       eccentric_rings: technologyConfig["eccentric_rings.laser-ports-per-satellite"],
       adapted_rings: technologyConfig["adapted_rings.laser-ports-per-satellite"],
     };
+
+    // Global cap = max of all per-ring values (used as fallback and topology cap)
+    this.maxLinksPerSatellite = Math.max(...Object.values(this.maxLinksPerRing).filter((v) => v > 0));
 
     this.techImprovementFactor = Math.pow(2, technologyConfig["laser_technology.improvement-factor"]);
 

@@ -175,10 +175,23 @@ export function calculateLatencies(networkData, binSize = 60 * 5) {
 
   const averageLatency = totalFlow > 0 ? totalFlowLatencyProduct / totalFlow : 0;
 
+  // Compute flow-weighted median (p50) latency
+  let medianLatency = averageLatency;
+  if (paths.length > 0 && totalFlow > 0) {
+    paths.sort((a, b) => a.latency - b.latency);
+    const halfFlow = totalFlow / 2;
+    let cumFlow = 0;
+    for (const p of paths) {
+      cumFlow += p.flow;
+      if (cumFlow >= halfFlow) { medianLatency = p.latency; break; }
+    }
+  }
+
   return {
     histogram: sortedBins,
     bestLatency: minLatency,
     averageLatency: averageLatency,
+    medianLatency,
     maxLatency: maxLatency === -Infinity ? null : maxLatency,
   };
 }

@@ -64,6 +64,11 @@ const satellites = {
 
 const launchToLEO_deltaV_km_per_s = 9.5;
 
+// LEO → Earth-SOI escape (C3 = 0). Used by ring_earth flights, which do not
+// perform a Hohmann transfer — the launcher just pushes the satellite out of
+// Earth's sphere of influence and it ends up in Earth's heliocentric orbit.
+export const ESCAPE_BURN_DV_KM_S = 3.2;
+
 // Gravitational constant
 const g = 9.81; // m/s^2
 
@@ -295,12 +300,13 @@ export class SimDeployment {
             maxSatCountPerDeploymentFlight_fromLoop,
             Math.floor(vehicles[vehicleId].maxPayloadCapacity_kg / individualPayloadMass_kg)
           );
-    let payloadCountPerDeploymentFlight = totalPayloadCount;
-    let totalDeploymentFlights_count = 1;
-    if (totalPayloadCount > maxPayloadCountPerDeploymentFlight) {
-      totalDeploymentFlights_count = Math.ceil(totalPayloadCount / maxPayloadCountPerDeploymentFlight);
-      payloadCountPerDeploymentFlight = Math.ceil(totalPayloadCount / totalDeploymentFlights_count);
-    }
+    // Use raw max capacity per flight — the caller (launch planner) handles
+    // distributing across flights with Math.min(maxSats, remainingInRing).
+    // The old "balanced rounding" (ceil(total / ceil(total/max))) caused a
+    // discontinuity: a 1-sat drop in max capacity could collapse the per-
+    // flight count by 25% when the division rounded up to one more flight.
+    let payloadCountPerDeploymentFlight = Math.min(totalPayloadCount, maxPayloadCountPerDeploymentFlight);
+    let totalDeploymentFlights_count = Math.ceil(totalPayloadCount / payloadCountPerDeploymentFlight);
 
     const payloadMass_kg = individualPayloadMass_kg * payloadCountPerDeploymentFlight;
     const endMass_kg = vehicles[vehicleId].maneuvers.length
@@ -498,13 +504,48 @@ export class SimDeployment {
   }
 
   /**
-   * Sets the orbital elements and calculates delta-V for each plane
-   * @param {Array} targetOrbitElementsArray - Array of orbital elements for each ring
-   * @param {Array} planets - Array of planet objects, including Earth
+   * Compute a single deployment-flight profile for a given ring with the
+   * supplied outbound delta-V. Mirrors the retry loop of `getMissionProfile`
+   * but returns just one profile (the caller is scheduling one flight at a
+   * time). The returned object has `satCountPerDeploymentFlight`, `vehicles`,
+   * and `orbits` — identical in shape to `getMissionProfileOneOrbit`'s result.
+   *
+   * @param {Object} targetOrbitElements - Target ring's Keplerian elements (must include ringName, satCount, apsides)
+   * @param {Object} outboundDeltaV - { deltaV1, deltaV2, deltaV_inclination, totalDeltaV }
+   * @returns {Object} { satCountPerDeploymentFlight, vehicles, orbits }
    */
-  getMissionProfileOneOrbit(targetOrbitElements, maxSatCountPerDeploymentFlight_fromLoop) {
-    // Calculate outbound delta-V using the imported function
-    const outboundDeltaV_km_per_s = calculateHohmannDeltaV_km_s(this.earth, targetOrbitElements);
+  getFlightProfile(targetOrbitElements, outboundDeltaV, maxSatCount = Infinity) {
+    let counter = 0;
+    let maxSatCountPerDeploymentFlight_fromLoop = maxSatCount;
+    let missionProfile;
+    do {
+      if (counter++ > 10) throw new Error("Too many iterations in getFlightProfile");
+      missionProfile = this.getMissionProfileOneOrbit(targetOrbitElements, maxSatCountPerDeploymentFlight_fromLoop, outboundDeltaV);
+      if (missionProfile.error) {
+        maxSatCountPerDeploymentFlight_fromLoop = missionProfile.satCountPerDeploymentFlight - 1;
+      }
+      if (maxSatCountPerDeploymentFlight_fromLoop <= 0) {
+        throw new Error("Max satellites per flight is less than 1 for this delta-V");
+      }
+    } while (missionProfile.error);
+    return missionProfile.result;
+  }
+
+  /**
+   * Compute a single mission profile for one ring. By default the outbound
+   * delta-V is derived from the standard Earth→target Hohmann; callers that
+   * want per-flight delta-V (e.g. the launch planner with instantaneous
+   * heliocentric radii) can supply `outboundDeltaVOverride` with the shape
+   * `{ deltaV1, deltaV2, deltaV_inclination, totalDeltaV }`.
+   *
+   * @param {Object} targetOrbitElements - Target ring's Keplerian elements + satCount
+   * @param {number} maxSatCountPerDeploymentFlight_fromLoop - Cap used by the retry loop
+   * @param {Object} [outboundDeltaVOverride]
+   */
+  getMissionProfileOneOrbit(targetOrbitElements, maxSatCountPerDeploymentFlight_fromLoop, outboundDeltaVOverride) {
+    // Calculate outbound delta-V using the imported function (or use an injected override)
+    const outboundDeltaV_km_per_s =
+      outboundDeltaVOverride || calculateHohmannDeltaV_km_s(this.earth, targetOrbitElements);
 
     const outboundDeltaV1 = targetOrbitElements.ringName.startsWith("ring_ecce")
       ? outboundDeltaV_km_per_s.deltaV2

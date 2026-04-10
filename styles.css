@@ -57,7 +57,7 @@
   /* Layout sizes */
   --top-bar-h: 48px;
   --bottom-bar-h: 36px;
-  --rail-w: 56px;
+  --rail-w: 0px;
   --right-panel-w: 320px;
   --drawer-w: 360px;
 }
@@ -323,24 +323,7 @@ kbd {
   border-radius: 4px;
 }
 
-/* ─────────────────────────── LEFT RAIL ─────────────────────────── */
-#left-rail {
-  position: fixed;
-  top: var(--top-bar-h);
-  bottom: var(--bottom-bar-h);
-  left: 0;
-  width: var(--rail-w);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: var(--s-3) 0;
-  gap: var(--s-2);
-  background: var(--bg-1);
-  backdrop-filter: var(--backdrop-blur);
-  -webkit-backdrop-filter: var(--backdrop-blur);
-  border-right: 1px solid var(--border-1);
-  z-index: 25;
-}
+/* Left rail removed — navigation is in the top bar */
 
 .rail-btn {
   width: 40px;
@@ -924,15 +907,13 @@ select.slider {
 #info-area::-webkit-scrollbar-track { background: transparent; }
 #info-area::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 4px; }
 
-#info-area-costs,
-#info-area-data {
-  padding-bottom: var(--s-3);
-  margin-bottom: var(--s-3);
-  border-bottom: 1px dashed var(--border-1);
+#info-area-costs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 #info-area-data {
-  border-bottom: none;
   margin-bottom: var(--s-2);
 }
 
@@ -941,10 +922,122 @@ select.slider {
   margin: 0 0 var(--s-2) 0;
 }
 
+/* Metric cards */
+.metric-card {
+  background: var(--bg-3);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.metric-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-2);
+}
+
+.metric-label {
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-2);
+  font-weight: 600;
+}
+
+.metric-value {
+  font-size: var(--fs-lg);
+  color: var(--text-0);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.metric-value-sm {
+  font-size: var(--fs-md);
+  color: var(--text-0);
+  font-variant-numeric: tabular-nums;
+}
+
+.metric-sub {
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  margin-top: 2px;
+}
+
+.metric-toggle {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  margin-top: 4px;
+  user-select: none;
+}
+
+.metric-toggle:hover {
+  color: var(--text-2);
+}
+
+.metric-toggle .arrow {
+  font-size: 9px;
+  transition: transform 0.15s;
+}
+
+.metric-details {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-1);
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  line-height: 1.6;
+}
+
+.metric-details .detail-row {
+  display: flex;
+  justify-content: space-between;
+}
+
+.metric-details .detail-label {
+  color: var(--text-3);
+}
+
+.metric-details .detail-value {
+  color: var(--text-1);
+  font-variant-numeric: tabular-nums;
+}
+
+.capacity-diagram {
+  font-family: monospace;
+  font-size: 10px;
+  line-height: 1.5;
+  white-space: pre;
+  margin: 0;
+  color: var(--text-1);
+}
+
+.metric-badge {
+  display: inline-block;
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  vertical-align: middle;
+  margin-left: 6px;
+}
+
+.metric-na {
+  font-size: var(--fs-sm);
+  color: var(--text-3);
+  font-style: italic;
+}
+
 .chart-wrap {
   width: 100%;
-  height: 200px;
-  margin-top: var(--s-2);
+  height: 150px;
+  margin-top: 6px;
 }
 
 .main-data {
@@ -1002,6 +1095,46 @@ select.slider {
 .disclaimer {
   text-align: right;
   color: var(--text-3);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* Bottom-bar inline keyboard-shortcut toggle (L / M). Looks like text by default,
+   illuminates when the matching link-label mode is active. */
+.kbd-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  font: inherit;
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r-1);
+  cursor: pointer;
+  transition: color 120ms ease, background 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.kbd-toggle:hover {
+  color: var(--text-1);
+  background: rgba(255, 255, 255, 0.04);
+  border-color: var(--border-1);
+}
+
+.kbd-toggle.active {
+  color: var(--accent-hot);
+  background: var(--accent-dim);
+  border-color: rgba(107, 138, 253, 0.45);
+  box-shadow: 0 0 0 1px rgba(107, 138, 253, 0.25), 0 0 12px rgba(107, 138, 253, 0.35);
+}
+
+.kbd-toggle.active kbd {
+  color: var(--accent-hot);
+  border-color: rgba(107, 138, 253, 0.6);
 }
 
 /* ─────────────────────────── REPORT POPUP PANEL ─────────────────────────── */
@@ -1189,6 +1322,127 @@ details.orbit-section > *:not(summary):last-child {
   margin: var(--s-2) 0;
   font-style: italic;
 }
+
+.orbit-chart {
+  margin: var(--s-3) 0;
+  padding: var(--s-3);
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--border-1);
+  border-radius: var(--r-1);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.orbit-chart-svg {
+  width: 320px;
+  max-width: 100%;
+  display: flex;
+  justify-content: center;
+}
+
+.orbit-chart-svg svg {
+  display: block;
+  background: rgba(0, 0, 0, 0.45);
+  border-radius: var(--r-1);
+}
+
+.orbit-chart-legend {
+  font-size: 10px;
+  font-family: ui-monospace, "JetBrains Mono", "SF Mono", Consolas, monospace;
+}
+
+.orbit-chart-note {
+  font-size: 11px;
+  fill: var(--text-2);
+}
+
+.orbit-chart-controls {
+  width: 100%;
+  max-width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  align-items: stretch;
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+}
+
+.orbit-chart-controls input.flight-slider {
+  width: 100%;
+}
+
+.orbit-chart-slider-label {
+  color: var(--text-1);
+  font-weight: 600;
+}
+
+.flight-meta {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+}
+
+/* ── Per-flight schedule list ── */
+.flight-schedule-list {
+  margin: var(--s-3) 0;
+}
+
+.flight-header-row,
+.flight-summary-row {
+  display: flex;
+  gap: var(--s-2);
+  align-items: center;
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  padding: 4px var(--s-2);
+}
+
+.flight-header-row {
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-1);
+  background: rgba(107, 138, 253, 0.12);
+  border-radius: var(--r-1) var(--r-1) 0 0;
+}
+
+details.flight-row {
+  border-bottom: 1px solid var(--border-1);
+}
+
+details.flight-row > summary {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+  transition: background 80ms ease;
+}
+
+details.flight-row > summary::-webkit-details-marker {
+  display: none;
+}
+
+details.flight-row > summary:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+details.flight-row[open] > summary {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.flight-tree {
+  margin: var(--s-2) var(--s-3) var(--s-3);
+  padding: var(--s-2) var(--s-3);
+  border-left: 2px solid var(--border-1);
+}
+
+/* Column widths for the flight grid */
+.fh-num    { flex: 0 0 28px; text-align: right; }
+.fh-launch { flex: 0 0 60px; text-align: right; }
+.fh-date   { flex: 0 0 82px; }
+.fh-small  { flex: 0 0 36px; text-align: right; }
+.fh-dv     { flex: 0 0 50px; text-align: right; }
+.fh-pct    { flex: 0 0 46px; text-align: right; }
 
 .report table {
   width: 100%;

@@ -1,16 +1,53 @@
+/**
+ * Wright's law: total cost for N units with first-unit cost C1 and learning rate r.
+ * Unit cost of the nth unit = C1 * n^b where b = log2(r).
+ * Total = C1 * sum(i^b for i=1..N). Uses integral approximation for large N.
+ */
+function wrightTotal(c1, n, learningRate) {
+  if (n <= 0) return 0;
+  if (learningRate >= 1) return c1 * n; // no learning
+  const b = Math.log2(learningRate);
+  if (n <= 500) {
+    let sum = 0;
+    for (let i = 1; i <= n; i++) sum += Math.pow(i, b);
+    return c1 * sum;
+  }
+  // Integral approximation
+  if (Math.abs(b + 1) < 1e-9) {
+    // b ≈ -1 (50% learning rate): sum ≈ ln(N) + 0.5772 (Euler-Mascheroni)
+    return c1 * (Math.log(n) + 0.5772);
+  }
+  // General case: sum ≈ N^(b+1)/(b+1) + 0.5*N^b
+  return c1 * (Math.pow(n, b + 1) / (b + 1) + 0.5 * Math.pow(n, b));
+}
+
 export class SimMissionValidator {
   constructor(missionProfiles, costs) {
     const resultTrees = [];
-    const propellantCostsPerKg = {
-      "CH4/O2": 0.3, // $0.3 per kg
-      Argon: 0.5, // $0.5 per kg
+    const propellantCostsPerKg = costs.propellantCostsPerKg || { "CH4/O2": 0.3, Argon: 0.5 };
+    const lr = costs.wrightsLawFactor ?? 1; // learning rate (0..1), 1 = no learning
+    const portsPerRing = costs.laserPortsPerRing || {};
+    const getPortsForRing = (ringName) => {
+      if (ringName === "ring_earth") return portsPerRing.ring_earth || 2;
+      if (ringName === "ring_mars") return portsPerRing.ring_mars || 2;
+      if (ringName.startsWith("ring_circ")) return portsPerRing.circular_rings || 2;
+      if (ringName.startsWith("ring_ecce")) return portsPerRing.eccentric_rings || 2;
+      if (ringName.startsWith("ring_adapt")) return portsPerRing.adapted_rings || 2;
+      return 2;
     };
+
+    // First pass: build orbits, collect counts and propellant costs
+    let totalLaunches = 0;
+    let totalSats = 0;
+    let totalLasers = 0;
     for (const missionProfile of missionProfiles.byOrbit) {
       const vehicles = missionProfile.vehicles;
       this.vehicles = vehicles;
       const rootVehicles = this.getRootVehicles(vehicles);
       const trees = this.buildTrees(vehicles, rootVehicles);
-      // this.displayTrees(this.vehicles, trees);
+      const tankersPerFlight = Object.keys(vehicles).filter((k) => k.startsWith("Tanker")).length;
+      const orbitLaunches = missionProfile.deploymentFlights_count * (1 + tankersPerFlight);
+      const orbitLasers = missionProfile.satCount * getPortsForRing(missionProfile.ringName);
       const orbit = {
         ringName: missionProfile.ringName,
         deploymentFlights_count: missionProfile.deploymentFlights_count,
@@ -18,12 +55,10 @@ export class SimMissionValidator {
         satCount: missionProfile.satCount,
         vehicles,
         trees,
+        _launches: orbitLaunches,
+        _lasers: orbitLasers,
       };
-      // Calculate costs
-      orbit.launchCost = missionProfile.deploymentFlights_count * costs.costPerLaunch * 1000000;
-      orbit.satellitesCost = missionProfile.satCount * costs.costPerSatellite * 1000000;
-      orbit.laserTerminalsCost = missionProfile.satCount * costs.laserPortsPerSatellite * costs.costPerLaserTerminal * 1000000;
-      // Calculate propellant cost
+      // Calculate propellant cost (in raw dollars — not subject to Wright's law)
       let propellantCost = 0;
       const propellantCostBreakdown = {};
       for (const vehicle of Object.values(vehicles)) {
@@ -31,19 +66,35 @@ export class SimMissionValidator {
         const costPerKg = propellantCostsPerKg[propellantType] || 0;
         const massKg =
           (vehicle.count ? vehicle.count * vehicle.propellantLoaded_kg : vehicle.propellantLoaded_kg) +
-          (vehicle.count ? vehicle.count * vehicle.tankerPropellant_kg : vehicle.tankerPropellant_kg);
-        const cost = (massKg * costPerKg) / 1000000; // in million $
+          (vehicle.count ? vehicle.count * (vehicle.tankerPropellant_kg || 0) : (vehicle.tankerPropellant_kg || 0));
+        const cost = massKg * costPerKg;
         propellantCost += cost;
         if (!propellantCostBreakdown[propellantType]) propellantCostBreakdown[propellantType] = 0;
         propellantCostBreakdown[propellantType] += cost;
       }
-      orbit.propellantCost = propellantCost * missionProfile.deploymentFlights_count; // since vehicles are per flight
+      orbit.propellantCost = propellantCost * missionProfile.deploymentFlights_count;
       orbit.propellantCostBreakdown = {};
       for (const [type, cost] of Object.entries(propellantCostBreakdown)) {
         orbit.propellantCostBreakdown[type] = cost * missionProfile.deploymentFlights_count;
       }
+      totalLaunches += orbitLaunches;
+      totalSats += missionProfile.satCount;
+      totalLasers += orbitLasers;
       resultTrees.push(orbit);
     }
+
+    // Second pass: apply Wright's law and distribute costs proportionally across orbits
+    const totalLaunchCost = wrightTotal(costs.costPerLaunch * 1_000_000, totalLaunches, lr);
+    const totalSatCost = wrightTotal(costs.costPerSatellite * 1_000_000, totalSats, lr);
+    const totalLaserCost = wrightTotal(costs.costPerLaserTerminal * 1_000_000, totalLasers, lr);
+    for (const orbit of resultTrees) {
+      orbit.launchCost = totalLaunches > 0 ? totalLaunchCost * (orbit._launches / totalLaunches) : 0;
+      orbit.satellitesCost = totalSats > 0 ? totalSatCost * (orbit.satCount / totalSats) : 0;
+      orbit.laserTerminalsCost = totalLasers > 0 ? totalLaserCost * (orbit._lasers / totalLasers) : 0;
+      delete orbit._launches;
+      delete orbit._lasers;
+    }
+
     return resultTrees;
   }
 

@@ -144,6 +144,13 @@ export class SimMain {
     }
   }
 
+  setRoadsterSizeFactor(factor) {
+    this.roadsterSizeFactor = factor;
+    if (this.simDisplay && typeof this.simDisplay.setRoadsterSizeFactor === "function") {
+      this.simDisplay.setRoadsterSizeFactor(factor);
+    }
+  }
+
   setCircularRingsConfig(uiConfig) {
     let ringCount = uiConfig["circular_rings.ringcount"];
     if (ringCount == 0) return [];
@@ -443,105 +450,128 @@ export class SimMain {
    * @param {Object} latencyData - The latency data containing histogram, bestLatency, averageLatency.
    */
   makeLatencyChart(latencyData, binSize) {
-    // Use the histogram from latencyData
-    if (latencyData) {
-      const latencyHistogram = latencyData.histogram;
-
-      // Get the canvas context
-      const canvas = document.getElementById("latencyChart");
-      if (!canvas) {
-        console.warn("Latency chart canvas not found.");
-        return;
-      }
-      const ctx = canvas.getContext("2d");
-
-      // Prepare data for Chart.js
-      const labels = latencyHistogram.map((bin) => {
-        const startMin = bin.latency / 60;
-        const endMin = (bin.latency + binSize) / 60;
-        return `${startMin} - ${endMin} min`;
-      });
-      const data = latencyHistogram.map((bin) => bin.totalGbps);
-
-      if (this.latencyChartInstance) {
-        // Update existing chart
-        this.latencyChartInstance.data.labels = labels;
-        this.latencyChartInstance.data.datasets[0].data = data;
-        this.latencyChartInstance.update();
-      } else {
-        // Create a new chart
-        this.latencyChartInstance = new Chart(ctx, {
-          type: "bar",
-          data: {
-            labels: labels,
-            datasets: [
-              {
-                label: "Aggregate Gbps per Latency Bin",
-                data: data,
-                backgroundColor: "rgba(75, 192, 192, 0.6)",
-              },
-            ],
-          },
-          options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            scales: {
-              x: {
-                title: { display: true, text: "Latency (minutes)" },
-              },
-              y: {
-                title: { display: true, text: "Aggregate Gbps" },
-                beginAtZero: true,
-              },
-            },
-            plugins: {
-              tooltip: {
-                callbacks: {
-                  label: function (context) {
-                    return `${context.parsed.y} Gbps`;
-                  },
-                },
-              },
-              legend: {
-                display: false,
-              },
-            },
-          },
-        });
-      }
-    } else {
-      // Clear the canvas entirely if latencyData is not available
-      const canvas = document.getElementById("latencyChart");
-      if (canvas) {
-        const ctx = canvas.getContext("2d");
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-      }
+    // Destroy previous instance — the canvas is recreated in getCostsHtml each render
+    if (this.latencyChartInstance) {
+      this.latencyChartInstance.destroy();
+      this.latencyChartInstance = null;
     }
+
+    if (!latencyData) return;
+
+    const canvas = document.getElementById("latencyChart");
+    if (!canvas) return;
+
+    const labels = latencyData.histogram.map((bin) => {
+      const startMin = bin.latency / 60;
+      const endMin = (bin.latency + binSize) / 60;
+      return `${startMin} - ${endMin} min`;
+    });
+    const data = latencyData.histogram.map((bin) => bin.totalGbps);
+
+    // Theme colors matching the app's dark UI
+    const textMuted = "#7c879f";   // --text-2
+    const textDim = "#525c75";     // --text-3
+    const gridColor = "rgba(255, 255, 255, 0.06)";
+    const accentBar = "rgba(107, 138, 253, 0.55)";  // --accent at ~55%
+    const accentHover = "rgba(142, 166, 255, 0.75)"; // --accent-hot at ~75%
+    const tooltipBg = "#1a2030";   // --bg-3
+
+    this.latencyChartInstance = new Chart(canvas.getContext("2d"), {
+      type: "bar",
+      data: {
+        labels,
+        datasets: [{
+          data,
+          backgroundColor: accentBar,
+          hoverBackgroundColor: accentHover,
+          borderRadius: 2,
+          barPercentage: 0.9,
+          categoryPercentage: 0.85,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        layout: { padding: { top: 4, right: 4, bottom: 0, left: 0 } },
+        scales: {
+          x: {
+            title: { display: true, text: "Latency (min)", color: textMuted, font: { size: 10 } },
+            ticks: { color: textDim, font: { size: 9 }, maxRotation: 45, autoSkip: true, maxTicksLimit: 8 },
+            grid: { display: false },
+            border: { color: gridColor },
+          },
+          y: {
+            title: { display: true, text: "Gbps", color: textMuted, font: { size: 10 } },
+            ticks: { color: textDim, font: { size: 9 }, maxTicksLimit: 5 },
+            grid: { color: gridColor },
+            border: { display: false },
+            beginAtZero: true,
+          },
+        },
+        plugins: {
+          tooltip: {
+            backgroundColor: tooltipBg,
+            titleColor: "#eef1f7",
+            bodyColor: "#b9c0d0",
+            borderColor: "rgba(255,255,255,0.1)",
+            borderWidth: 1,
+            cornerRadius: 4,
+            titleFont: { size: 11 },
+            bodyFont: { size: 11 },
+            padding: 8,
+            callbacks: { label: (ctx) => `${ctx.parsed.y} Gbps` },
+          },
+          legend: { display: false },
+        },
+      },
+    });
   }
 
   setCosts(costConfig) {
     this.costPerLaunch = costConfig["economics.launch-cost-slider"];
     this.costPerSatellite = costConfig["economics.satellite-cost-slider"];
     this.costPerLaserTerminal = costConfig["economics.laser-terminal-cost-slider"];
-    if (this.ui) this.ui.updateInfoAreaCosts(this.getCostsHtml(this.calculateCosts(this.maxFlowGbps, this.resultTrees), this.lastNetworkData));
+    this.wrightsLawFactor = (costConfig["economics.wrights-law-factor"] || 100) / 100;
+    this.propellantCostsPerKg = {
+      "CH4/O2": costConfig["economics.fuel-cost-ch4o2"],
+      Argon: costConfig["economics.fuel-cost-argon"],
+    };
+    // Rebuild resultTrees so propellant costs are recalculated from current slider values
+    if (this.missionProfiles) {
+      this.resultTrees = new SimMissionValidator(this.missionProfiles, {
+        costPerLaunch: this.costPerLaunch,
+        costPerSatellite: this.costPerSatellite,
+        costPerLaserTerminal: this.costPerLaserTerminal,
+        laserPortsPerRing: this.simLinkBudget.maxLinksPerRing,
+        propellantCostsPerKg: this.propellantCostsPerKg,
+        wrightsLawFactor: this.wrightsLawFactor,
+      });
+    }
+    if (this.ui) this.ui.updateInfoAreaCosts(this.getCostsHtml(this.calculateCosts(this.maxFlowGbps, this.resultTrees), this.lastNetworkData, null));
   }
 
   calculateCosts(maxFlowGbps, resultTrees) {
     let totalSatellitesCount = 0;
     let totalLaunchCount = 0;
-    let totalTankerCount = 0;
-    let totalLiftoffCount = 0;
     let totalLaunchCost = 0;
     let totalPropellantCost = 0;
     let totalSatellitesCost = 0;
     let totalLaserTerminalsCost = 0;
     let propellantCostBreakdown = {};
+    let propellantMassBreakdown = {};
+
+    let totalDeploymentFlights = 0;
+    let totalTankerFlights = 0;
+    let totalLaserCount = 0;
 
     for (const orbit of resultTrees) {
-      totalSatellitesCount += orbit.satellitesCount;
-      totalLaunchCount += orbit.launchCount;
-      totalTankerCount += orbit.tankerCount;
-      totalLiftoffCount += orbit.liftoffCount;
+      totalSatellitesCount += orbit.satCount || 0;
+      totalLaserCount += (orbit.satCount || 0) * (this.simLinkBudget.getMaxLinksPerRing(orbit.ringName) || 0);
+      const flights = orbit.deploymentFlights_count || 0;
+      const tankersPerFlight = orbit.vehicles ? Object.keys(orbit.vehicles).filter((k) => k.startsWith("Tanker")).length : 0;
+      totalDeploymentFlights += flights;
+      totalTankerFlights += flights * tankersPerFlight;
+      totalLaunchCount += flights * (1 + tankersPerFlight);
       totalLaunchCost += orbit.launchCost;
       totalPropellantCost += orbit.propellantCost;
       totalSatellitesCost += orbit.satellitesCost;
@@ -550,6 +580,19 @@ export class SimMain {
         for (const [type, cost] of Object.entries(orbit.propellantCostBreakdown)) {
           if (!propellantCostBreakdown[type]) propellantCostBreakdown[type] = 0;
           propellantCostBreakdown[type] += cost;
+        }
+      }
+      // Accumulate propellant mass per type
+      if (orbit.vehicles) {
+        for (const vehicle of Object.values(orbit.vehicles)) {
+          const pType = vehicle.propellantType;
+          if (!pType) continue;
+          const massKg =
+            ((vehicle.count ? vehicle.count * vehicle.propellantLoaded_kg : vehicle.propellantLoaded_kg) +
+            (vehicle.count ? vehicle.count * (vehicle.tankerPropellant_kg || 0) : (vehicle.tankerPropellant_kg || 0)))
+            * (orbit.deploymentFlights_count || 1);
+          if (!propellantMassBreakdown[pType]) propellantMassBreakdown[pType] = 0;
+          propellantMassBreakdown[pType] += massKg;
         }
       }
     }
@@ -562,8 +605,9 @@ export class SimMain {
     return {
       satellitesCount: totalSatellitesCount,
       launchCount: totalLaunchCount,
-      tankerCount: totalTankerCount,
-      liftoffCount: totalLiftoffCount,
+      deploymentFlights: totalDeploymentFlights,
+      tankerFlights: totalTankerFlights,
+      laserCount: totalLaserCount,
       launchCost: totalLaunchCost,
       propellantCost: totalPropellantCost,
       satellitesCost: totalSatellitesCost,
@@ -571,34 +615,96 @@ export class SimMain {
       totalCosts,
       costPerMbps,
       propellantCostBreakdown,
+      propellantMassBreakdown,
     };
   }
 
-  getCostsHtml(costs, networkData) {
+  getCostsHtml(costs, networkData, latencyData) {
     let html = "";
-    // Always show satellite count
-    html += `${this.satellitesCount} satellites`;
-    // Show capacity diagram if available
+
+    const fmtM = (value) => `$${(value / 1_000_000).toLocaleString(undefined, { maximumFractionDigits: 0 })}M`;
+    const fmtCost = (value) => value >= 1_000_000_000
+      ? `$${(value / 1_000_000_000).toLocaleString(undefined, { maximumFractionDigits: 1 })}B`
+      : fmtM(value);
+
+    const fmtMbps = (v) => v >= 1000 ? `${(v / 1000).toFixed(1)} Gbps` : `${Math.round(v)} Mbps`;
+
+    // ── 1. SATELLITES ──
+    html += `<div class="metric-card">`;
+    html += `<div class="metric-header">`;
+    html += `<span class="metric-label">Satellites</span>`;
+    html += `<span class="metric-value">${this.satellitesCount.toLocaleString()}</span>`;
+    html += `</div>`;
+    html += `<div class="metric-toggle" id="satellites-toggle">`;
+    html += `<span class="arrow" id="satellites-arrow">&#9656;</span><span>Details</span>`;
+    html += `</div>`;
+    html += `<div class="metric-details" id="satellites-content" style="display: none;">`;
+    if (this.resultTrees && this.resultTrees.length > 0) {
+      // Aggregate by ring type: earth, adapted, mars
+      const groups = { earth: { sats: 0, ports: 0 }, adapted: { sats: 0, ports: 0 }, mars: { sats: 0, ports: 0 } };
+      for (const orbit of this.resultTrees) {
+        const rn = orbit.ringName || "";
+        const ports = this.simLinkBudget.getMaxLinksPerRing(rn);
+        if (rn === "ring_earth") { groups.earth.sats += orbit.satCount; groups.earth.ports = ports; }
+        else if (rn === "ring_mars") { groups.mars.sats += orbit.satCount; groups.mars.ports = ports; }
+        else { groups.adapted.sats += orbit.satCount; groups.adapted.ports = ports; }
+      }
+      const ringLabel = (label, g) => {
+        if (g.sats === 0) return "";
+        return `<div class="detail-row"><span class="detail-label">${label} <span style="color:var(--text-3)">${g.ports}p</span></span><span class="detail-value">${g.sats.toLocaleString()}</span></div>`;
+      };
+      html += ringLabel("Earth ring", groups.earth);
+      html += ringLabel("Adapted rings", groups.adapted);
+      html += ringLabel("Mars ring", groups.mars);
+      // Totals
+      let totalLasers = 0;
+      for (const g of Object.values(groups)) totalLasers += g.sats * g.ports;
+      const totalFlights = this.resultTrees.reduce((s, o) => s + (o.deploymentFlights_count || 0), 0);
+      html += `<div class="detail-row" style="border-top: 1px solid var(--border-1); padding-top: 4px; margin-top: 4px;"><span class="detail-label">Total laser ports</span><span class="detail-value">${totalLasers.toLocaleString()}</span></div>`;
+      html += `<div class="detail-row"><span class="detail-label">Deployment flights</span><span class="detail-value">${totalFlights.toLocaleString()}</span></div>`;
+    }
+    html += `</div></div>`;
+
+    // ── 2. COST ──
+    if (costs) {
+      html += `<div class="metric-card">`;
+      html += `<div class="metric-header">`;
+      html += `<span class="metric-label">Total Cost</span>`;
+      html += `<span class="metric-value">${fmtCost(costs.totalCosts)}</span>`;
+      html += `</div>`;
+      html += `<div class="metric-toggle" id="cost-toggle">`;
+      html += `<span class="arrow" id="cost-arrow">&#9656;</span><span>Details</span>`;
+      html += `</div>`;
+      html += `<div class="metric-details" id="cost-content" style="display: none;">`;
+      const fmtTons = (kg) => `${Math.round(kg / 1000).toLocaleString()}t`;
+      html += `<div class="detail-row"><span class="detail-label">Launch <span style="color:var(--text-3)">${costs.launchCount.toLocaleString()} (${costs.deploymentFlights.toLocaleString()} + ${costs.tankerFlights.toLocaleString()} tankers)</span></span><span class="detail-value">${fmtM(costs.launchCost)}</span></div>`;
+      html += `<div class="detail-row"><span class="detail-label">Satellites <span style="color:var(--text-3)">${costs.satellitesCount.toLocaleString()}</span></span><span class="detail-value">${fmtM(costs.satellitesCost)}</span></div>`;
+      html += `<div class="detail-row"><span class="detail-label">Laser terminals <span style="color:var(--text-3)">${costs.laserCount.toLocaleString()}</span></span><span class="detail-value">${fmtM(costs.laserTerminalsCost)}</span></div>`;
+      html += `<div class="detail-row"><span class="detail-label">Propellant</span><span class="detail-value">${fmtM(costs.propellantCost)}</span></div>`;
+      for (const [type, cost] of Object.entries(costs.propellantCostBreakdown)) {
+        const massKg = costs.propellantMassBreakdown[type] || 0;
+        html += `<div class="detail-row" style="padding-left: 10px;"><span class="detail-label">${type} <span style="color:var(--text-3)">${fmtTons(massKg)}</span></span><span class="detail-value">${fmtM(cost)}</span></div>`;
+      }
+      html += `<div class="detail-row" style="border-top: 1px solid var(--border-1); padding-top: 4px; margin-top: 4px;"><span class="detail-label" style="color: var(--text-1);">Total</span><span class="detail-value" style="color: var(--text-0);">${fmtM(costs.totalCosts)}</span></div>`;
+      html += `</div></div>`;
+    }
+
+    // ── 3. CAPACITY (always shows, capacity-only) ──
     if (this.capacityInfo) {
       const { ringCapacities } = this.capacityInfo;
-      const fmtMbps = (v) => v >= 1000 ? `${(v / 1000).toFixed(1)} Gbps` : `${Math.round(v)} Mbps`;
       const fmtNum = (v) => v >= 1000 ? `${(v / 1000).toFixed(1)}` : `${Math.round(v)}`;
       const pct = (flow, cap) => cap > 0 ? `${Math.round(flow / cap * 100)}%` : "";
-      // Format min|avg|max with shared unit (chosen by the smallest value)
       const fmtRange = (...vals) => {
         const unit = Math.min(...vals) >= 1000 ? "Gbps" : "Mbps";
         const fmt = unit === "Gbps" ? (v) => (v / 1000).toFixed(1) : (v) => Math.round(v);
         return vals.map(fmt).join("|") + " " + unit;
       };
-      const showFlow = this.linksColors === "Flow";
 
-      // Capacity data: inring link capacities per ring
       const earthInring = ringCapacities["ring_earth"]?.inring || [];
       const marsInring = ringCapacities["ring_mars"]?.inring || [];
       const earthCap = { side1: 0, side2: 0 };
       const marsCap = { side1: 0, side2: 0 };
 
-      // Per-side capacity = actual capacity of the 2 planet-to-ring links
       const earthPlanetLinks = ringCapacities["ring_earth"]?.planetLinks || [];
       const earthCaps = earthPlanetLinks.map((l) => l.cap).sort((a, b) => b - a);
       earthCap.side1 = earthCaps[0] || 0;
@@ -609,37 +715,10 @@ export class SimMain {
       marsCap.side1 = marsCaps[0] || 0;
       marsCap.side2 = marsCaps[1] || 0;
 
-      // Flow data: actual flow on planet-to-satellite links
-      const earthFlow = { side1: 0, side2: 0 };
-      const marsFlow = { side1: 0, side2: 0 };
-      if (networkData?.links) {
-        const getFlows = (planetName) => {
-          const flows = networkData.links
-            .filter((l) => l.fromId === planetName || l.toId === planetName)
-            .map((l) => (l.gbpsFlow || 0) * 1000).sort((a, b) => b - a);
-          return { side1: flows[0] || 0, side2: flows[1] || 0 };
-        };
-        const ef = getFlows("Earth");
-        earthFlow.side1 = ef.side1; earthFlow.side2 = ef.side2;
-        const mf = getFlows("Mars");
-        marsFlow.side1 = mf.side1; marsFlow.side2 = mf.side2;
-      }
-
-      // Pick values based on mode
-      const earth = showFlow ? earthFlow : earthCap;
-      const earthTotal = earth.side1 + earth.side2;
       const earthCapTotal = earthCap.side1 + earthCap.side2;
-      const mars = showFlow ? marsFlow : marsCap;
-      const marsTotal = mars.side1 + mars.side2;
       const marsCapTotal = marsCap.side1 + marsCap.side2;
-
-      // Adapted rings route data (always capacity-based)
       const rs = this.routeSummary;
 
-      // Actual flow from max-flow algorithm
-      const actualFlowMbps = networkData?.maxFlowGbps ? networkData.maxFlowGbps * 1000 : (this.maxFlowGbps ? this.maxFlowGbps * 1000 : 0);
-
-      // Build compact planet line: ---10←●→10---  Label
       const planetLine = (left, symbol, right, label, offset = 0) => {
         const core = `${fmtNum(left)}\u2190${symbol}\u2192${fmtNum(right)}`;
         const W = 17;
@@ -649,23 +728,11 @@ export class SimMain {
         return `${"-".repeat(padL)}${core}${"-".repeat(padR)}  ${label}\n`;
       };
 
-      // Adapted rings pipe string (shared by compact and expanded)
       const W = 17;
       const pipeCount = rs ? Math.min(rs.routeCount, W) : 0;
-      const pad = rs ? Math.floor((W - pipeCount) / 2) : 0;
-      const pipes = rs ? " ".repeat(pad) + "\u2502".repeat(pipeCount) : "";
+      const padPipe = rs ? Math.floor((W - pipeCount) / 2) : 0;
+      const pipes = rs ? " ".repeat(padPipe) + "\u2502".repeat(pipeCount) : "";
 
-      // Active route count (flow mode)
-      let activeRoutes = 0;
-      if (showFlow && networkData?.links) {
-        activeRoutes = networkData.links.filter((l) => l.gbpsFlow > 0 && (
-          (l.fromId.startsWith("ring_earth") && l.toId.startsWith("ring_adapt")) ||
-          (l.fromId.startsWith("ring_adapt") && l.toId.startsWith("ring_earth"))
-        )).length;
-      }
-      const adaptedFlowPct = rs && rs.totalThroughput > 0 ? pct(actualFlowMbps, rs.totalThroughput) : "";
-
-      // Bottleneck analysis (always based on capacity)
       const segments = [];
       if (earthCapTotal > 0) segments.push({ name: "earth ring", cap: earthCapTotal });
       if (rs) segments.push({ name: "adapted rings", cap: rs.totalThroughput });
@@ -674,151 +741,215 @@ export class SimMain {
       if (segments.length > 1) {
         const minCap = Math.min(...segments.map((s) => s.cap));
         const maxCap = Math.max(...segments.map((s) => s.cap));
-        if (maxCap > 0 && (maxCap - minCap) / maxCap > 0.01) {
+        if (maxCap > 0 && (maxCap - minCap) / maxCap > 0.05) {
           const bottleneck = segments.reduce((a, b) => (a.cap < b.cap ? a : b));
           bottleneckLine = `Bottleneck: ${bottleneck.name}`;
         } else {
-          bottleneckLine = `Balanced system`;
+          bottleneckLine = `Balanced`;
         }
       }
 
-      html += `<div style="margin-top: 10px;">`;
+      const techFactor = this.simLinkBudget.techImprovementFactor || 1;
+      const capHeaderValue = rs ? fmtMbps(rs.totalThroughput) : fmtMbps(earthCapTotal);
 
-      // --- Toggle ---
-      html += `<div style="cursor: pointer; display: flex; align-items: center;">`;
-      html += `<span id="capacity-arrow">▶</span> <span>Expand</span>`;
+      html += `<div class="metric-card">`;
+      html += `<div class="metric-header">`;
+      html += `<span class="metric-label">Capacity</span>`;
+      html += `<span class="metric-value-sm">${capHeaderValue}</span>`;
+      html += `</div>`;
+      const subParts = [];
+      if (bottleneckLine) subParts.push(bottleneckLine);
+      if (techFactor > 1) subParts.push(`Laser tech ${techFactor}x`);
+      if (subParts.length) html += `<div class="metric-sub">${subParts.join(" · ")}</div>`;
+
+      // Toggle for capacity diagram
+      html += `<div class="metric-toggle" id="capacity-toggle">`;
+      html += `<span class="arrow" id="capacity-arrow">&#9656;</span><span>Diagram</span>`;
       html += `</div>`;
 
-      // --- Header: mode + algorithm initials + laser tech improvement factor ---
-      const algoInitials = {
-        "topology-aware": "TA",
-        "push-relabel": "PR",
-        "edmonds-karp": "EK",
-      }[this.simLinkBudget.flowAlgorithm] || "??";
-      const modeTitle = showFlow ? `FLOW (${algoInitials})` : "CAPACITY";
-      const techFactor = this.simLinkBudget.techImprovementFactor || 1;
-      const headerLine = `${modeTitle} | Laser tech improvement ${techFactor}x\n`;
+      // Planet-line range label: "2×ring_min – 2×ring_max". The in-ring link
+      // capacities drive the range (they vary with orbital eccentricity); the
+      // planet links (shown as left←●→right) are just the current ground
+      // capacity at this orbital position.
+      const ringRange = (inring) => {
+        if (!inring || inring.length === 0) return null;
+        const lo = 2 * Math.min(...inring), hi = 2 * Math.max(...inring);
+        if (lo === hi) return fmtMbps(lo);
+        const unit = Math.min(lo, hi) >= 1000 ? "Gbps" : "Mbps";
+        const fmt = unit === "Gbps" ? (v) => (v / 1000).toFixed(1) : (v) => Math.round(v);
+        return `${fmt(lo)}-${fmt(hi)} ${unit}`;
+      };
+      const earthRingRange = ringRange(earthInring);
+      const marsRingRange = ringRange(marsInring);
 
-      // --- Compact summary (visible when collapsed) ---
-      html += `<pre id="capacity-compact" style="font-family: monospace; font-size: 11px; line-height: 1.4; margin: 0; white-space: pre;">`;
-      html += headerLine;
-      if (showFlow) {
-        html += planetLine(earth.side1, "\u25CF", earth.side2, `${fmtMbps(earthTotal)}, ${pct(earthTotal, earthCapTotal)}`, -2);
-        if (rs) html += `${pipes}  ${fmtMbps(actualFlowMbps)}, ${adaptedFlowPct}\n`;
-        html += planetLine(mars.side1, "\u2022", mars.side2, `${fmtMbps(marsTotal)}, ${pct(marsTotal, marsCapTotal)}`, 2);
-      } else {
-        html += planetLine(earth.side1, "\u25CF", earth.side2, fmtMbps(earthTotal), -2);
-        if (rs) html += `${pipes}  ${fmtMbps(rs.totalThroughput)}\n`;
-        html += planetLine(mars.side1, "\u2022", mars.side2, fmtMbps(marsTotal), 2);
-      }
-      if (actualFlowMbps > 0) html += `Flow: ${fmtMbps(actualFlowMbps)}\n`;
-      if (bottleneckLine) html += `${bottleneckLine}\n`;
+      // Compact capacity diagram
+      html += `<pre class="capacity-diagram" id="capacity-compact" style="display: none;">`;
+      html += planetLine(earthCap.side1, "\u25CF", earthCap.side2, earthRingRange || fmtMbps(earthCapTotal), -2);
+      if (rs) html += `${pipes}  ${fmtMbps(rs.totalThroughput)}\n`;
+      html += planetLine(marsCap.side1, "\u2022", marsCap.side2, marsRingRange || fmtMbps(marsCapTotal), 2);
       html += `</pre>`;
-      html += `<div id="capacity-content" style="display: none; margin-top: 4px;">`;
-      html += `<pre style="font-family: monospace; font-size: 11px; line-height: 1.4; margin: 0; white-space: pre;">`;
-      html += headerLine;
 
-      // Earth section
-      if (earthTotal > 0 || earthInring.length > 0) {
-        if (!showFlow && earthInring.length > 0) {
+      // Expanded capacity diagram
+      html += `<div id="capacity-content" style="display: none;">`;
+      html += `<pre class="capacity-diagram">`;
+
+      if (earthCapTotal > 0 || earthInring.length > 0) {
+        if (earthInring.length > 0) {
           const eMin = Math.min(...earthInring), eMax = Math.max(...earthInring);
           const eAvg = earthInring.reduce((a, b) => a + b, 0) / earthInring.length;
           html += `ring Earth ${fmtRange(eMin, eAvg, eMax)}\n`;
         }
-        const earthLabel = showFlow
-          ? `Earth (${fmtMbps(earthTotal)}, ${pct(earthTotal, earthCapTotal)})`
-          : `Earth (${fmtMbps(earthTotal)})`;
-        html += planetLine(earth.side1, "\u25CF", earth.side2, earthLabel, -2);
+        html += planetLine(earthCap.side1, "\u25CF", earthCap.side2, `Earth ${earthRingRange || fmtMbps(earthCapTotal)}`, -2);
       }
 
-      // Adapted rings section
       if (rs) {
         const adaptedRingCount = Object.keys(ringCapacities).filter((r) => r.startsWith("ring_adapt")).length;
-        if (showFlow) {
-          html += `${pipes}  ${fmtMbps(actualFlowMbps)}, ${adaptedFlowPct}\n`;
-          html += `${pipes}  ${adaptedRingCount} rings\n`;
-          html += `${pipes}  ${activeRoutes}/${rs.routeCount} routes active\n`;
-          html += `${pipes}  ${fmtRange(rs.minThroughput, rs.avgThroughput, rs.maxThroughput)}\n`;
-        } else {
-          html += `${pipes}  ${fmtMbps(rs.totalThroughput)}\n`;
-          html += `${pipes}  ${adaptedRingCount} rings\n`;
-          html += `${pipes}  ${rs.routeCount} routes\n`;
-          html += `${pipes}  ${fmtRange(rs.minThroughput, rs.avgThroughput, rs.maxThroughput)}\n`;
-        }
+        html += `${pipes}  ${fmtMbps(rs.totalThroughput)}\n`;
+        html += `${pipes}  ${adaptedRingCount} rings\n`;
+        html += `${pipes}  ${rs.routeCount} routes\n`;
+        html += `${pipes}  ${fmtRange(rs.minThroughput, rs.avgThroughput, rs.maxThroughput)}\n`;
         html += `${pipes}  ${(rs.minLatency / 60).toFixed(1)}|${(rs.avgLatency / 60).toFixed(1)}|${(rs.maxLatency / 60).toFixed(1)} min\n`;
       }
 
-      // Mars section
-      if (marsTotal > 0 || marsInring.length > 0) {
-        const marsLabel = showFlow
-          ? `Mars (${fmtMbps(marsTotal)}, ${pct(marsTotal, marsCapTotal)})`
-          : `Mars (${fmtMbps(marsTotal)})`;
-        html += planetLine(mars.side1, "\u2022", mars.side2, marsLabel, 2);
-        if (!showFlow && marsInring.length > 0) {
+      if (marsCapTotal > 0 || marsInring.length > 0) {
+        html += planetLine(marsCap.side1, "\u2022", marsCap.side2, `Mars ${marsRingRange || fmtMbps(marsCapTotal)}`, 2);
+        if (marsInring.length > 0) {
           const mMin = Math.min(...marsInring), mMax = Math.max(...marsInring);
           const mAvg = marsInring.reduce((a, b) => a + b, 0) / marsInring.length;
           html += `ring Mars ${fmtRange(mMin, mAvg, mMax)}\n`;
         }
       }
 
-      if (actualFlowMbps > 0) html += `\nFlow: ${fmtMbps(actualFlowMbps)}\n`;
       if (bottleneckLine) html += bottleneckLine;
 
       html += `</pre>`;
       html += `</div>`;
       html += `</div>`;
-    }
-    // Show costs if available
-    if (costs) {
-      // Helper function to format costs in dollars to m, b, or t
-      const formatCost = (value) => {
-        if (value >= 1_000_000_000_000) {
-          return `${(value / 1_000_000_000_000).toFixed(1)}t`; // Trillions
-        } else if (value >= 1_000_000_000) {
-          return `${(value / 1_000_000_000).toFixed(1)}b`; // Billions
-        } else if (value >= 1_000_000) {
-          return `${(value / 1_000_000).toFixed(0)}m`; // Millions
-        } else if (value >= 1_000) {
-          return `${(value / 1_000).toFixed(0)}k`; // Thousands
-        } else {
-          return `${value.toLocaleString()}`; // Dollars
+
+      // ── 3b. FLOW ──
+      const actualFlowMbps = networkData?.maxFlowGbps ? networkData.maxFlowGbps * 1000 : (this.maxFlowGbps ? this.maxFlowGbps * 1000 : 0);
+      const flowSelected = this.linksColors === "Flow";
+      const hasFlow = flowSelected && actualFlowMbps > 0;
+
+      const algoName = this.simLinkBudget.flowAlgorithm || "unknown";
+
+      html += `<div class="metric-card">`;
+      html += `<div class="metric-header">`;
+      html += `<span class="metric-label">Flow<span class="metric-badge">${algoName}</span></span>`;
+      if (hasFlow) {
+        html += `<span class="metric-value-sm">${fmtMbps(actualFlowMbps)}</span>`;
+      } else {
+        html += `<span class="metric-na">\u2014</span>`;
+      }
+      html += `</div>`;
+
+      if (hasFlow) {
+        const earthFlow = { side1: 0, side2: 0 };
+        const marsFlow = { side1: 0, side2: 0 };
+        if (networkData?.links) {
+          const getFlows = (planetName) => {
+            const flows = networkData.links
+              .filter((l) => l.fromId === planetName || l.toId === planetName)
+              .map((l) => (l.gbpsFlow || 0) * 1000).sort((a, b) => b - a);
+            return { side1: flows[0] || 0, side2: flows[1] || 0 };
+          };
+          const ef = getFlows("Earth");
+          earthFlow.side1 = ef.side1; earthFlow.side2 = ef.side2;
+          const mf = getFlows("Mars");
+          marsFlow.side1 = mf.side1; marsFlow.side2 = mf.side2;
         }
-      };
+        const earthFlowTotal = earthFlow.side1 + earthFlow.side2;
+        const marsFlowTotal = marsFlow.side1 + marsFlow.side2;
 
-      html += `<br>`;
-      html += `<br>`;
+        let activeRoutes = 0;
+        if (networkData?.links) {
+          activeRoutes = networkData.links.filter((l) => l.gbpsFlow > 0 && (
+            (l.fromId.startsWith("ring_earth") && l.toId.startsWith("ring_adapt")) ||
+            (l.fromId.startsWith("ring_adapt") && l.toId.startsWith("ring_earth"))
+          )).length;
+        }
+        const adaptedFlowPct = rs && rs.totalThroughput > 0 ? pct(actualFlowMbps, rs.totalThroughput) : "";
 
-      html += `Total cost $${formatCost(costs.totalCosts)}`;
-      html += "<br>";
-      html += `<div style="margin-top: 10px;">`;
-      html += `<div style="cursor: pointer; display: flex; align-items: center;">`;
-      html += `<span id="cost-arrow">▼</span> <span>Cost Details</span>`;
-      html += `</div>`;
-      html += `<div id="cost-content" style="display: block; margin-top: 10px;">`;
+        html += `<div class="metric-sub">${pct(actualFlowMbps, rs ? rs.totalThroughput : earthCapTotal)} of capacity</div>`;
 
-      html += `<span class='detail-data'>Launch $${formatCost(costs.launchCost)}<br>Sats $${formatCost(
-        costs.satellitesCost
-      )}<br>Lasers $${formatCost(costs.laserTerminalsCost)}<br>Propellants $${formatCost(costs.propellantCost)}</span>`;
+        // Toggle for flow diagram
+        html += `<div class="metric-toggle" id="flow-toggle">`;
+        html += `<span class="arrow" id="flow-arrow">&#9656;</span><span>Diagram</span>`;
+        html += `</div>`;
 
-      // Add propellant costs breakdown
-      html += "<br>";
-      html += "<span class='detail-data'>";
-      const propellantEntries = [];
-      for (const [propellantType, cost] of Object.entries(costs.propellantCostBreakdown)) {
-        propellantEntries.push(`- ${propellantType} $${formatCost(cost)}`);
+        // Compact flow diagram
+        html += `<pre class="capacity-diagram" id="flow-compact" style="display: none;">`;
+        html += planetLine(earthFlow.side1, "\u25CF", earthFlow.side2, `${fmtMbps(earthFlowTotal)}, ${pct(earthFlowTotal, earthCapTotal)}`, -2);
+        if (rs) html += `${pipes}  ${fmtMbps(actualFlowMbps)}, ${adaptedFlowPct}\n`;
+        html += planetLine(marsFlow.side1, "\u2022", marsFlow.side2, `${fmtMbps(marsFlowTotal)}, ${pct(marsFlowTotal, marsCapTotal)}`, 2);
+        html += `</pre>`;
+
+        // Expanded flow diagram
+        html += `<div id="flow-content" style="display: none;">`;
+        html += `<pre class="capacity-diagram">`;
+        html += planetLine(earthFlow.side1, "\u25CF", earthFlow.side2, `Earth ${fmtMbps(earthFlowTotal)}, ${pct(earthFlowTotal, earthCapTotal)}`, -2);
+        if (rs) {
+          const adaptedRingCount = Object.keys(ringCapacities).filter((r) => r.startsWith("ring_adapt")).length;
+          html += `${pipes}  ${fmtMbps(actualFlowMbps)}, ${adaptedFlowPct}\n`;
+          html += `${pipes}  ${adaptedRingCount} rings\n`;
+          html += `${pipes}  ${activeRoutes}/${rs.routeCount} routes active\n`;
+          html += `${pipes}  ${fmtRange(rs.minThroughput, rs.avgThroughput, rs.maxThroughput)}\n`;
+          html += `${pipes}  ${(rs.minLatency / 60).toFixed(1)}|${(rs.avgLatency / 60).toFixed(1)}|${(rs.maxLatency / 60).toFixed(1)} min\n`;
+        }
+        html += planetLine(marsFlow.side1, "\u2022", marsFlow.side2, `Mars ${fmtMbps(marsFlowTotal)}, ${pct(marsFlowTotal, marsCapTotal)}`, 2);
+        html += `</pre>`;
+        html += `</div>`;
+      } else if (!flowSelected) {
+        html += `<div class="metric-sub">Select Flow to enable</div>`;
       }
-      html += propellantEntries.join("<br>");
-
-      html += "</span>";
 
       html += `</div>`;
-      html += `</div>`;
-
-      if (costs.costPerMbps) {
-        html += `<br>`;
-        html += `$${costs.costPerMbps.toLocaleString()} / Mbps`;
-      }
     }
+
+    // ── 4. COST / MBPS ──
+    html += `<div class="metric-card">`;
+    html += `<div class="metric-header">`;
+    html += `<span class="metric-label">Cost / Mbps</span>`;
+    if (costs && costs.costPerMbps && costs.costPerMbps !== Infinity) {
+      html += `<span class="metric-value">$${costs.costPerMbps.toLocaleString()}</span>`;
+    } else {
+      html += `<span class="metric-na">\u2014</span>`;
+    }
+    html += `</div>`;
+    if (!this.linksColors || this.linksColors !== "Flow") {
+      html += `<div class="metric-sub">Select Flow to enable</div>`;
+    }
+    html += `</div>`;
+
+    // ── 5. LATENCY ──
+    html += `<div class="metric-card">`;
+    html += `<div class="metric-header">`;
+    html += `<span class="metric-label">Latency</span>`;
+    if (latencyData && !isNaN(latencyData.bestLatency)) {
+      const best = (latencyData.bestLatency / 60).toFixed(1);
+      const p50 = (latencyData.medianLatency / 60).toFixed(1);
+      html += `<span class="metric-value-sm">${best} | ${p50} min</span>`;
+      html += `</div>`;
+      html += `<div class="metric-sub">min | p50</div>`;
+      html += `<div class="metric-toggle" id="latency-toggle">`;
+      html += `<span class="arrow" id="latency-arrow">&#9656;</span><span>Chart</span>`;
+      html += `</div>`;
+      html += `<div id="latency-content" style="display: none;">`;
+      html += `<div class="chart-wrap"><canvas id="latencyChart"></canvas></div>`;
+      html += `</div>`;
+    } else if (networkData && networkData.error) {
+      html += `<span class="metric-na">Timed out</span>`;
+      html += `</div>`;
+    } else if (this.linksColors !== "Flow") {
+      html += `<span class="metric-na">\u2014</span>`;
+      html += `</div>`;
+      html += `<div class="metric-sub">Select Flow to enable</div>`;
+    } else {
+      html += `<span class="metric-na">\u2014</span>`;
+      html += `</div>`;
+    }
+    html += `</div>`;
+
     return html;
   }
 
@@ -917,6 +1048,9 @@ export class SimMain {
    */
   updateLoop() {
     const simDate = this.simTime.getDate();
+    // Update the sim-time display every frame (cheap textContent write) so the
+    // clock reflects time acceleration regardless of the link-recalc cadence.
+    if (this.ui) this.ui.updateSimTime(simDate);
     const planets = this.simSolarSystem.updatePlanetsPositions(simDate);
 
     let satellites;
@@ -944,7 +1078,9 @@ export class SimMain {
         costPerLaunch: this.costPerLaunch,
         costPerSatellite: this.costPerSatellite,
         costPerLaserTerminal: this.costPerLaserTerminal,
-        laserPortsPerSatellite: this.simLinkBudget.maxLinksPerSatellite,
+        laserPortsPerRing: this.simLinkBudget.maxLinksPerRing,
+        propellantCostsPerKg: this.propellantCostsPerKg,
+        wrightsLawFactor: this.wrightsLawFactor,
       });
       mark("missionValidator", tPhase);
 
@@ -1010,13 +1146,13 @@ export class SimMain {
           mark("calculateLatencies", tPhase);
 
           tPhase = performance.now();
-          this.ui.updateInfoAreaCosts(this.getCostsHtml(this.calculateCosts(networkData.maxFlowGbps, this.resultTrees), networkData));
-          this.ui.updateInfoAreaData(this.getInfoAreaHTML(networkData, latencyData));
+          this.ui.updateInfoAreaCosts(this.getCostsHtml(this.calculateCosts(networkData.maxFlowGbps, this.resultTrees), networkData, latencyData));
+          this.ui.updateInfoAreaData("");
           this.makeLatencyChart(latencyData, binSize);
           mark("infoArea+chart", tPhase);
         }
       } else {
-        this.ui.updateInfoAreaCosts(this.getCostsHtml(null, this.lastNetworkData));
+        this.ui.updateInfoAreaCosts(this.getCostsHtml(this.calculateCosts(null, this.resultTrees), this.lastNetworkData, null));
         this.ui.updateInfoAreaData("");
         this.makeLatencyChart(null);
       }
@@ -1219,9 +1355,28 @@ export class SimMain {
       costPerLaunchMillionUSD: this.costPerLaunch,
       costPerSatelliteMillionUSD: this.costPerSatellite,
       costPerLaserTerminalMillionUSD: this.costPerLaserTerminal,
-      laserPortsPerSatellite: this.simLinkBudget.maxLinksPerSatellite,
+      laserPortsPerRing: this.simLinkBudget.maxLinksPerRing,
+      propellantCostsPerKg: this.propellantCostsPerKg,
     };
-    generateReport(this.missionProfiles, this.resultTrees, costs, this.simSatellites.getSatellites());
+    // Pull live launch-schedule slider values and Earth's orbital elements
+    // so the report can compute per-flight dates and draw Hohmann transfers.
+    const scheduleConfig = this.ui ? this.ui.getGroupsConfig(["launch_schedule"]) : {};
+    const schedule = {
+      startYear: scheduleConfig["launch_schedule.start_year"] ?? 2028,
+      rampEndYear: scheduleConfig["launch_schedule.ramp_end_year"] ?? 2031,
+      hoursBetweenFlights: scheduleConfig["launch_schedule.hours_between_flights"] ?? 8,
+      scrubFactorPct: scheduleConfig["launch_schedule.scrub_factor_pct"] ?? 20,
+    };
+    const earthElements = this.simSatellites.getEarth();
+    const marsElements = this.simSatellites.getMars();
+    const orbitalElements = this.simSatellites.getOrbitalElements();
+    generateReport(
+      this.missionProfiles,
+      this.resultTrees,
+      costs,
+      this.simSatellites.getSatellites(),
+      { schedule, earthElements, marsElements, orbitalElements, simDeployment: this.simDeployment }
+    );
   }
 }
 // Initialize the simulation once the DOM is fully loaded

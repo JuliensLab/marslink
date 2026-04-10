@@ -15,12 +15,46 @@ export class SimUi {
     this.setupModeNavigation();
     this.setupSliderSearch();
     this.setupPresets();
+    this.setupSimpleConfig();
     this.setupFullRunForm();
     this.setupReportPanel();
     this.setupHelpPopup();
     this.setupRightPanelToggle();
     this.setupSimTimeCycle();
+    this.setupLinkLabelToggles();
     this.setupFullRunButton();
+  }
+
+  /**
+   * Bottom-bar L / M toggle buttons. Click acts like the keyboard shortcut,
+   * and the active state is reflected in the .active class.
+   */
+  setupLinkLabelToggles() {
+    const buttons = document.querySelectorAll(".kbd-toggle[data-mode]");
+    if (!buttons.length) return;
+
+    const setActive = (mode) => {
+      buttons.forEach((btn) => {
+        btn.classList.toggle("active", btn.dataset.mode === mode);
+      });
+    };
+
+    buttons.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const display = this.simMain.simDisplay;
+        if (!display || typeof display.setLinkLabelMode !== "function") return;
+        const mode = btn.dataset.mode;
+        display.setLinkLabelMode(display.linkLabelMode === mode ? null : mode);
+      });
+    });
+
+    window.addEventListener("marslink:link-label-mode", (e) => {
+      setActive(e.detail?.mode ?? null);
+    });
+
+    // Initialize from current state if anything is already toggled
+    const initial = this.simMain.simDisplay?.linkLabelMode ?? null;
+    setActive(initial);
   }
 
   /**
@@ -128,6 +162,7 @@ export class SimUi {
         "eccentric_rings",
         "ring_earth",
         "adapted_rings",
+        "launch_schedule",
       ])
     );
     // Set the initial display type
@@ -156,6 +191,13 @@ export class SimUi {
       parseFloat(this.sliders.display["satellite-size-factor"].value)
     );
     this.simMain.setSatelliteSizeFactor(satellitesSizeValue);
+
+    const roadsterSizeSlider = this.slidersData.display["roadster-size-factor"];
+    const roadsterSizeValue = this.mapSliderValueToUserFacing(
+      roadsterSizeSlider,
+      parseFloat(this.sliders.display["roadster-size-factor"].value)
+    );
+    this.simMain.setRoadsterSizeFactor(roadsterSizeValue);
 
   }
 
@@ -190,6 +232,7 @@ export class SimUi {
   setupModeNavigation() {
     this.activeMode = null;
     const modeDrawer = document.getElementById("mode-drawer");
+    const simplePane = document.getElementById("simple-pane");
     const configurePane = document.getElementById("configure-pane");
     const runPane = document.getElementById("run-pane");
     const reportPanel = document.getElementById("report-panel");
@@ -203,6 +246,7 @@ export class SimUi {
     const closeDrawer = () => {
       modeDrawer.hidden = true;
       modeDrawer.setAttribute("aria-hidden", "true");
+      simplePane.hidden = true;
       configurePane.hidden = true;
       runPane.hidden = true;
     };
@@ -224,10 +268,11 @@ export class SimUi {
       this.activeMode = mode;
       setActiveButtons(mode);
 
-      if (mode === "configure" || mode === "run") {
+      if (mode === "simple" || mode === "configure" || mode === "run") {
         closeReportPanel();
         modeDrawer.hidden = false;
         modeDrawer.setAttribute("aria-hidden", "false");
+        simplePane.hidden = mode !== "simple";
         configurePane.hidden = mode !== "configure";
         runPane.hidden = mode !== "run";
       } else if (mode === "report") {
@@ -262,8 +307,8 @@ export class SimUi {
       refreshBtn.addEventListener("click", () => this.simMain.generateReport());
     }
 
-    // Open Configure by default so first-time users see the controls.
-    openMode("configure");
+    // Open Simple config by default so first-time users see the controls.
+    openMode("simple");
   }
 
   /**
@@ -410,6 +455,207 @@ export class SimUi {
     refreshOptions();
   }
 
+  /**
+   * Programmatically sets slider values and fires change events.
+   * @param {Object} values - { "group.slider": value, ... }
+   */
+  applySliderValues(values) {
+    for (const [fullId, value] of Object.entries(values)) {
+      const [section, sliderId] = fullId.split(".");
+      const input = this.sliders[section]?.[sliderId];
+      if (!input) continue;
+      if (input.classList && input.classList.contains("radio-container")) {
+        const radio = input.querySelector(`input[type=radio][value="${CSS.escape(String(value))}"]`);
+        if (radio) {
+          radio.checked = true;
+          radio.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      } else {
+        input.value = value;
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+    }
+  }
+
+  /**
+   * Builds the simple configuration panel with ring count + laser tech sliders.
+   * Changing ring count auto-sets all other parameters to sensible defaults.
+   */
+  setupSimpleConfig() {
+    const container = document.getElementById("simple-config-container");
+    if (!container) return;
+
+    const ringData = this.slidersData.adapted_rings.ringcount;
+    const techData = this.slidersData.laser_technology["improvement-factor"];
+
+    const makeSliderRow = (label, data, id, onChange, opts = {}) => {
+      // opts.toDisplay(internal) → display value, opts.toInternal(display) → internal value
+      const toDisplay = opts.toDisplay || ((v) => v);
+      const toInternal = opts.toInternal || ((v) => v);
+
+      const wrap = document.createElement("div");
+      wrap.className = "metric-card";
+      wrap.style.marginBottom = "6px";
+      wrap.style.padding = "10px 12px";
+
+      const header = document.createElement("div");
+      header.style.cssText = "display:flex; justify-content:space-between; align-items:baseline; margin-bottom:8px;";
+      const lbl = document.createElement("span");
+      lbl.className = "metric-label";
+      lbl.textContent = label;
+
+      const valWrap = document.createElement("span");
+      valWrap.style.cssText = "display:inline-flex; align-items:baseline; gap:2px;";
+      const valInput = document.createElement("input");
+      valInput.type = "number";
+      valInput.className = "slider-value-input";
+      valInput.value = toDisplay(data.value);
+      valInput.style.cssText = "width:60px; text-align:right;";
+      const unitSpan = document.createElement("span");
+      unitSpan.className = "metric-label";
+      unitSpan.textContent = data.unit || "";
+      valWrap.appendChild(valInput);
+      valWrap.appendChild(unitSpan);
+
+      header.appendChild(lbl);
+      header.appendChild(valWrap);
+      wrap.appendChild(header);
+
+      const slider = document.createElement("input");
+      slider.type = "range";
+      slider.min = data.min;
+      slider.max = data.max;
+      slider.step = data.step;
+      slider.value = data.value;
+      slider.style.width = "100%";
+      wrap.appendChild(slider);
+
+      // Slider → input + callback
+      slider.addEventListener("input", () => {
+        const internal = parseFloat(slider.value);
+        valInput.value = toDisplay(internal);
+        onChange(internal);
+      });
+
+      // Input → slider + callback
+      const commitInput = () => {
+        const displayVal = parseFloat(valInput.value);
+        if (isNaN(displayVal)) { valInput.value = toDisplay(parseFloat(slider.value)); return; }
+        const internal = toInternal(displayVal);
+        const clamped = Math.max(parseFloat(slider.min), Math.min(parseFloat(slider.max), internal));
+        slider.value = clamped;
+        valInput.value = toDisplay(clamped);
+        onChange(clamped);
+      };
+      valInput.addEventListener("change", commitInput);
+      valInput.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); commitInput(); valInput.blur(); } });
+
+      return { wrap, slider, valInput };
+    };
+
+    // Helper: signedPow2 display value
+    const signedPow2 = (v) => {
+      if (v === 0) return 0;
+      return Math.sign(v) * Math.pow(2, Math.abs(v) - 1);
+    };
+    const signedPow2Inv = (v) => {
+      if (v === 0) return 0;
+      return Math.sign(v) * (Math.round(Math.log2(Math.abs(v))) + 1);
+    };
+
+    // Time acceleration slider — signedPow2 scale
+    const timeData = this.slidersData.simulation["time-acceleration-slider"];
+    const timeRow = makeSliderRow("Time acceleration",
+      { min: timeData.min, max: timeData.max, step: 1, unit: "x", value: timeData.value },
+      "simple-time",
+      (val) => { this.applySliderValues({ "simulation.time-acceleration-slider": val }); },
+      { toDisplay: signedPow2, toInternal: signedPow2Inv }
+    );
+
+    // Laser tech improvement slider — pow2 scale
+    const techRow = makeSliderRow("Laser tech improvement",
+      { min: techData.min, max: techData.max, step: 1, unit: "x", value: techData.value },
+      "simple-techfactor",
+      (val) => { this.applySliderValues({ "laser_technology.improvement-factor": val }); },
+      { toDisplay: (v) => Math.pow(2, v), toInternal: (v) => Math.round(Math.log2(v)) }
+    );
+
+    // Ring count slider — linear
+    const ringRow = makeSliderRow("Relay ring count", ringData, "simple-ringcount", (val) => {
+      this.applySimpleDefaults(val);
+    });
+
+    // Sync from advanced panel
+    const advTime = this.sliders.simulation?.["time-acceleration-slider"];
+    if (advTime) {
+      advTime.addEventListener("input", () => {
+        timeRow.slider.value = advTime.value;
+        timeRow.valInput.value = signedPow2(parseFloat(advTime.value));
+      });
+    }
+    const advTech = this.sliders.laser_technology?.["improvement-factor"];
+    if (advTech) {
+      advTech.addEventListener("input", () => {
+        techRow.slider.value = advTech.value;
+        techRow.valInput.value = Math.pow(2, parseFloat(advTech.value));
+      });
+    }
+    const advRing = this.sliders.adapted_rings?.ringcount;
+    if (advRing) {
+      advRing.addEventListener("input", () => {
+        ringRow.slider.value = advRing.value;
+        ringRow.valInput.value = advRing.value;
+      });
+    }
+
+    container.appendChild(timeRow.wrap);
+    container.appendChild(techRow.wrap);
+    container.appendChild(ringRow.wrap);
+
+    // Apply defaults on initial load
+    this.applySimpleDefaults(ringData.value);
+  }
+
+  /**
+   * Applies the simple-mode defaults for a given ring count.
+   */
+  applySimpleDefaults(ringCount) {
+    // Estimate adapted rings total throughput to size earth/mars rings
+    const lb = this.simMain.simLinkBudget;
+    const rM = this.simMain.simSatellites.getMars().a;
+    const rE = this.simMain.simSatellites.getEarth().a;
+    const Dem = rM - rE;
+    const routeCount = Math.round((ringCount * Math.sqrt(3) * Math.PI * rM) / Dem);
+    // Min link capacity along a route ≈ capacity at the widest inter-ring gap
+    const interRingAu = Dem / (ringCount + 1);
+    const interRingKm = lb.convertAUtoKM(interRingAu);
+    const perRouteMbps = lb.calculateGbps(interRingKm) * 1000;
+    const totalMbps = routeCount * perRouteMbps;
+    const earthMbps = Math.round(totalMbps * 1.03 * 0.8 / 4) || 50;
+    const marsMbps = Math.round(totalMbps * 1.20 * 0.826 / 4) || 50;
+
+    this.applySliderValues({
+      // Adapted rings
+      "adapted_rings.ringcount": ringCount,
+      "adapted_rings.auto_route_count": "yes",
+      "adapted_rings.laser-ports-per-satellite": 2,
+      "adapted_rings.linear_satcount_increase": 0.18,
+      // Disable circular and eccentric
+      "circular_rings.ringcount": 0,
+      "eccentric_rings.ringcount": 0,
+      // Earth ring — sized to match adapted capacity
+      "ring_earth.laser-ports-per-satellite": 3,
+      "ring_earth.side-extension-degrees-slider": 180,
+      "ring_earth.match-circular-rings": "no",
+      "ring_earth.requiredmbpsbetweensats": earthMbps,
+      // Mars ring — sized to match adapted capacity
+      "ring_mars.laser-ports-per-satellite": 3,
+      "ring_mars.side-extension-degrees-slider": 180,
+      "ring_mars.match-circular-rings": "no",
+      "ring_mars.requiredmbpsbetweensats": marsMbps,
+    });
+  }
 
   saveToJson(object, fileName) {
     // Convert the object to JSON
@@ -582,6 +828,10 @@ export class SimUi {
       return Math.pow(2, sliderValue);
     } else if (slider.scale === "pow10") {
       return Math.pow(10, sliderValue);
+    } else if (slider.scale === "signedPow2") {
+      // 0 → 0, +k → +2^(k-1), -k → -2^(k-1)
+      if (sliderValue === 0) return 0;
+      return Math.sign(sliderValue) * Math.pow(2, Math.abs(sliderValue) - 1);
     } else {
       return sliderValue;
     }
@@ -694,7 +944,7 @@ export class SimUi {
             const num = parseFloat(savedValue);
             if (isNaN(num)) {
               validSavedValue = null;
-            } else if (slider.scale === "pow2" || slider.scale === "pow10") {
+            } else if (slider.scale === "pow2" || slider.scale === "pow10" || slider.scale === "signedPow2") {
               if (!Number.isInteger(num)) {
                 validSavedValue = null;
               }
@@ -898,6 +1148,10 @@ export class SimUi {
     } else if (slider.scale === "pow10") {
       if (userValue <= 0) return slider.min;
       return Math.round(Math.log10(userValue));
+    } else if (slider.scale === "signedPow2") {
+      // Inverse of: 0→0, ±k→±2^(k-1)
+      if (userValue === 0) return 0;
+      return Math.sign(userValue) * (Math.round(Math.log2(Math.abs(userValue))) + 1);
     }
     return userValue;
   }
@@ -961,6 +1215,9 @@ export class SimUi {
         case "display.satellite-size-factor":
           this.simMain.setSatelliteSizeFactor(newValue);
           break;
+        case "display.roadster-size-factor":
+          this.simMain.setRoadsterSizeFactor(newValue);
+          break;
 
         case "laser_technology.current-throughput-gbps":
         case "laser_technology.current-distance-km":
@@ -1017,6 +1274,9 @@ export class SimUi {
         case "economics.satellite-cost-slider":
         case "economics.launch-cost-slider":
         case "economics.laser-terminal-cost-slider":
+        case "economics.fuel-cost-ch4o2":
+        case "economics.fuel-cost-argon":
+        case "economics.wrights-law-factor":
         case "economics.satellite-empty-mass":
           this.simMain.setCosts(this.getGroupsConfig(["economics"]));
           break;
@@ -1096,40 +1356,84 @@ export class SimUi {
   }
 
   updateInfoAreaCosts(html) {
-    // Preserve collapsed/expanded state across re-renders
-    if (!this._arrowStates) this._arrowStates = {};
-    const arrows = ["capacity", "cost"];
-    for (const id of arrows) {
-      const existing = document.getElementById(`${id}-content`);
-      if (existing) this._arrowStates[id] = existing.style.display;
+    const STORAGE_KEY = "marslink-panel-states";
+    const sections = ["satellites", "capacity", "flow", "cost", "latency"];
+
+    // Read live DOM state into _arrowStates before innerHTML wipe
+    if (!this._arrowStates) {
+      // First render: try to restore from localStorage
+      try { this._arrowStates = JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}; } catch { this._arrowStates = {}; }
+    } else {
+      for (const id of sections) {
+        const content = document.getElementById(`${id}-content`);
+        const compact = document.getElementById(`${id}-compact`);
+        if (content) {
+          if (content.style.display !== "none") this._arrowStates[id] = "expanded";
+          else if (compact && compact.style.display !== "none") this._arrowStates[id] = "compact";
+          else this._arrowStates[id] = "closed";
+        }
+      }
     }
 
     document.getElementById("info-area-costs").innerHTML = html;
 
-    for (const id of arrows) {
+    const persistStates = () => {
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(this._arrowStates)); } catch {}
+    };
+
+    for (const id of sections) {
       const arrow = document.getElementById(`${id}-arrow`);
       if (!arrow) continue;
       const content = document.getElementById(`${id}-content`);
       const compact = document.getElementById(`${id}-compact`);
-      // Restore previous state
-      const saved = this._arrowStates[id];
-      if (saved) {
-        content.style.display = saved;
-        arrow.textContent = saved === "none" ? "▶" : "▼";
-        if (compact) compact.style.display = saved === "none" ? "block" : "none";
-      }
       const label = arrow.parentElement.querySelector("span:last-child");
-      arrow.parentElement.addEventListener("click", () => {
-        if (content.style.display === "none") {
-          content.style.display = "block";
-          arrow.textContent = "▼";
+
+      const applyState = (state, save) => {
+        if (state === "expanded") {
+          if (content) content.style.display = "block";
           if (compact) compact.style.display = "none";
-          if (label) label.textContent = "Compact";
-        } else {
-          content.style.display = "none";
-          arrow.textContent = "▶";
+          arrow.innerHTML = "&#9662;"; // ▼
+          if (label && compact) label.textContent = "Compact";
+          else if (label) label.textContent = "Hide";
+        } else if (state === "compact") {
+          if (content) content.style.display = "none";
           if (compact) compact.style.display = "block";
+          arrow.innerHTML = "&#9656;"; // ▶
           if (label) label.textContent = "Expand";
+        } else {
+          if (content) content.style.display = "none";
+          if (compact) compact.style.display = "none";
+          arrow.innerHTML = "&#9656;"; // ▶
+          if (label && compact) label.textContent = "Diagram";
+          else if (label) label.textContent = id === "latency" ? "Chart" : "Details";
+        }
+        this._arrowStates[id] = state;
+        if (save) persistStates();
+      };
+
+      // Restore saved state
+      const saved = this._arrowStates[id];
+      if (saved && saved !== "closed") applyState(saved, false);
+
+      arrow.parentElement.addEventListener("click", () => {
+        const contentVisible = content && content.style.display !== "none";
+        const compactVisible = compact && compact.style.display !== "none";
+        let newState;
+
+        if (compact) {
+          // 3-state: closed → compact → expanded → closed
+          if (contentVisible) newState = "closed";
+          else if (compactVisible) newState = "expanded";
+          else newState = "compact";
+        } else {
+          // 2-state: closed → expanded → closed
+          newState = contentVisible ? "closed" : "expanded";
+        }
+        applyState(newState, true);
+
+        // Resize chart after expanding latency (Chart.js needs visible canvas)
+        if (id === "latency" && newState === "expanded" && this.simMain?.latencyChartInstance) {
+          this.simMain.latencyChartInstance.resize();
         }
       });
     }
