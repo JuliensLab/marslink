@@ -802,14 +802,6 @@ export class SimDisplay {
       this._fpsFrames = 0;
       this._fpsLastTime = now;
       this._fpsDisplay = document.getElementById("fps-counter");
-      if (!this._fpsDisplay) {
-        this._fpsDisplay = document.createElement("div");
-        this._fpsDisplay.id = "fps-counter";
-        this._fpsDisplay.style.cssText =
-          "position:fixed;top:8px;left:8px;color:#0f0;background:rgba(0,0,0,0.6);" +
-          "font:bold 14px monospace;padding:4px 8px;border-radius:4px;z-index:9999;pointer-events:none";
-        document.body.appendChild(this._fpsDisplay);
-      }
     }
     this._fpsFrames++;
     const elapsed = now - this._fpsLastTime;

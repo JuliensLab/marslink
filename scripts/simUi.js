@@ -1,5 +1,6 @@
 // simUi.js
 import { slidersData } from "./slidersData.js?v=4.3";
+import { LukashianClock } from "./lukashianTime.js?v=4.4";
 
 export class SimUi {
   constructor(simMain) {
@@ -17,7 +18,63 @@ export class SimUi {
     this.setupFullRunForm();
     this.setupReportPanel();
     this.setupHelpPopup();
+    this.setupRightPanelToggle();
+    this.setupSimTimeCycle();
     this.setupFullRunButton();
+  }
+
+  /**
+   * Click-to-cycle through different time formats on the bottom-bar sim-time
+   * display: UTC → Local → Lukashian Earth → Lukashian Mars → UTC.
+   * State is persisted in localStorage.
+   */
+  setupSimTimeCycle() {
+    this.lukashianClock = new LukashianClock();
+    this.simTimeModes = ["utc", "local", "lukashian-earth", "lukashian-mars"];
+    this.simTimeModeLabels = {
+      "utc": "UTC",
+      "local": "Local",
+      "lukashian-earth": "Lukashian Earth",
+      "lukashian-mars": "Lukashian Mars",
+    };
+    const stored = localStorage.getItem("marslinkSimTimeMode");
+    this.simTimeMode = this.simTimeModes.includes(stored) ? stored : "utc";
+
+    const el = document.getElementById("simTime");
+    if (!el) return;
+    el.style.cursor = "pointer";
+    el.title = "Click to cycle: UTC / Local / Lukashian Earth / Lukashian Mars";
+    el.addEventListener("click", () => {
+      const idx = this.simTimeModes.indexOf(this.simTimeMode);
+      this.simTimeMode = this.simTimeModes[(idx + 1) % this.simTimeModes.length];
+      localStorage.setItem("marslinkSimTimeMode", this.simTimeMode);
+      if (this._lastSimTime) this.updateSimTime(this._lastSimTime);
+    });
+  }
+
+  /**
+   * Collapse / expand the right metrics panel. State persisted to localStorage.
+   */
+  setupRightPanelToggle() {
+    const panel = document.getElementById("right-panel");
+    const toggle = document.getElementById("right-panel-toggle");
+    if (!panel || !toggle) return;
+
+    const STORAGE_KEY = "marslinkRightPanelCollapsed";
+    const apply = (collapsed) => {
+      panel.classList.toggle("collapsed", collapsed);
+      toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+      toggle.setAttribute("aria-label", collapsed ? "Expand panel" : "Collapse panel");
+      toggle.title = collapsed ? "Expand panel" : "Collapse panel";
+    };
+
+    apply(localStorage.getItem(STORAGE_KEY) === "1");
+
+    toggle.addEventListener("click", () => {
+      const collapsed = !panel.classList.contains("collapsed");
+      apply(collapsed);
+      localStorage.setItem(STORAGE_KEY, collapsed ? "1" : "0");
+    });
   }
 
   /**
@@ -638,14 +695,19 @@ export class SimUi {
             if (isNaN(num)) {
               validSavedValue = null;
             } else if (slider.scale === "pow2" || slider.scale === "pow10") {
-              if (!Number.isInteger(num) || num < min || num > max) {
-                validSavedValue = null;
-              }
-            } else {
-              if (num < min || num > max) {
+              if (!Number.isInteger(num)) {
                 validSavedValue = null;
               }
             }
+          }
+        }
+        // If the saved value is outside the original range, extend the slider's
+        // effective bounds to accommodate it (values entered via the numeric input).
+        if (validSavedValue !== null && slider.type !== "radio" && slider.type !== "select" && slider.type !== "dropdown") {
+          const n = parseFloat(validSavedValue);
+          if (!isNaN(n)) {
+            if (n < min) min = n;
+            if (n > max) max = n;
           }
         }
         let sliderValue =
@@ -774,7 +836,8 @@ export class SimUi {
           input.addEventListener("input", () => onSliderInput(!isCalcTime));
           if (isCalcTime) input.addEventListener("change", () => onSliderInput(true));
 
-          // Numeric input → slider
+          // Numeric input → slider. Accepts values outside the original range
+          // by dynamically extending the slider's min/max to match.
           if (numericInput) {
             const commitNumeric = () => {
               const userVal = parseFloat(numericInput.value);
@@ -782,7 +845,10 @@ export class SimUi {
                 numericInput.value = this.formatNumericValue(this.mapSliderValueToUserFacing(slider, parseFloat(input.value)));
                 return;
               }
-              const internal = this.clampInternalValue(this.mapUserFacingToSliderValue(slider, userVal), min, max);
+              const internal = this.mapUserFacingToSliderValue(slider, userVal);
+              // Extend range if needed so the slider thumb can represent this value.
+              if (internal > parseFloat(input.max)) input.max = internal;
+              if (internal < parseFloat(input.min)) input.min = internal;
               input.value = internal;
               const snappedUser = this.mapSliderValueToUserFacing(slider, internal);
               numericInput.value = this.formatNumericValue(snappedUser);
@@ -1003,8 +1069,26 @@ export class SimUi {
     return config;
   }
   updateSimTime(simTime) {
-    const utcTime = this.formatSimTimeToUTC(simTime);
-    document.getElementById("simTime").innerHTML = utcTime;
+    this._lastSimTime = simTime;
+    const el = document.getElementById("simTime");
+    if (!el) return;
+    const mode = this.simTimeMode || "utc";
+    const label = this.simTimeModeLabels?.[mode] || "UTC";
+    let body;
+    if (mode === "utc") {
+      body = this.formatSimTimeToUTC(simTime);
+    } else if (mode === "local") {
+      const d = simTime instanceof Date ? simTime : new Date(simTime);
+      body = d.toLocaleString(undefined, {
+        year: "numeric", month: "2-digit", day: "2-digit",
+        hour: "2-digit", minute: "2-digit", second: "2-digit",
+      });
+    } else if (mode === "lukashian-earth") {
+      body = this.lukashianClock?.formatEarth(simTime) || "—";
+    } else if (mode === "lukashian-mars") {
+      body = this.lukashianClock?.formatMars(simTime) || "—";
+    }
+    el.textContent = `${label} · ${body}`;
   }
 
   updateInfoAreaData(html) {

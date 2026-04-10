@@ -64,7 +64,7 @@
         </div>
       </div>
       <a id="followX" href="https://x.com/julienvm" target="_blank" rel="noopener">
-        <img src="img/x_logo.jpg" alt="" class="x-logo">
+        <img src="img/x_logo.jpg" alt="" class="x-logo" width="16" height="16" decoding="async">
         <span>Follow @julienvm</span>
       </a>
     </div>
@@ -163,6 +163,9 @@
 
   <!-- ─────────────── RIGHT METRICS PANEL ─────────────── -->
   <aside id="right-panel">
+    <button id="right-panel-toggle" class="icon-btn" title="Collapse / expand panel" aria-label="Collapse panel" aria-expanded="true">
+      <span class="chev" aria-hidden="true">›</span>
+    </button>
     <div class="panel-header right-panel-header">
       <h2>Live metrics</h2>
     </div>
@@ -177,7 +180,10 @@
 
   <!-- ─────────────── BOTTOM BAR ─────────────── -->
   <footer id="bottom-bar">
-    <div id="simTime" class="sim-time-display">—</div>
+    <div class="bottom-bar-left">
+      <div id="simTime" class="sim-time-display">—</div>
+      <div id="fps-counter" class="fps-counter" aria-label="Frames per second">— fps</div>
+    </div>
     <div class="disclaimer">
       Object sizes not to scale · Distances to scale · Not affiliated with SpaceX · L = latency labels · M = Mbps labels
     </div>
