@@ -689,8 +689,13 @@ export class SimMain {
       html += `<span id="capacity-arrow">▶</span> <span>Expand</span>`;
       html += `</div>`;
 
-      // --- Header: mode + laser tech improvement factor ---
-      const modeTitle = showFlow ? "FLOW" : "CAPACITY";
+      // --- Header: mode + algorithm initials + laser tech improvement factor ---
+      const algoInitials = {
+        "topology-aware": "TA",
+        "push-relabel": "PR",
+        "edmonds-karp": "EK",
+      }[this.simLinkBudget.flowAlgorithm] || "??";
+      const modeTitle = showFlow ? `FLOW (${algoInitials})` : "CAPACITY";
       const techFactor = this.simLinkBudget.techImprovementFactor || 1;
       const headerLine = `${modeTitle} | Laser tech improvement ${techFactor}x\n`;
 

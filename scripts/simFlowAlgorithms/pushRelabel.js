@@ -235,5 +235,72 @@ export function pushRelabel({ graph, capacities, source, sink, perfStart, calcti
     }
   }
 
+  // --- POST-LOOP: Path decomposition ---
+  //
+  // PR's source saturation pushes full capacity on every outgoing source edge,
+  // even when downstream can't absorb it. The main loop drains what it can to
+  // sink, but leftover flow either gets stuck (excess > 0 at internal nodes)
+  // or forms internal cycles that never reach the sink. Both inflate the
+  // per-link flow values in the `flows` dict beyond their actual contribution
+  // to the max-flow.
+  //
+  // Path decomposition rebuilds `flows` from scratch by repeatedly finding
+  // source→sink paths in the positive-flow subgraph and accumulating them.
+  // Cycles disappear (no path can use a cycle without entering sink) and
+  // stuck flow is naturally excluded. The result: `flows[u_v]` contains
+  // exactly the flow that travels source→sink through that edge.
+  const pathDecomposition = () => {
+    const newFlows = {};
+    while (true) {
+      // BFS source → sink using only edges where flows[u_v] > EPS
+      const parents = new Map();
+      parents.set(source, -1);
+      const bfsQueue = [source];
+      let bfsHead = 0;
+      let found = false;
+      while (bfsHead < bfsQueue.length) {
+        const u = bfsQueue[bfsHead++];
+        if (u === sink) { found = true; break; }
+        const neighbors = graph[u];
+        if (!neighbors) continue;
+        for (let j = 0; j < neighbors.length; j++) {
+          const v = neighbors[j];
+          if (parents.has(v)) continue;
+          if ((flows[`${u}_${v}`] || 0) > EPS) {
+            parents.set(v, u);
+            bfsQueue.push(v);
+          }
+        }
+      }
+      if (!found) break;
+      // Find min flow along the path
+      let pathFlow = Infinity;
+      let s = sink;
+      while (s !== source) {
+        const prev = parents.get(s);
+        const f = flows[`${prev}_${s}`] || 0;
+        if (f < pathFlow) pathFlow = f;
+        s = prev;
+      }
+      if (pathFlow <= EPS) break;
+      // Subtract pathFlow from old flows; accumulate into newFlows
+      s = sink;
+      while (s !== source) {
+        const prev = parents.get(s);
+        const fwd = `${prev}_${s}`;
+        const rev = `${s}_${prev}`;
+        flows[fwd] -= pathFlow;
+        flows[rev] += pathFlow;
+        newFlows[fwd] = (newFlows[fwd] || 0) + pathFlow;
+        newFlows[rev] = (newFlows[rev] || 0) - pathFlow;
+        s = prev;
+      }
+    }
+    // Replace flows with the decomposed version (cycles removed)
+    for (const key in flows) delete flows[key];
+    for (const key in newFlows) flows[key] = newFlows[key];
+  };
+  pathDecomposition();
+
   return { maxFlow: excess[sink], flows };
 }
