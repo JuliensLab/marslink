@@ -70,11 +70,11 @@ export const slidersData = {
   simulation: {
     "time-acceleration-slider": {
       label: "Time Acceleration",
-      description: "0 = paused, negative = reverse. Steps: 0, ±1, ±2, ±4, ±8, …",
+      description: "0 = paused, negative = reverse. Exponential: center is 0, edges are ±2²⁴×.",
       min: -25,
       max: 25,
       value: 1,
-      step: 1,
+      step: 0.1,
       unit: "x",
       scale: "signedPow2",
       updateLongTermScore: false,

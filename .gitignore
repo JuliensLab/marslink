@@ -6,3 +6,11 @@
 /results/
 /node_modules/
 .aider*
+
+# Nyx MCP credentials (never commit — use env var NYX_API_KEY or this local file)
+/api/nyx/config.local.php
+
+# Local debug scripts that embed live API keys
+/test_lambert.php
+/test_nyx.php
+/lambert-test.html

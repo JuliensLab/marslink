@@ -110,6 +110,23 @@ export class SimUi {
       apply(collapsed);
       localStorage.setItem(STORAGE_KEY, collapsed ? "1" : "0");
     });
+
+    // --- Right-panel tab switching (Live metrics / Performance) ---
+    const tabs = panel.querySelectorAll(".right-panel-tab");
+    const panels = panel.querySelectorAll("[data-panel]");
+    tabs.forEach((tab) => {
+      tab.addEventListener("click", () => {
+        const target = tab.dataset.panel;
+        tabs.forEach((t) => t.classList.toggle("active", t === tab));
+        panels.forEach((p) => {
+          // Only toggle visibility for panels that are direct children of the aside
+          // (not nested data-panel attributes inside metric cards)
+          if (p.parentElement === panel || p.parentElement?.parentElement === panel) {
+            p.style.display = p.dataset.panel === target ? "" : "none";
+          }
+        });
+      });
+    });
   }
 
   /**
@@ -561,17 +578,17 @@ export class SimUi {
     // Helper: signedPow2 display value
     const signedPow2 = (v) => {
       if (v === 0) return 0;
-      return Math.sign(v) * Math.pow(2, Math.abs(v) - 1);
+      return Math.sign(v) * Math.round(Math.pow(2, Math.abs(v) - 1));
     };
     const signedPow2Inv = (v) => {
       if (v === 0) return 0;
       return Math.sign(v) * (Math.round(Math.log2(Math.abs(v))) + 1);
     };
 
-    // Time acceleration slider — signedPow2 scale
+    // Time acceleration slider — signedPow2 scale (continuous, step 0.1)
     const timeData = this.slidersData.simulation["time-acceleration-slider"];
     const timeRow = makeSliderRow("Time acceleration",
-      { min: timeData.min, max: timeData.max, step: 1, unit: "x", value: timeData.value },
+      { min: timeData.min, max: timeData.max, step: 0.1, unit: "x", value: timeData.value },
       "simple-time",
       (val) => { this.applySliderValues({ "simulation.time-acceleration-slider": val }); },
       { toDisplay: signedPow2, toInternal: signedPow2Inv }
@@ -585,9 +602,14 @@ export class SimUi {
       { toDisplay: (v) => Math.pow(2, v), toInternal: (v) => Math.round(Math.log2(v)) }
     );
 
-    // Ring count slider — linear
+    // Ring count slider — linear. Passing `{ startFeedback: true }` arms a
+    // 2-iteration feedback loop that rescales the earth / mars in-ring mbps
+    // to match the actual adapted-ring aggregate capacity once the worker
+    // delivers a fresh capacityInfo. The feedback only fires on slider moves,
+    // not on the initial applySimpleDefaults call at the bottom of this
+    // method (line 638), so the direct formula alone seeds the defaults.
     const ringRow = makeSliderRow("Relay ring count", ringData, "simple-ringcount", (val) => {
-      this.applySimpleDefaults(val);
+      this.applySimpleDefaults(val, { startFeedback: true });
     });
 
     // Sync from advanced panel
@@ -628,56 +650,65 @@ export class SimUi {
    * Estimates min planet-to-ring capacity (Mbps) for a given requiredmbpsbetweensats.
    * Returns the worst-case (apoapsis) total capacity of both planet-to-satellite links.
    */
-  _estimatePlanetRingMinCapacity(mbpsBetweenSats, ringType) {
+  /**
+   * Direct formula: given a target planet-to-ring min capacity (Mbps),
+   * compute the `requiredmbpsbetweensats` slider value that achieves it.
+   *
+   * Works backwards through the chain:
+   *   targetMbps → worst-case distance → sat count → inter-sat distance → mbpsBetweenSats
+   */
+  _mbpsBetweenSatsForTargetCapacity(targetMbps, ringType) {
     const lb = this.simMain.simLinkBudget;
     const sats = this.simMain.simSatellites;
     const AU_IN_KM = 149597870.7;
-    const { a, n } = sats.getParams_a_n(ringType);
+    const { a } = sats.getParams_a_n(ringType);
     const e = ringType === "Mars" ? 0.0934231 : 0.0166967;
-
-    // Compute sat count (same formula as generateSatellitesConfig with matchCircularRings="no", sideExtension=180)
-    const distKmBetweenSats = lb.calculateKm(mbpsBetweenSats / 1000);
-    const distAuBetweenSats = distKmBetweenSats / AU_IN_KM;
-    const circumferenceAu = 2 * Math.PI * a;
-    const satCount = Math.ceil(circumferenceAu / distAuBetweenSats);
-    if (satCount < 2) return 0;
-
-    // Worst-case: at apoapsis, ring radius = a*(1+e), planet at same radius
-    // Angular spacing = 360/satCount degrees, max offset = half spacing
     const apo = a * (1 + e);
-    const halfSpacingRad = Math.PI / satCount;
-    // Chord distance at apoapsis for angular offset = halfSpacing
-    const worstDistAu = 2 * apo * Math.sin(halfSpacingRad);
-    const worstDistKm = worstDistAu * AU_IN_KM;
-    const capacityPerLinkGbps = lb.calculateGbps(worstDistKm);
-    // Two links (one on each angular side)
-    return capacityPerLinkGbps * 2 * 1000; // Mbps
+
+    // Step 1: target capacity per link (2 links total)
+    const targetPerLinkGbps = targetMbps / 2 / 1000;
+    if (targetPerLinkGbps <= 0) return 50;
+
+    // Step 2: worst-case distance that gives this capacity
+    // calculateGbps(d) = _gbpsFactor / d², so d = sqrt(_gbpsFactor / gbps)
+    const gbpsFactor = lb._gbpsFactor;
+    const worstDistKm = Math.sqrt(gbpsFactor / targetPerLinkGbps);
+    const worstDistAu = worstDistKm / AU_IN_KM;
+
+    // Step 3: satellite count from worst-case chord distance
+    // chord = 2 * apo * sin(halfSpacing), so halfSpacing = asin(chord / (2 * apo))
+    const sinHalf = worstDistAu / (2 * apo);
+    if (sinHalf >= 1) return 50; // can't achieve this capacity
+    const halfSpacingRad = Math.asin(sinHalf);
+    const satCount = Math.ceil(Math.PI / halfSpacingRad);
+    if (satCount < 2) return 50;
+
+    // Step 4: inter-satellite distance from satellite count
+    const circumferenceAu = 2 * Math.PI * a;
+    const distAuBetweenSats = circumferenceAu / satCount;
+    const distKmBetweenSats = distAuBetweenSats * AU_IN_KM;
+
+    // Step 5: convert distance to mbps (inverse of calculateKm)
+    // calculateGbps(d) = _gbpsFactor / d²
+    const gbps = gbpsFactor / (distKmBetweenSats * distKmBetweenSats);
+    return Math.max(1, Math.round(gbps * 1000));
   }
 
-  applySimpleDefaults(ringCount) {
-    // Estimate adapted rings total throughput to size earth/mars rings
+  applySimpleDefaults(ringCount, options = {}) {
+    // Estimate adapted rings total throughput
     const lb = this.simMain.simLinkBudget;
     const rM = this.simMain.simSatellites.getMars().a;
     const rE = this.simMain.simSatellites.getEarth().a;
     const Dem = rM - rE;
     const routeCount = Math.round((ringCount * Math.sqrt(3) * Math.PI * rM) / Dem);
-    // Min link capacity along a route ≈ capacity at the widest inter-ring gap
     const interRingAu = Dem / (ringCount + 1);
     const interRingKm = lb.convertAUtoKM(interRingAu);
     const perRouteMbps = lb.calculateGbps(interRingKm) * 1000;
     const targetMbps = routeCount * perRouteMbps;
 
-    // Initial heuristic for earth/mars ring throughput target
-    let earthMbps = Math.round(targetMbps * 1.03 * 0.8 / 4) || 50;
-    let marsMbps = Math.round(targetMbps * 1.20 * 0.826 / 4) || 50;
-
-    // Feedback loop (2 iterations): estimate actual min capacity, then adjust input to hit target
-    for (let iter = 0; iter < 2; iter++) {
-      const earthMinCap = this._estimatePlanetRingMinCapacity(earthMbps, "Earth");
-      const marsMinCap = this._estimatePlanetRingMinCapacity(marsMbps, "Mars");
-      if (earthMinCap > 0) earthMbps = Math.round(earthMbps * targetMbps / earthMinCap / 2) || 50;
-      if (marsMinCap > 0) marsMbps = Math.round(marsMbps * targetMbps / marsMinCap / 2) || 50;
-    }
+    // Direct formula: find requiredmbpsbetweensats that yields min capacity = targetMbps
+    const earthMbps = this._mbpsBetweenSatsForTargetCapacity(targetMbps, "Earth");
+    const marsMbps = this._mbpsBetweenSatsForTargetCapacity(targetMbps, "Mars");
 
     this.applySliderValues({
       // Adapted rings
@@ -699,6 +730,94 @@ export class SimUi {
       "ring_mars.match-circular-rings": "no",
       "ring_mars.requiredmbpsbetweensats": marsMbps,
     });
+
+    // Arm the feedback loop — runs up to 2 corrections after the worker
+    // delivers fresh capacityInfo for this new config. Only active when
+    // requested by the simple-config ring count slider and when we actually
+    // have adapted rings to balance against.
+    if (options.startFeedback && ringCount > 0) {
+      this._simpleFeedbackState = {
+        iterationsLeft: 2,
+        targetMbps,
+      };
+    } else {
+      this._simpleFeedbackState = null;
+    }
+  }
+
+  /**
+   * Feedback step for the simple-config ring count slider.
+   *
+   * Called by simMain whenever a fresh `capacityInfo` arrives (from the
+   * worker's links-ready / flow-ready path). Reads the actual planet-to-ring
+   * per-side link capacities for Earth and Mars, and rescales the in-ring
+   * mbps sliders so both rings match the adapted-ring aggregate throughput
+   * within the 5% "balanced" tolerance used by the capacity panel.
+   *
+   * Formula (per ring):
+   *     newInput = oldInput * targetMbps / actualMinCap / 2
+   * where actualMinCap is the smaller of the two planet-link side capacities.
+   * Planet-link mbps scales ~linearly with `requiredmbpsbetweensats` (halving
+   * inter-sat gap doubles per-link throughput and also halves the planet-sat
+   * distance, doubling planet-link throughput), so a single scale factor
+   * converges in 1–2 iterations.
+   *
+   * Runs at most 2 iterations per slider move (after that the counter hits
+   * zero and subsequent capacity updates are ignored) so it can't oscillate
+   * or loop forever.
+   */
+  runSimpleFeedbackStep() {
+    const state = this._simpleFeedbackState;
+    if (!state || state.iterationsLeft <= 0) return;
+    const capacityInfo = this.simMain?.capacityInfo;
+    if (!capacityInfo || !capacityInfo.ringCapacities) return;
+
+    const earthPlanetLinks = capacityInfo.ringCapacities["ring_earth"]?.planetLinks || [];
+    const marsPlanetLinks = capacityInfo.ringCapacities["ring_mars"]?.planetLinks || [];
+    const earthCaps = earthPlanetLinks.map((l) => l.cap).sort((a, b) => b - a);
+    const marsCaps = marsPlanetLinks.map((l) => l.cap).sort((a, b) => b - a);
+
+    // actualMinCap = smaller of the two best per-side planet-link caps. If we
+    // don't have at least two sides (happens during startup or when a ring
+    // hasn't been evaluated yet) skip — we need a full capacity snapshot.
+    const earthSideMin = earthCaps.length >= 2 ? earthCaps[1] : (earthCaps[0] || 0);
+    const marsSideMin = marsCaps.length >= 2 ? marsCaps[1] : (marsCaps[0] || 0);
+    if (earthSideMin <= 0 || marsSideMin <= 0) return;
+
+    const targetMbps = state.targetMbps;
+    if (!targetMbps || targetMbps <= 0) {
+      this._simpleFeedbackState = null;
+      return;
+    }
+
+    // Read current in-ring mbps inputs so we can scale them.
+    const earthInput = this.sliders.ring_earth?.requiredmbpsbetweensats;
+    const marsInput = this.sliders.ring_mars?.requiredmbpsbetweensats;
+    if (!earthInput || !marsInput) return;
+    const oldEarth = parseFloat(earthInput.value);
+    const oldMars = parseFloat(marsInput.value);
+    if (!isFinite(oldEarth) || !isFinite(oldMars)) return;
+
+    const newEarth = Math.max(1, Math.round(oldEarth * targetMbps / earthSideMin / 2));
+    const newMars = Math.max(1, Math.round(oldMars * targetMbps / marsSideMin / 2));
+
+    state.iterationsLeft--;
+
+    // Only re-apply when the ratio actually changed — otherwise we'd burn a
+    // worker cycle that produces the same result and doesn't converge further.
+    if (newEarth === oldEarth && newMars === oldMars) {
+      this._simpleFeedbackState = null;
+      return;
+    }
+
+    this.applySliderValues({
+      "ring_earth.requiredmbpsbetweensats": newEarth,
+      "ring_mars.requiredmbpsbetweensats": newMars,
+    });
+
+    // When we hit 0 iterations, drop the state so stray capacity updates
+    // (from unrelated slider changes) don't keep rescaling.
+    if (state.iterationsLeft <= 0) this._simpleFeedbackState = null;
   }
 
   saveToJson(object, fileName) {
@@ -879,6 +998,38 @@ export class SimUi {
       stepInput.style.display = progSelect.value === "linear" ? "" : "none";
     });
 
+    // Enable/disable the three metric rows via their checkboxes. When a row
+    // is unchecked we only grey out its inputs (1 singleton value is used
+    // during the sweep, so that dimension collapses to a no-op).
+    const wireEnable = (checkboxId, rowSelectorInputs) => {
+      const cb = document.getElementById(checkboxId);
+      if (!cb) return;
+      const sync = () => {
+        for (const el of rowSelectorInputs()) {
+          el.disabled = !cb.checked;
+          el.style.opacity = cb.checked ? "" : "0.4";
+        }
+      };
+      cb.addEventListener("change", sync);
+      sync();
+    };
+    wireEnable("sens-ring-enable", () => [
+      document.getElementById("sens-ring-start"),
+      document.getElementById("sens-ring-end"),
+      document.getElementById("sens-ring-step"),
+    ]);
+    wireEnable("sens-tech-enable", () => [
+      document.getElementById("sens-tech-start"),
+      document.getElementById("sens-tech-end"),
+      document.getElementById("sens-tech-progression"),
+      document.getElementById("sens-tech-step"),
+    ]);
+    wireEnable("sens-date-enable", () => [
+      document.getElementById("sens-date-start"),
+      document.getElementById("sens-date-end"),
+      document.getElementById("sens-date-step"),
+    ]);
+
     startBtn.addEventListener("click", async () => {
       startBtn.disabled = true;
       startBtn.textContent = "Running...";
@@ -887,28 +1038,58 @@ export class SimUi {
       progressText.textContent = "0%";
 
       try {
-        const ringStart = parseInt(document.getElementById("sens-ring-start").value);
-        const ringEnd = parseInt(document.getElementById("sens-ring-end").value);
-        const ringStep = parseInt(document.getElementById("sens-ring-step").value) || 1;
+        const ringEnabled = document.getElementById("sens-ring-enable").checked;
+        const techEnabled = document.getElementById("sens-tech-enable").checked;
+        const dateEnabled = document.getElementById("sens-date-enable").checked;
 
-        const techStart = parseInt(document.getElementById("sens-tech-start").value);
-        const techEnd = parseInt(document.getElementById("sens-tech-end").value);
-        const techProg = progSelect.value;
-        const techLinStep = parseInt(stepInput.value) || 1;
+        // --- Build per-dimension value arrays. Disabled dimensions get a
+        // single sentinel `null` so the nested loops still run exactly once
+        // and the corresponding override is skipped. ---
 
-        // Build ring count values
-        const ringValues = [];
-        for (let r = ringStart; r <= ringEnd; r += ringStep) ringValues.push(r);
-
-        // Build laser tech values (user-facing)
-        const techValues = [];
-        if (techProg === "pow2") {
-          for (let t = techStart; t <= techEnd; t *= 2) techValues.push(t);
-        } else {
-          for (let t = techStart; t <= techEnd; t += techLinStep) techValues.push(t);
+        // Ring counts
+        let ringValues = [null];
+        if (ringEnabled) {
+          const ringStart = parseInt(document.getElementById("sens-ring-start").value);
+          const ringEnd = parseInt(document.getElementById("sens-ring-end").value);
+          const ringStep = parseInt(document.getElementById("sens-ring-step").value) || 1;
+          ringValues = [];
+          for (let r = ringStart; r <= ringEnd; r += ringStep) ringValues.push(r);
         }
 
-        const totalScenarios = ringValues.length * techValues.length;
+        // Laser tech improvements
+        let techValues = [null];
+        if (techEnabled) {
+          const techStart = parseInt(document.getElementById("sens-tech-start").value);
+          const techEnd = parseInt(document.getElementById("sens-tech-end").value);
+          const techProg = progSelect.value;
+          const techLinStep = parseInt(stepInput.value) || 1;
+          techValues = [];
+          if (techProg === "pow2") {
+            for (let t = techStart; t <= techEnd; t *= 2) techValues.push(t);
+          } else {
+            for (let t = techStart; t <= techEnd; t += techLinStep) techValues.push(t);
+          }
+        }
+
+        // Launch dates (ISO YYYY-MM-DD). Disabled → a single default date so
+        // every scenario still has a concrete `from`/`to` to hand to longTermRun.
+        let dateValues = ["2030-01-01"];
+        if (dateEnabled) {
+          const dateStart = document.getElementById("sens-date-start").value;
+          const dateEnd = document.getElementById("sens-date-end").value;
+          const dateStepDays = parseInt(document.getElementById("sens-date-step").value) || 1;
+          const startMs = new Date(dateStart).getTime();
+          const endMs = new Date(dateEnd).getTime();
+          if (!isNaN(startMs) && !isNaN(endMs) && endMs >= startMs) {
+            dateValues = [];
+            const dayMs = 86400 * 1000;
+            for (let t = startMs; t <= endMs; t += dateStepDays * dayMs) {
+              dateValues.push(new Date(t).toISOString().slice(0, 10));
+            }
+          }
+        }
+
+        const totalScenarios = ringValues.length * techValues.length * dateValues.length;
         let completed = 0;
 
         // Save current config to restore later
@@ -921,41 +1102,42 @@ export class SimUi {
         const resultArray = [];
 
         for (const techUserVal of techValues) {
-          const techInternal = Math.round(Math.log2(techUserVal));
-
           for (const ringCount of ringValues) {
-            // Apply simple config defaults for this ring count
-            // (this sets adapted rings, disables circular/eccentric, sizes earth/mars)
-            this.applySimpleDefaults(ringCount);
+            // Per-scenario config setup. Apply ring count (via applySimpleDefaults)
+            // and laser tech only if those dimensions are enabled.
+            if (ringCount != null) this.applySimpleDefaults(ringCount);
+            if (techUserVal != null) {
+              const techInternal = Math.round(Math.log2(techUserVal));
+              this.applySliderValues({ "laser_technology.improvement-factor": techInternal });
+            }
 
-            // Override laser tech
-            this.applySliderValues({ "laser_technology.improvement-factor": techInternal });
-
-            // Get the resulting full config
+            // Get the resulting full config (stable across the inner date loop)
             const scenarioConfig = this.getGroupsConfig([
               "economics", "simulation", "laser_technology",
               "ring_mars", "circular_rings", "eccentric_rings", "ring_earth", "adapted_rings",
             ]);
             scenarioConfig["simulation.calctimeSec"] = 100;
-
-            // Apply and run
             this.simMain.setSatellitesConfig(scenarioConfig);
-            const result = await this.simMain.longTermRun({ from: "2030-01-01", to: "2030-01-01", stepDays: 1 });
 
-            result.scenario = {
-              ringCount,
-              laserTechImprovement: techUserVal,
-              satellites: result.dataSummary?.possibleLinksCount?.min ?? null,
-            };
-            resultArray.push(result);
+            for (const dateStr of dateValues) {
+              const result = await this.simMain.longTermRun({ from: dateStr, to: dateStr, stepDays: 1 });
 
-            completed++;
-            const pct = Math.round((completed / totalScenarios) * 100);
-            progressBar.style.width = `${pct}%`;
-            progressText.textContent = `${pct}% (${completed}/${totalScenarios})`;
+              result.scenario = {
+                ringCount: ringCount ?? "(current)",
+                laserTechImprovement: techUserVal ?? "(current)",
+                launchDate: dateStr,
+                satellites: result.dataSummary?.possibleLinksCount?.min ?? null,
+              };
+              resultArray.push(result);
 
-            // Yield to UI
-            await new Promise((r) => setTimeout(r, 0));
+              completed++;
+              const pct = Math.round((completed / totalScenarios) * 100);
+              progressBar.style.width = `${pct}%`;
+              progressText.textContent = `${pct}% (${completed}/${totalScenarios})`;
+
+              // Yield to UI
+              await new Promise((r) => setTimeout(r, 0));
+            }
           }
         }
 
@@ -1323,9 +1505,10 @@ export class SimUi {
       if (userValue <= 0) return slider.min;
       return Math.round(Math.log10(userValue));
     } else if (slider.scale === "signedPow2") {
-      // Inverse of: 0→0, ±k→±2^(k-1)
+      // Inverse of: 0→0, ±k→±2^(k-1). Continuous (no rounding) so the
+      // slider can be dragged smoothly through fractional positions.
       if (userValue === 0) return 0;
-      return Math.sign(userValue) * (Math.round(Math.log2(Math.abs(userValue))) + 1);
+      return Math.sign(userValue) * (Math.log2(Math.abs(userValue)) + 1);
     }
     return userValue;
   }

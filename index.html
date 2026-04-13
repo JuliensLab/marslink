@@ -121,12 +121,15 @@
       </header>
       <div class="drawer-body" style="padding: var(--s-4);">
         <p class="muted">
-          Sweep relay ring count and laser tech improvement. Earth/Mars rings auto-size via simple config logic.
+          Sweep any combination of ring count, laser tech and launch date. Check a metric to enable it; unchecked metrics use the current config as-is. Earth/Mars rings auto-size via simple config logic.
         </p>
 
         <div class="form-group">
-          <label>Relay ring count</label>
-          <div style="display:flex; gap:var(--s-2); align-items:center;">
+          <label>
+            <input type="checkbox" id="sens-ring-enable" checked>
+            Relay ring count
+          </label>
+          <div class="sens-row" style="display:flex; gap:var(--s-2); align-items:center;">
             <input type="number" id="sens-ring-start" value="10" min="1" max="100" style="width:60px;">
             <span class="muted">to</span>
             <input type="number" id="sens-ring-end" value="50" min="1" max="100" style="width:60px;">
@@ -136,17 +139,35 @@
         </div>
 
         <div class="form-group">
-          <label>Laser tech improvement</label>
-          <div style="display:flex; gap:var(--s-2); align-items:center;">
-            <input type="number" id="sens-tech-start" value="4" min="1" max="1048576" style="width:80px;">
+          <label>
+            <input type="checkbox" id="sens-tech-enable" checked>
+            Laser tech improvement
+          </label>
+          <div class="sens-row" style="display:flex; gap:var(--s-2); align-items:center;">
+            <input type="number" id="sens-tech-start" value="4" min="1" max="1048576" style="width:60px;">
             <span class="muted">to</span>
-            <input type="number" id="sens-tech-end" value="64" min="1" max="1048576" style="width:80px;">
+            <input type="number" id="sens-tech-end" value="64" min="1" max="1048576" style="width:60px;">
             <span class="muted">step</span>
             <select id="sens-tech-progression" style="width:80px;">
               <option value="pow2" selected>x2</option>
               <option value="linear">linear</option>
             </select>
             <input type="number" id="sens-tech-step" value="2" min="1" max="100" style="width:50px; display:none;" title="Linear step">
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>
+            <input type="checkbox" id="sens-date-enable">
+            Launch date
+          </label>
+          <div class="sens-row" style="display:flex; gap:var(--s-2); align-items:center; flex-wrap:wrap;">
+            <input type="date" id="sens-date-start" value="2030-01-01">
+            <span class="muted">to</span>
+            <input type="date" id="sens-date-end" value="2030-12-31">
+            <span class="muted">step</span>
+            <input type="number" id="sens-date-step" value="30" min="1" max="3650" style="width:60px;">
+            <span class="muted">days</span>
           </div>
         </div>
 
@@ -217,11 +238,17 @@
       <span class="chev" aria-hidden="true">›</span>
     </button>
     <div class="panel-header right-panel-header">
-      <h2>Live metrics</h2>
+      <div class="right-panel-tabs">
+        <button class="right-panel-tab active" data-panel="metrics">Live metrics</button>
+        <button class="right-panel-tab" data-panel="performance">Performance</button>
+      </div>
     </div>
-    <div id="info-area">
+    <div id="info-area" data-panel="metrics">
       <div id="info-area-costs"></div>
       <div id="info-area-data"></div>
+    </div>
+    <div id="perf-area" data-panel="performance" style="display:none">
+      <div id="perf-area-content"></div>
     </div>
   </aside>
 

@@ -637,6 +637,8 @@ export class SimDisplay {
     // Calculate min and max for color mapping
     let maxVal = 1, minVal = 0;
     const isFlowMode = this.linksColorsType === "Flow";
+    const isCapMode = this.linksColorsType === "Capacity";
+    const isColorMode = isFlowMode || isCapMode;
     if (isFlowMode) {
       for (let i = 0; i < active.length; i++) {
         const f = active[i].gbpsFlow;
@@ -693,7 +695,7 @@ export class SimDisplay {
       positions[off + 3] = to.x;   positions[off + 4] = to.y;   positions[off + 5] = to.z;
 
       let r, g, b;
-      if ((isFlowMode && isActive) || !isFlowMode) {
+      if ((isFlowMode && isActive) || isCapMode) {
         const val = isFlowMode ? link.gbpsFlow : link.gbpsCapacity;
         if (val <= threshold) {
           const t = val * thresholdInv;

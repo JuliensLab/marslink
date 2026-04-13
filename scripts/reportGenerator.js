@@ -5,6 +5,10 @@ import {
   createLaunchSchedule,
   renderOrbitChartSVG,
   formatDate,
+  callLambertSolver,
+  getLambertDebugEntry,
+  computeHohmannDebug,
+  computeHohmannRefined,
 } from "./hohmannTransfer.js?v=4.3";
 import { planLaunches, aggregateRingFromFlights } from "./launchPlanner.js?v=4.3";
 
@@ -136,6 +140,95 @@ function formatNumber(num, precision = 0) {
 
 function esc(str) {
   return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/**
+ * Build a collapsible debug block showing the input and output of the orbit
+ * calculation. Used by all three panels (Hohmann, Refined Hohmann, Lambert)
+ * so the payloads can be compared side by side in the same format.
+ *
+ * @param {"hohmann"|"hohmann-refined"|"lambert"} variant
+ * @param {{ request: any, response: any } | null} payload
+ * @param {string|null} errorMessage
+ */
+function renderOrbitDebugHtml(variant, payload, errorMessage = null) {
+  if (!payload && !errorMessage) return "";
+  const reqJson = payload?.request ? JSON.stringify(payload.request, null, 2) : "(no input)";
+  const respJson = payload?.response ? JSON.stringify(payload.response, null, 2) : "(no output)";
+  const errLine = errorMessage ? `<div class="lambert-debug-error">Error: ${esc(errorMessage)}</div>` : "";
+
+  let summaryText, summaryTitle, banner, reqLabel, respLabel;
+  if (variant === "lambert") {
+    summaryText = "🔍 View API call";
+    summaryTitle = "Click to inspect the nyx-space API request and response";
+    banner = `<div class="orbit-debug-banner orbit-debug-banner-api">API call → <code>platform.nyxspace.com/mcp</code> (via local proxy <code>api/nyx/lambert.php</code>)</div>`;
+    reqLabel = "Request";
+    respLabel = "Response";
+  } else if (variant === "hohmann-refined") {
+    summaryText = "🔍 View refined calculation";
+    summaryTitle = "Click to inspect the refined Hohmann input and output";
+    banner = `<div class="orbit-debug-banner orbit-debug-banner-refined">Local calculation — no API call. Refined Hohmann (Level 2+3): uses actual body speeds from <code>helioCartesianState</code> and splits Δi optimally between the two burns. <b>Display only — not used for fuel/vehicle planning.</b></div>`;
+    reqLabel = "Input";
+    respLabel = "Output";
+  } else {
+    summaryText = "🔍 View local calculation";
+    summaryTitle = "Click to inspect the local Hohmann calculation input and output";
+    banner = `<div class="orbit-debug-banner orbit-debug-banner-local">Local calculation — no API call. Textbook Hohmann (Level 0): circular coplanar orbits, plane change at departure. This is what the fuel / vehicle / launch planner chain uses.</div>`;
+    reqLabel = "Input";
+    respLabel = "Output";
+  }
+
+  return `<details class="lambert-debug lambert-debug-${variant}"><summary title="${esc(summaryTitle)}">${summaryText}</summary>${banner}${errLine}<div class="lambert-debug-section-label">${reqLabel}</div><pre class="lambert-debug-json">${esc(reqJson)}</pre><div class="lambert-debug-section-label">${respLabel}</div><pre class="lambert-debug-json">${esc(respJson)}</pre></details>`;
+}
+
+/**
+ * Resolve Earth + target elements for a ring, returning null if either is
+ * missing. Used by the Hohmann and Refined-Hohmann helpers.
+ */
+function _resolveRingElements(ringName) {
+  const targetEle = ringName === "ring_earth" ? _earthElementsRef
+    : ringName === "ring_mars" ? _marsElementsRef
+    : _ringElementsByName.get(ringName) || _marsElementsRef;
+  const earthEle = _earthElementsRef;
+  if (!earthEle || !targetEle) return null;
+  return { earthEle, targetEle };
+}
+
+/**
+ * Build the Hohmann (Level-0) debug HTML for a given ring + flight.
+ * Computes synchronously from orbital elements — no network call.
+ */
+function renderHohmannDebugForFlight(ringName, flight) {
+  const eles = _resolveRingElements(ringName);
+  if (!eles) return "";
+  try {
+    const { input, output } = computeHohmannDebug(eles.earthEle, eles.targetEle, flight.launchDate);
+    return renderOrbitDebugHtml("hohmann", { request: input, response: output });
+  } catch (err) {
+    return renderOrbitDebugHtml("hohmann", null, err.message);
+  }
+}
+
+/**
+ * Compute the refined Hohmann (Level 2+3) debug block for a ring + flight
+ * and return both the debug HTML and the overrideDeltaV numbers so the
+ * caller can draw the middle chart with the refined labels.
+ */
+function computeRefinedHohmannForFlight(ringName, flight) {
+  const eles = _resolveRingElements(ringName);
+  if (!eles) return { debugHtml: "", overrideDeltaV: null };
+  try {
+    const { input, output, overrideDeltaV } = computeHohmannRefined(eles.earthEle, eles.targetEle, flight.launchDate);
+    return {
+      debugHtml: renderOrbitDebugHtml("hohmann-refined", { request: input, response: output }),
+      overrideDeltaV,
+    };
+  } catch (err) {
+    return {
+      debugHtml: renderOrbitDebugHtml("hohmann-refined", null, err.message),
+      overrideDeltaV: null,
+    };
+  }
 }
 
 export async function generateReport(missionProfiles, resultTrees, costs, satellites, options = {}) {
@@ -505,8 +598,28 @@ export async function generateReport(missionProfiles, resultTrees, costs, satell
         burn2DateLabel: formatDate(firstFlight.arrivalDate),
         flightLabel: `Flight ${firstFlight.flightIdx} / ${flights.length}`,
       });
+      const hohmannDebugHtml = renderHohmannDebugForFlight(orbitTree.ringName, firstFlight);
+      const refined = computeRefinedHohmannForFlight(orbitTree.ringName, firstFlight);
+      const refinedSvg = refined.overrideDeltaV ? renderOrbitChartSVG({
+        earthElements,
+        marsElements,
+        targetElements,
+        targetAU: r2,
+        earthPos: firstFlight.earthPos,
+        burn2Pos: firstFlight.burn2Pos,
+        width: 320,
+        height: 320,
+        burn1DateLabel: formatDate(firstFlight.launchDate),
+        burn2DateLabel: formatDate(firstFlight.arrivalDate),
+        flightLabel: `Flight ${firstFlight.flightIdx} / ${flights.length}`,
+        overrideDeltaV: refined.overrideDeltaV,
+      }) : `<div class="lambert-placeholder">No refined data</div>`;
       orbitSections += `<div class="orbit-chart" data-ring="${esc(orbitTree.ringName)}">`;
-      orbitSections += `<div class="orbit-chart-svg">${chartSvg}</div>`;
+      orbitSections += `<div class="orbit-charts-row">`;
+      orbitSections += `<div class="orbit-chart-panel"><div class="orbit-chart-title">Hohmann (Level 0)</div><div class="orbit-chart-svg">${chartSvg}${hohmannDebugHtml}</div></div>`;
+      orbitSections += `<div class="orbit-chart-panel"><div class="orbit-chart-title">Hohmann (Level 2+3)</div><div class="orbit-chart-refined">${refinedSvg}${refined.debugHtml}</div></div>`;
+      orbitSections += `<div class="orbit-chart-panel"><div class="orbit-chart-title">Lambert</div><div class="orbit-chart-lambert"><div class="lambert-placeholder">Select a flight to compute</div></div></div>`;
+      orbitSections += `</div>`;
       orbitSections += `<div class="orbit-chart-controls">`;
       orbitSections += `<label class="orbit-chart-slider-label">Flight <span class="flight-idx">1</span> / ${flights.length}</label>`;
       orbitSections += `<input type="range" min="1" max="${flights.length}" value="1" step="1" class="flight-slider" data-ring="${esc(orbitTree.ringName)}">`;
@@ -570,6 +683,77 @@ export async function generateReport(missionProfiles, resultTrees, costs, satell
 
   // Wire up flight-slider event handlers so moving the slider re-renders the
   // orbit chart for the selected flight.
+  // Helper: fetch Lambert data for a flight and render into the Lambert panel
+  async function updateLambertPanel(container, ringName, flight) {
+    const lambertHost = container.querySelector(".orbit-chart-lambert");
+    if (!lambertHost) return;
+
+    // Determine target elements: for Earth/Mars rings use Earth/Mars elements
+    const targetEle = ringName === "ring_earth" ? _earthElementsRef
+      : ringName === "ring_mars" ? _marsElementsRef
+      : _ringElementsByName.get(ringName) || _marsElementsRef;
+    // For the Lambert call, departure is always from Earth
+    const earthEle = _earthElementsRef;
+    if (!earthEle || !targetEle) { lambertHost.innerHTML = `<div class="lambert-placeholder">No orbital data</div>`; return; }
+
+    const cacheKey = `${ringName}:${flight.flightIdx}`;
+    lambertHost.innerHTML = `<div class="lambert-placeholder">Computing...</div>`;
+
+    const result = await callLambertSolver(earthEle, targetEle, flight.launchDate, flight.arrivalDate, cacheKey);
+    if (!result) {
+      // Surface the failure but still expose the request/response so the user
+      // can inspect what was sent/received.
+      const debugEntry = getLambertDebugEntry(cacheKey);
+      lambertHost.innerHTML = `<div class="lambert-placeholder">API unavailable</div>${renderLambertDebugFromEntry(debugEntry)}`;
+      return;
+    }
+
+    // Render the same orbit chart but with Lambert delta-v values
+    const r2 = _ringR2ByName.get(ringName) || 1;
+    const targetElements = _ringElementsByName.get(ringName) || null;
+    const totalFlights = ringFlightsByRing.get(ringName)?.length || 1;
+    const svg = renderOrbitChartSVG({
+      earthElements: _earthElementsRef,
+      marsElements: _marsElementsRef,
+      targetElements,
+      targetAU: r2,
+      earthPos: flight.earthPos,
+      burn2Pos: flight.burn2Pos,
+      width: 320,
+      height: 320,
+      burn1DateLabel: formatDate(flight.launchDate),
+      burn2DateLabel: formatDate(flight.arrivalDate),
+      flightLabel: `Flight ${flight.flightIdx} / ${totalFlights}`,
+      // Override delta-v with Lambert values
+      overrideDeltaV: { dv1: result.dv1, dv2: result.dv2, totalDv: result.totalDv },
+    });
+    lambertHost.innerHTML = svg + renderLambertDebugFromEntry(result);
+  }
+
+  /** Wrapper: Lambert debug comes from the cached API entry (or failure). */
+  function renderLambertDebugFromEntry(entry) {
+    if (!entry || !entry.debug) return "";
+    return renderOrbitDebugHtml("lambert", { request: entry.debug.request, response: entry.debug.response }, entry.error || null);
+  }
+
+  // Auto-compute the Lambert chart for flight 1 the first time a ring section
+  // is expanded. Other flights still compute on demand when the slider moves.
+  body.querySelectorAll("details.orbit-section").forEach((section) => {
+    section.addEventListener("toggle", () => {
+      if (!section.open) return;
+      if (section.dataset.lambertPrimed === "1") return;
+      const container = section.querySelector(".orbit-chart");
+      if (!container) return;
+      const ringName = container.dataset.ring;
+      const flightsForRing = ringFlightsByRing.get(ringName);
+      if (!flightsForRing || !flightsForRing[0]) return;
+      const reportPanel = document.getElementById("report-panel");
+      if (!reportPanel || reportPanel.hidden) return;
+      section.dataset.lambertPrimed = "1";
+      updateLambertPanel(container, ringName, flightsForRing[0]);
+    });
+  });
+
   body.querySelectorAll("input.flight-slider").forEach((slider) => {
     slider.addEventListener("input", (ev) => {
       const ringName = ev.target.dataset.ring;
@@ -596,13 +780,41 @@ export async function generateReport(missionProfiles, resultTrees, costs, satell
       const container = ev.target.closest(".orbit-chart");
       if (!container) return;
       const svgHost = container.querySelector(".orbit-chart-svg");
-      if (svgHost) svgHost.innerHTML = svg;
+      if (svgHost) svgHost.innerHTML = svg + renderHohmannDebugForFlight(ringName, f);
+
+      // Middle panel: refined Hohmann (Level 2+3) — same chart shape with
+      // different ΔV labels, plus its own debug block.
+      const refinedHost = container.querySelector(".orbit-chart-refined");
+      if (refinedHost) {
+        const refinedForFlight = computeRefinedHohmannForFlight(ringName, f);
+        const refinedSvg = refinedForFlight.overrideDeltaV ? renderOrbitChartSVG({
+          earthElements: _earthElementsRef,
+          marsElements: _marsElementsRef,
+          targetElements: targetElementsForSlider,
+          targetAU: r2,
+          earthPos: f.earthPos,
+          burn2Pos: f.burn2Pos,
+          width: 320,
+          height: 320,
+          burn1DateLabel: formatDate(f.launchDate),
+          burn2DateLabel: formatDate(f.arrivalDate),
+          flightLabel: `Flight ${f.flightIdx} / ${totalFlights}`,
+          overrideDeltaV: refinedForFlight.overrideDeltaV,
+        }) : `<div class="lambert-placeholder">No refined data</div>`;
+        refinedHost.innerHTML = refinedSvg + refinedForFlight.debugHtml;
+      }
       const idxEl = container.querySelector(".flight-idx");
       if (idxEl) idxEl.textContent = String(f.flightIdx);
       const launchEl = container.querySelector(".flight-launch");
       if (launchEl) launchEl.textContent = formatDate(f.launchDate);
       const arrivalEl = container.querySelector(".flight-arrival");
       if (arrivalEl) arrivalEl.textContent = formatDate(f.arrivalDate);
+
+      // Trigger Lambert computation (only if report panel is visible)
+      const reportPanel = document.getElementById("report-panel");
+      if (reportPanel && !reportPanel.hidden) {
+        updateLambertPanel(container, ringName, f);
+      }
     });
   });
 

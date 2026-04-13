@@ -1,5 +1,11 @@
 /* ─────────────────────────── DESIGN TOKENS ─────────────────────────── */
 :root {
+  /* Tell the browser we're a dark-themed UI. This flips the default rendering
+     of native form controls (date/time pickers, scrollbars, autofill…) to
+     their dark variants so inputs like <input type="date"> stop showing a
+     white background and black text. */
+  color-scheme: dark;
+
   /* Surfaces */
   --bg-0: #06080d;
   --bg-1: rgba(14, 18, 28, 0.78);
@@ -763,7 +769,14 @@ select.slider {
   color: var(--text-2);
 }
 
-.form-group input[type="text"] {
+.form-group input[type="text"],
+.form-group input[type="number"],
+.form-group input[type="date"],
+.form-group select,
+.drawer-body input[type="text"],
+.drawer-body input[type="number"],
+.drawer-body input[type="date"],
+.drawer-body select {
   padding: 7px 10px;
   background: var(--bg-elev);
   border: 1px solid var(--border-1);
@@ -772,9 +785,17 @@ select.slider {
   font-size: var(--fs-sm);
   outline: none;
   transition: border-color 120ms ease;
+  color-scheme: dark;
 }
 
-.form-group input[type="text"]:focus {
+.form-group input[type="text"]:focus,
+.form-group input[type="number"]:focus,
+.form-group input[type="date"]:focus,
+.form-group select:focus,
+.drawer-body input[type="text"]:focus,
+.drawer-body input[type="number"]:focus,
+.drawer-body input[type="date"]:focus,
+.drawer-body select:focus {
   border-color: var(--accent);
 }
 
@@ -894,7 +915,35 @@ select.slider {
   flex-shrink: 0;
 }
 
-#info-area {
+.right-panel-tabs {
+  display: flex;
+  gap: var(--s-1);
+}
+
+.right-panel-tab {
+  font-size: var(--fs-xs);
+  padding: 3px 8px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--r-1);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: all 120ms ease;
+}
+
+.right-panel-tab:hover {
+  color: var(--text-1);
+  border-color: var(--text-3);
+}
+
+.right-panel-tab.active {
+  color: var(--text-0);
+  background: var(--bg-2);
+  border-color: var(--text-2);
+}
+
+#info-area,
+#perf-area {
   flex: 1;
   overflow-y: auto;
   padding: var(--s-3) var(--s-4);
@@ -904,11 +953,12 @@ select.slider {
   scrollbar-color: var(--border-2) transparent;
 }
 
-#info-area::-webkit-scrollbar { width: 8px; }
-#info-area::-webkit-scrollbar-track { background: transparent; }
-#info-area::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 4px; }
+#info-area::-webkit-scrollbar, #perf-area::-webkit-scrollbar { width: 8px; }
+#info-area::-webkit-scrollbar-track, #perf-area::-webkit-scrollbar-track { background: transparent; }
+#info-area::-webkit-scrollbar-thumb, #perf-area::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 4px; }
 
-#info-area-costs {
+#info-area-costs,
+#perf-area-content {
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -993,18 +1043,24 @@ select.slider {
   line-height: 1.6;
 }
 
+.metric-card .detail-row,
 .metric-details .detail-row {
   display: flex;
   justify-content: space-between;
+  gap: var(--s-2);
 }
 
+.metric-card .detail-label,
 .metric-details .detail-label {
   color: var(--text-3);
 }
 
+.metric-card .detail-value,
 .metric-details .detail-value {
   color: var(--text-1);
   font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .capacity-diagram {
@@ -1167,8 +1223,18 @@ select.slider {
   display: flex;
   flex-direction: column;
   animation: popup-in 200ms ease;
-  max-width: 1100px;
+  max-width: 1280px;
   margin: 0 auto;
+  /* Match the right-panel collapse transition so the report reflows in sync. */
+  transition: right 220ms ease;
+}
+
+/* When the right metrics panel is collapsed, reclaim its width for the
+   report popup. #right-panel and #report-panel are sibling children of
+   <body>, with #right-panel appearing first, so the general-sibling
+   combinator works here. */
+#right-panel.collapsed ~ #report-panel.popup-panel {
+  right: var(--s-4);
 }
 
 @keyframes popup-in {
@@ -1348,17 +1414,165 @@ details.orbit-section > *:not(summary):last-child {
   gap: var(--s-2);
 }
 
-.orbit-chart-svg {
+.orbit-charts-row {
+  display: flex;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+}
+
+.orbit-chart-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s-1);
+}
+
+.orbit-chart-title {
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-2);
+  font-weight: 600;
+}
+
+.orbit-chart-svg,
+.orbit-chart-lambert,
+.orbit-chart-refined {
   width: 320px;
   max-width: 100%;
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
 }
 
-.orbit-chart-svg svg {
+.lambert-debug {
+  width: 100%;
+  margin-top: 6px;
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
+.lambert-debug > summary {
+  cursor: pointer;
+  padding: 4px 6px;
+  background: rgba(136, 221, 255, 0.08);
+  border: 1px solid rgba(136, 221, 255, 0.25);
+  border-radius: var(--r-1);
+  color: #88ddff;
+  user-select: none;
+  list-style: none;
+}
+
+.lambert-debug > summary:hover {
+  background: rgba(136, 221, 255, 0.15);
+}
+
+.lambert-debug[open] > summary {
+  margin-bottom: 4px;
+}
+
+.lambert-debug-section-label {
+  margin-top: 4px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-3);
+}
+
+.lambert-debug-json {
+  max-height: 200px;
+  overflow: auto;
+  padding: 6px 8px;
+  background: rgba(0, 0, 0, 0.55);
+  border-radius: var(--r-1);
+  font-family: ui-monospace, "JetBrains Mono", "SF Mono", Consolas, monospace;
+  font-size: 10px;
+  line-height: 1.35;
+  color: #cfd8e3;
+  white-space: pre;
+  word-break: normal;
+}
+
+.lambert-debug-error {
+  padding: 4px 6px;
+  margin-bottom: 4px;
+  background: rgba(255, 107, 107, 0.1);
+  border-left: 2px solid #ff6b6b;
+  color: #ff9a9a;
+  font-size: 11px;
+}
+
+/* Hohmann variant: recolor the summary + banner in orange to match the
+   Hohmann transfer arc (#ffa94d) so the debug blocks are visually
+   distinguishable at a glance. */
+.lambert-debug.lambert-debug-hohmann > summary {
+  background: rgba(255, 169, 77, 0.08);
+  border-color: rgba(255, 169, 77, 0.25);
+  color: #ffa94d;
+}
+.lambert-debug.lambert-debug-hohmann > summary:hover {
+  background: rgba(255, 169, 77, 0.15);
+}
+
+/* Refined Hohmann variant: green accent (matches the #8fe39b ΔV labels in
+   the middle chart). */
+.lambert-debug.lambert-debug-hohmann-refined > summary {
+  background: rgba(143, 227, 155, 0.08);
+  border-color: rgba(143, 227, 155, 0.3);
+  color: #8fe39b;
+}
+.lambert-debug.lambert-debug-hohmann-refined > summary:hover {
+  background: rgba(143, 227, 155, 0.15);
+}
+
+.orbit-debug-banner {
+  margin-bottom: 6px;
+  padding: 4px 6px;
+  border-radius: var(--r-1);
+  font-size: 10px;
+  line-height: 1.4;
+}
+.orbit-debug-banner code {
+  font-family: ui-monospace, "JetBrains Mono", "SF Mono", Consolas, monospace;
+  padding: 0 3px;
+  border-radius: 2px;
+  background: rgba(0, 0, 0, 0.35);
+}
+.orbit-debug-banner-api {
+  background: rgba(136, 221, 255, 0.08);
+  border-left: 2px solid #88ddff;
+  color: #a8e4ff;
+}
+.orbit-debug-banner-local {
+  background: rgba(255, 169, 77, 0.08);
+  border-left: 2px solid #ffa94d;
+  color: #ffc98a;
+}
+.orbit-debug-banner-refined {
+  background: rgba(143, 227, 155, 0.08);
+  border-left: 2px solid #8fe39b;
+  color: #b6ebbf;
+}
+
+.orbit-chart-svg svg,
+.orbit-chart-lambert svg,
+.orbit-chart-refined svg {
   display: block;
   background: rgba(0, 0, 0, 0.45);
   border-radius: var(--r-1);
+}
+
+.lambert-placeholder {
+  width: 320px;
+  height: 320px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: var(--r-1);
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+  font-style: italic;
 }
 
 .orbit-chart-legend {

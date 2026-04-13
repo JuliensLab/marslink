@@ -50,6 +50,7 @@ export class SimMain {
     this.configEpoch = 0;
     this.displayedWindowIdx = null;
     this.previousSimDate = 0; // for detecting time direction
+    this.simTimePausedForCache = false; // true when waiting for a cache window
 
     // Do not instantiate simDisplay here; it will be set by setDisplayType
     this.simDisplay = null;
@@ -990,6 +991,83 @@ export class SimMain {
     return html;
   }
 
+  updatePerfPanel() {
+    const el = document.getElementById("perf-area-content");
+    if (!el) return;
+    let html = "";
+
+    const row = (label, value, indent = false) =>
+      `<div class="detail-row"${indent ? ' style="padding-left:8px"' : ""}><span class="detail-label">${label}</span><span class="detail-value">${value}</span></div>`;
+    const sep = () => `<div style="border-top:1px solid var(--border-1);margin:4px 0"></div>`;
+
+    // ── Renderer ──
+    html += `<div class="metric-card">`;
+    html += `<div class="metric-header"><span class="metric-label">Renderer</span></div>`;
+    const renderer = this.simDisplay?.renderer;
+    if (renderer) {
+      const gl = renderer.getContext();
+      const ext = gl?.getExtension("WEBGL_debug_renderer_info");
+      const gpuName = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : "Unknown";
+      html += row("3D engine", "Three.js (WebGL 2)");
+      html += `<div class="detail-row"><span class="detail-label">GPU</span><span class="detail-value" style="font-size:9px;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${gpuName}">${gpuName.split("/")[0]?.split("(")[1]?.replace(")", "") || gpuName}</span></div>`;
+      const info = renderer.info;
+      if (info) {
+        html += row("Draw calls", info.render?.calls?.toLocaleString() || "—");
+        html += row("Triangles", info.render?.triangles?.toLocaleString() || "—");
+        html += row("Geometries", info.memory?.geometries?.toLocaleString() || "—");
+        html += row("Textures", info.memory?.textures?.toLocaleString() || "—");
+      }
+    } else {
+      html += row("3D engine", "Not initialized");
+    }
+    if (performance.memory) {
+      const mb = (b) => `${Math.round(b / 1048576)} MB`;
+      html += row("JS heap", `${mb(performance.memory.usedJSHeapSize)} / ${mb(performance.memory.jsHeapSizeLimit)}`);
+    }
+    html += `</div>`;
+
+    // ── Worker pipeline ──
+    html += `<div class="metric-card">`;
+    html += `<div class="metric-header"><span class="metric-label">Worker pipeline</span>`;
+    const wt = this.lastWorkerTimings;
+    html += `<span class="metric-value-sm">${wt?.totalMs || "—"} ms</span></div>`;
+    if (wt?.topology) {
+      const tt = wt.topology;
+      html += row("setSatellitesConfig", `${wt.flow?.setSatellitesConfig ?? "—"} ms`);
+      html += sep();
+      html += row("Topology total", `${tt.total ?? "—"} ms`);
+      html += row("setup", `${tt.setup ?? "—"} ms`, true);
+      html += row("intraRing", `${tt.intraRing ?? "—"} ms`, true);
+      html += row("interAdaptedRings", `${tt.interAdaptedRings ?? "—"} ms`, true);
+      html += row("planetToRings", `${tt.planetToRings ?? "—"} ms`, true);
+      html += row("routes + capture", `${(tt.routes || 0) + (tt.captureTopology || 0)} ms`, true);
+      html += row("links generated", (tt.links || 0).toLocaleString(), true);
+    }
+    if (wt?.flow) {
+      const ft = wt.flow;
+      html += sep();
+      html += row("Max-flow", ft.getNetworkData != null ? `${ft.getNetworkData} ms` : "— ms");
+      html += row("Latencies", ft.calculateLatencies != null ? `${ft.calculateLatencies} ms` : "— ms");
+    } else {
+      html += sep();
+      html += row("Max-flow", "— ms");
+      html += row("Latencies", "— ms");
+    }
+    html += `</div>`;
+
+    // ── Simulation ──
+    html += `<div class="metric-card">`;
+    html += `<div class="metric-header"><span class="metric-label">Simulation</span></div>`;
+    html += row("Satellites", (this.satellitesCount || 0).toLocaleString());
+    html += row("Window duration", `${Math.round(this.WINDOW_DURATION / 3600000)} h`);
+    html += row("Cache", `${this.windowCache.size} / 3 windows`);
+    html += row("Config epoch", this.configEpoch);
+    html += row("Flow algorithm", this.simLinkBudget.flowAlgorithm || "—");
+    html += `</div>`;
+
+    el.innerHTML = html;
+  }
+
   calculateCapacityInfo(links) {
     const ringCapacities = {};
     const interCap = {};
@@ -1081,6 +1159,18 @@ export class SimMain {
   // ─── Worker dispatch helpers ──────────────────────────────────────────
 
   /**
+   * Restore sim time advancement after a cache-wait pause.
+   */
+  unpauseCacheWait() {
+    if (!this.simTimePausedForCache) return;
+    this.simTimePausedForCache = false;
+    if (this._savedAcceleration !== undefined) {
+      this.simTime.timeAccelerationFactor = this._savedAcceleration;
+      this._savedAcceleration = undefined;
+    }
+  }
+
+  /**
    * Post a compute request to the worker for a given window.
    * Only one request in flight at a time; if the worker is busy, the caller
    * should wait (the next frame will retry via prefetch).
@@ -1116,6 +1206,10 @@ export class SimMain {
     this.routeSummary = result.routeSummary || null;
     this.missionProfiles = result.missionProfilesData || null;
     this.resultTrees = result.resultTreesData || [];
+    this._maybeAutoRefreshReport();
+    // Simple-config ring count slider feedback loop: if armed, rescale the
+    // earth / mars in-ring mbps to match the measured adapted-ring capacity.
+    if (this.ui?.runSimpleFeedbackStep) this.ui.runSimpleFeedbackStep();
     if (typeof result.satellitesCount === "number") this.satellitesCount = result.satellitesCount;
 
     if (this.simDisplay) {
@@ -1165,7 +1259,8 @@ export class SimMain {
     // --- LINKS-READY: early delivery of possibleLinks before flow is done ---
     if (msg.type === "links-ready") {
       if (msg.configEpoch !== this.configEpoch) return; // stale
-      const currentIdx = Math.floor(this.simTime.getDate() / this.WINDOW_DURATION);
+      // Use displayedWindowIdx as reference (not getDate which may be frozen)
+      const refIdx = this.displayedWindowIdx ?? Math.floor(this.simTime.getDate() / this.WINDOW_DURATION);
 
       // Store links in a partial cache entry (flow fields will be merged later)
       const existing = this.windowCache.get(msg.windowIdx);
@@ -1173,12 +1268,17 @@ export class SimMain {
         this.windowCache.set(msg.windowIdx, { ...msg, networkData: null, latencyData: null, partial: true });
       }
 
-      // If this is the current window, display links immediately
-      if (msg.windowIdx === currentIdx) {
+      // If this is the displayed window, show links immediately
+      if (msg.windowIdx === refIdx) {
         this.capacityInfo = msg.capacityInfo || null;
         this.routeSummary = msg.routeSummary || null;
         this.missionProfiles = msg.missionProfilesData || null;
         this.resultTrees = msg.resultTreesData || [];
+        this._maybeAutoRefreshReport();
+        // Simple-config ring count slider feedback loop: fires on the earlier
+        // links-ready path so the user sees the correction without waiting
+        // for the full flow computation.
+        if (this.ui?.runSimpleFeedbackStep) this.ui.runSimpleFeedbackStep();
         if (typeof msg.satellitesCount === "number") this.satellitesCount = msg.satellitesCount;
         if (this.simDisplay) {
           this.simDisplay.updatePossibleLinks(msg.possibleLinks || []);
@@ -1189,10 +1289,22 @@ export class SimMain {
             this.getCostsHtml(this.calculateCosts(this.maxFlowGbps, this.resultTrees), this.lastNetworkData, null)
           );
         }
-        this.displayedWindowIdx = currentIdx;
+        this.displayedWindowIdx = refIdx;
+      }
+
+      // If we're paused waiting for an adjacent window and this is it, unpause
+      if (this.simTimePausedForCache && this.displayedWindowIdx !== null &&
+          Math.abs(msg.windowIdx - this.displayedWindowIdx) <= 1) {
+        this.unpauseCacheWait();
       }
 
       console.log(`[Marslink] Worker links: window ${msg.windowIdx} | ${msg.possibleLinks?.length || 0} links | ${msg.linksMs}ms`);
+      if (msg.topologyTimings) {
+        const tt = msg.topologyTimings;
+        console.log(`[Marslink] Topology: ${Object.entries(tt).map(([k, v]) => `${k}=${v}${typeof v === "number" && k !== "links" ? "ms" : ""}`).join(" | ")}`);
+      }
+      this.lastWorkerTimings = { links: msg.linksMs, topology: msg.topologyTimings };
+      this.updatePerfPanel();
       this.updateWorkerStatus();
       return;
     }
@@ -1221,16 +1333,22 @@ export class SimMain {
       this.windowCache.set(msg.windowIdx, msg);
     }
 
-    // Evict distant windows (keep only -1, 0, +1 relative to current)
-    const currentIdx = Math.floor(this.simTime.getDate() / this.WINDOW_DURATION);
+    // Evict distant windows (keep only -1, 0, +1 relative to displayed)
+    const refIdx = this.displayedWindowIdx ?? Math.floor(this.simTime.getDate() / this.WINDOW_DURATION);
     for (const key of this.windowCache.keys()) {
-      if (Math.abs(key - currentIdx) > 1) this.windowCache.delete(key);
+      if (Math.abs(key - refIdx) > 2) this.windowCache.delete(key);
     }
 
-    // If this is the current window, apply flow data to display
-    if (msg.windowIdx === currentIdx) {
-      this.applyWindowResult({ ...this.windowCache.get(currentIdx) });
-      this.displayedWindowIdx = currentIdx;
+    // If this result is for the displayed window, apply flow overlay.
+    // If time is paused waiting for the NEXT window and this result is it,
+    // unpause — the next updateLoop frame will swap and resume time.
+    if (msg.windowIdx === refIdx) {
+      this.applyWindowResult({ ...this.windowCache.get(refIdx) });
+      this.displayedWindowIdx = refIdx;
+    }
+    if (this.simTimePausedForCache && this.displayedWindowIdx !== null &&
+        Math.abs(msg.windowIdx - this.displayedWindowIdx) <= 1) {
+      this.unpauseCacheWait();
     }
 
     // Log
@@ -1242,8 +1360,15 @@ export class SimMain {
     if (msg.timings) {
       console.log(`[Marslink] Worker phases: ${Object.entries(msg.timings).map(([k, v]) => `${k}=${v}ms`).join(" | ")}`);
     }
+    this.lastWorkerTimings = {
+      ...this.lastWorkerTimings,
+      flow: msg.timings,
+      totalMs: msg.totalMs,
+      topology: msg.topologyTimings || this.lastWorkerTimings?.topology,
+    };
 
     this.updateWorkerStatus();
+    this.updatePerfPanel();
   }
 
   /**
@@ -1272,7 +1397,7 @@ export class SimMain {
    * -1/0/+1 window buffer. The main thread never blocks on link computation.
    */
   updateLoop() {
-    const simDate = this.simTime.getDate();
+    let simDate = this.simTime.getDate();
     if (this.ui) this.ui.updateSimTime(simDate);
     const planets = this.simSolarSystem.updatePlanetsPositions(simDate);
 
@@ -1311,13 +1436,28 @@ export class SimMain {
     const satellites = this.simSatellites.updateSatellitesPositions(simDate);
 
     // --- Phase 3: Window cache check + worker dispatch ---
-    const currentWindowIdx = Math.floor(simDate / this.WINDOW_DURATION);
+    let currentWindowIdx = Math.floor(simDate / this.WINDOW_DURATION);
     const timeDirection = simDate >= this.previousSimDate ? 1 : -1;
     this.previousSimDate = simDate;
 
     // Compute the representative sim date for a window — the MIDPOINT, so
     // the link geometry is most accurate across the full window.
     const windowMidDate = (idx) => new Date((idx + 0.5) * this.WINDOW_DURATION);
+
+    // If we've crossed into a window that isn't cached, pause sim time
+    // by zeroing the acceleration factor. getDate() then accumulates
+    // zero sim-time each frame → satellites freeze in place. When the
+    // worker delivers the missing window, we restore the factor.
+    if (currentWindowIdx !== this.displayedWindowIdx && this.displayedWindowIdx !== null) {
+      const cached = this.windowCache.get(currentWindowIdx);
+      if (!cached || cached.configEpoch !== this.configEpoch) {
+        if (!this.simTimePausedForCache) {
+          this.simTimePausedForCache = true;
+          this._savedAcceleration = this.simTime.timeAccelerationFactor;
+          this.simTime.timeAccelerationFactor = 0;
+        }
+      }
+    }
 
     // Check if current window is cached and fresh
     if (currentWindowIdx !== this.displayedWindowIdx) {
@@ -1326,6 +1466,7 @@ export class SimMain {
         // INSTANT SWAP — precomputed window is ready
         this.applyWindowResult(cached);
         this.displayedWindowIdx = currentWindowIdx;
+        this.unpauseCacheWait();
         this.pendingUpdates.delete("links");
         this.pendingUpdates.delete("config");
         this.pendingUpdates.delete("display");
@@ -1367,8 +1508,14 @@ export class SimMain {
       this.pendingUpdates.delete("satellites_display");
     }
 
-    // --- Phase 6: Status indicator ---
+    // --- Phase 6: Status indicator + perf panel refresh ---
     this.updateWorkerStatus();
+    // Refresh perf panel every ~2s (120 frames at 60fps) for live GPU/memory stats
+    this._perfFrameCount = (this._perfFrameCount || 0) + 1;
+    if (this._perfFrameCount >= 120) {
+      this._perfFrameCount = 0;
+      this.updatePerfPanel();
+    }
   }
 
   startSimulationLoop() {
@@ -1537,17 +1684,39 @@ export class SimMain {
     return summary;
   }
   /**
+   * Called whenever missionProfiles gets (re)populated by the worker.
+   * If the Deployment tab is waiting on data and the panel is visible,
+   * render the report automatically so the user doesn't have to re-open it.
+   */
+  _maybeAutoRefreshReport() {
+    if (!this._reportPendingAutoRefresh) return;
+    if (!this.missionProfiles) return;
+    const panel = document.getElementById("report-panel");
+    if (!panel || panel.hidden) {
+      // Panel was dismissed; drop the armed state so we don't surprise-render later.
+      this._reportPendingAutoRefresh = false;
+      return;
+    }
+    this.generateReport();
+  }
+
+  /**
    * Generates the deployment report and renders it into the in-page #report-panel.
    */
   generateReport() {
     if (!this.missionProfiles) {
       const body = document.getElementById("report-panel-body");
       if (body) {
-        body.innerHTML = `<p class="empty-state">Waiting for simulation data… try again in a moment.</p>`;
+        body.innerHTML = `<p class="empty-state">Waiting for simulation data…</p>`;
       }
-      console.warn("Report data not available yet.");
+      // Arm an auto-refresh so the report renders itself as soon as the
+      // worker delivers missionProfiles — no need for the user to re-open
+      // the Deployment tab.
+      this._reportPendingAutoRefresh = true;
+      console.warn("Report data not available yet — will auto-refresh when ready.");
       return;
     }
+    this._reportPendingAutoRefresh = false;
     const costs = {
       costPerLaunchMillionUSD: this.costPerLaunch,
       costPerSatelliteMillionUSD: this.costPerSatellite,

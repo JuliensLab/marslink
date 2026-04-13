@@ -145,6 +145,8 @@ function runPipeline({ requestId, windowIdx, configEpoch, uiConfig, satellitesCo
   const possibleLinks = simNetwork.getPossibleLinks(planets, satellites);
   const routeSummary = simNetwork.routeSummary;
   mark("getPossibleLinks", t);
+  // Capture per-phase topology breakdown from the builder
+  const topologyTimings = simNetwork.topology?.lastTopologyTimings || null;
 
   // 6. Capacity info
   t = performance.now();
@@ -181,6 +183,7 @@ function runPipeline({ requestId, windowIdx, configEpoch, uiConfig, satellitesCo
     routeSummary: routeSummaryClone,
     missionProfilesData,
     resultTreesData,
+    topologyTimings,
     linksMs,
   });
 
@@ -216,6 +219,7 @@ function runPipeline({ requestId, windowIdx, configEpoch, uiConfig, satellitesCo
     resultTreesData,
     networkData,
     latencyData,
+    topologyTimings,
     timings,
     totalMs: Math.round(performance.now() - t0),
   };

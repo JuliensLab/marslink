@@ -1036,29 +1036,20 @@ export class TopologyBuilder {
    * @returns {Array} links - Array of link objects.
    */
   buildTopology(planets, satellites) {
-    // Group satellites by ringName
-    const rings = {}; // { ringName: [satellite1, satellite2, ...] }
+    const t0 = performance.now();
+    const timings = {};
+    const mark = (name, start) => { timings[name] = Math.round(performance.now() - start); };
 
+    let t = performance.now();
+    const rings = {};
     satellites.forEach((satellite) => {
       const ringName = satellite.ringName;
       if (!rings[ringName]) rings[ringName] = [];
       rings[ringName].push(satellite);
     });
-
-    // Ring crossings are precomputed in simSatellites
-
-    // Positions mapping
     const positions = {};
-
-    // Collect satellite positions
-    satellites.forEach((satellite) => {
-      positions[satellite.name] = satellite.position;
-    });
-
-    // Initialize variables
-    const linkCounts = {}; // Track the number of links per satellite
-
-    // Initialize linkCounts for satellites
+    satellites.forEach((satellite) => { positions[satellite.name] = satellite.position; });
+    const linkCounts = {};
     satellites.forEach((satellite) => {
       linkCounts[satellite.name] = 0;
       satellite.prograde = null;
@@ -1066,14 +1057,7 @@ export class TopologyBuilder {
       satellite.outwards = null;
       satellite.inwards = null;
     });
-
-    // Constants
-    const planetsOptions = ["Earth", "Mars"];
-
-    // Filter planets based on the provided options
-    const filteredPlanets = planets.filter((planet) => planetsOptions.includes(planet.name));
-
-    // Collect planet positions
+    const filteredPlanets = planets.filter((planet) => planet.name === "Earth" || planet.name === "Mars");
     filteredPlanets.forEach((planet) => {
       positions[planet.name] = planet.position;
       linkCounts[planet.name] = 0;
@@ -1082,25 +1066,40 @@ export class TopologyBuilder {
       planet.outwards = null;
       planet.inwards = null;
     });
+    mark("setup", t);
 
-    const finalLinks = []; // Final list of links to return
-    const existingLinks = new Set(); // Shared across all link-adding methods to avoid rebuilding
-    const targetDepartureAngle = 0; // Bias for geometric angle in inter-ring connections
+    const finalLinks = [];
+    const existingLinks = new Set();
+    const targetDepartureAngle = 0;
 
+    t = performance.now();
     this.intraRing(rings, positions, linkCounts, finalLinks, existingLinks);
+    mark("intraRing", t);
 
+    t = performance.now();
     this.interAdaptedRings(rings, positions, linkCounts, finalLinks, targetDepartureAngle, satellites, existingLinks);
+    mark("interAdaptedRings", t);
+
+    t = performance.now();
     this.planetToCircularRings(rings, positions, linkCounts, finalLinks, "ring_mars", targetDepartureAngle, existingLinks);
     this.planetToCircularRings(rings, positions, linkCounts, finalLinks, "ring_earth", targetDepartureAngle, existingLinks);
+    mark("planetToRings", t);
 
-    // Connect Earth/Mars planets to their own ring only (2 links each: one per angular side)
+    t = performance.now();
     this.planetToRingSatellites(filteredPlanets, rings, positions, linkCounts, finalLinks, existingLinks);
+    mark("planetLinks", t);
 
-    // Calculate Earth to Mars routes
+    t = performance.now();
     this.routeSummary = this.calculateEarthToMarsRoutes(finalLinks, rings);
+    mark("routes", t);
 
-    // Capture structured topology info for topology-aware max-flow algorithm
+    t = performance.now();
     this.topologyInfo = this.captureTopologyInfo(rings, finalLinks);
+    mark("captureTopology", t);
+
+    timings.total = Math.round(performance.now() - t0);
+    timings.links = finalLinks.length;
+    this.lastTopologyTimings = timings;
 
     return finalLinks;
   }
