@@ -210,11 +210,12 @@ export function planLaunches({ orderedRings, ringElementsByName, earthElements, 
         transferDays = 0;
         burn2Pos = earthPos;
         arrivalDate = new Date(launchDate.getTime());
+        const escapeDv = simDeployment?.escapeBurnDvKmS ?? ESCAPE_BURN_DV_KM_S;
         outboundDeltaV = {
-          deltaV1: ESCAPE_BURN_DV_KM_S,
+          deltaV1: escapeDv,
           deltaV2: 0,
           deltaV_inclination: 0,
-          totalDeltaV: ESCAPE_BURN_DV_KM_S,
+          totalDeltaV: escapeDv,
         };
       } else {
         const g = resolveTransferGeometry(launchDate, earthElements, targetElements);

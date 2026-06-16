@@ -95,6 +95,7 @@ function runPipeline({ requestId, windowIdx, configEpoch, uiConfig, satellitesCo
 
   // 1. Sync technology + deployment config
   simLinkBudget.setTechnologyConfig(uiConfig);
+  simDeployment.setVehicleConfig(uiConfig);
   simDeployment.setSatelliteMassConfig(
     uiConfig["economics.satellite-empty-mass"],
     uiConfig["laser_technology.laser-terminal-mass"],

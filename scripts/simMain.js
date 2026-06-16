@@ -462,6 +462,7 @@ export class SimMain {
       this.pendingUpdates.add('links');
       this.previousCalctimeMs = this.simLinkBudget.calctimeMs;
     }
+    this.simDeployment.setVehicleConfig(uiConfig);
     this.simDeployment.setSatelliteMassConfig(
       uiConfig["economics.satellite-empty-mass"],
       uiConfig["laser_technology.laser-terminal-mass"],

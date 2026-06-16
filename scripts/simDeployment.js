@@ -2,67 +2,9 @@
 
 import { calculateHohmannDeltaV_km_s } from "./simDeltaV.js?v=4.6";
 
-// Define the Starship performance data, including booster data
-const starshipPerformance = {
-  flight3: {
-    starship: {
-      dryMass_kg: 120000, // kg
-      propellantLoad_kg: 1200000, // kg
-      payloadCapacity_kg: 100000, // kg
-      deorbitLandingBurnPropellant_kg: 10000, // kg
-    },
-    booster: {
-      dryMass_kg: 200000, // kg (example value)
-      propellantLoad_kg: 3650000, // kg (example value)
-      deorbitLandingBurnPropellant_kg: 15000, // kg
-    },
-    engines: {
-      IspSeaLevel_s: 330, // seconds
-      IspVacuum_s: 380, // seconds
-    },
-  },
-  starship2: {
-    starship: {
-      dryMass_kg: 120000, // kg
-      propellantLoad_kg: 1500000, // kg
-      payloadCapacity_kg: 150000, // kg
-      deorbitLandingBurnPropellant_kg: 10000, // kg
-    },
-    booster: {
-      dryMass_kg: 200000, // kg (example value)
-      propellantLoad_kg: 3650000, // kg (example value)
-      deorbitLandingBurnPropellant_kg: 15000, // kg
-    },
-    engines: {
-      IspSeaLevel_s: 330, // seconds
-      IspVacuum_s: 380, // seconds
-    },
-  },
-  starship3: {
-    starship: {
-      dryMass_kg: 120000, // kg
-      propellantLoad_kg: 2300000, // kg
-      payloadCapacity_kg: 200000, // kg
-      deorbitLandingBurnPropellant_kg: 10000, // kg
-    },
-    booster: {
-      dryMass_kg: 200000, // kg (example value)
-      propellantLoad_kg: 3650000, // kg (example value)
-      deorbitLandingBurnPropellant_kg: 15000, // kg
-    },
-    engines: {
-      IspSeaLevel_s: 330, // seconds
-      IspVacuum_s: 380, // seconds
-    },
-  },
-};
-
-const satellites = {
-  dryMass_kg: 1500,
-  IspVacuum_s: 1800,
-};
-
-const launchToLEO_deltaV_km_per_s = 9.5;
+// Default launch-to-LEO Δv (km/s). Configurable via the Launch Vehicle category
+// (see setVehicleConfig); this is the fallback before any config is applied.
+const DEFAULT_LAUNCH_TO_LEO_DV_KM_S = 9.5;
 
 // LEO → Earth-SOI escape (C3 = 0). Used by ring_earth flights, which do not
 // perform a Hohmann transfer — the launcher just pushes the satellite out of
@@ -74,10 +16,11 @@ const g = 9.81; // m/s^2
 
 export class SimDeployment {
   /**
-   * Constructor for SimDeployment class
-   * @param {string} variant - Starship variant ('flight3', 'starship2', or 'starship3')
+   * Constructor for SimDeployment class.
+   * Vehicle specs default to `vehicleProperties` below and are overridden at
+   * runtime by setVehicleConfig (the "Launch Vehicle" config category).
    */
-  constructor(planets, variant = "starship3") {
+  constructor(planets) {
     // Find Earth from the planets array
     this.earth = {};
     for (const planet of planets) {
@@ -90,16 +33,46 @@ export class SimDeployment {
       throw new Error("Earth not found in planets array.");
     }
 
-    if (!starshipPerformance[variant]) {
-      throw new Error(`Invalid Starship variant: ${variant}. Choose from 'flight3', 'starship2', or 'starship3'.`);
-    }
-    this.variant = variant;
-    this.starship = starshipPerformance[variant];
-
     // Default satellite masses
     this.satelliteEmptyMass = 1000; // kg
     this.laserTerminalMass = 50; // kg
     this.laserPortsPerSatellite = 4;
+
+    // Launch Δv (km/s) — configurable via setVehicleConfig.
+    this.launchToLEO_deltaVKmS = DEFAULT_LAUNCH_TO_LEO_DV_KM_S;
+    this.escapeBurnDvKmS = ESCAPE_BURN_DV_KM_S;
+  }
+
+  /**
+   * Apply the Launch Vehicle config category to the live vehicle specs + launch Δv.
+   * Each value falls back to the current default when its slider is absent.
+   */
+  setVehicleConfig(uiConfig) {
+    const g = (key, dflt) => {
+      const v = uiConfig?.[`launch_vehicle.${key}`];
+      return typeof v === "number" && !isNaN(v) ? v : dflt;
+    };
+    const vp = this.vehicleProperties;
+    vp.booster.dryMass_kg = g("booster-dry-mass", vp.booster.dryMass_kg);
+    vp.booster.propellantCapacity_kg = g("booster-propellant-capacity", vp.booster.propellantCapacity_kg);
+    vp.booster.deorbitLandingPropellant_kg = g("booster-deorbit-propellant", vp.booster.deorbitLandingPropellant_kg);
+    vp.booster.isp_s = g("booster-isp", vp.booster.isp_s);
+    vp.starship.dryMass_kg = g("starship-dry-mass", vp.starship.dryMass_kg);
+    vp.starship.propellantCapacity_kg = g("starship-propellant-capacity", vp.starship.propellantCapacity_kg);
+    vp.starship.deorbitLandingPropellant_kg = g("starship-deorbit-propellant", vp.starship.deorbitLandingPropellant_kg);
+    vp.starship.maxPayloadCapacity_kg = g("starship-max-payload", vp.starship.maxPayloadCapacity_kg);
+    vp.starship.isp_s = g("starship-isp", vp.starship.isp_s);
+    vp.tanker.dryMass_kg = g("tanker-dry-mass", vp.tanker.dryMass_kg);
+    vp.tanker.propellantCapacity_kg = g("tanker-propellant-capacity", vp.tanker.propellantCapacity_kg);
+    vp.tanker.tankerPropellantCapacity_kg = g("tanker-transfer-capacity", vp.tanker.tankerPropellantCapacity_kg);
+    vp.tanker.deorbitLandingPropellant_kg = g("tanker-deorbit-propellant", vp.tanker.deorbitLandingPropellant_kg);
+    vp.tanker.isp_s = g("tanker-isp", vp.tanker.isp_s);
+    // satellite.dryMass_kg is derived (setSatelliteMassConfig); only its propulsion specs are exposed.
+    vp.satellite.propellantCapacity_kg = g("satellite-propellant-capacity", vp.satellite.propellantCapacity_kg);
+    vp.satellite.isp_s = g("satellite-isp", vp.satellite.isp_s);
+    vp.satellite.solarPanelMass_EarthOrbit_kg = g("satellite-solar-panel-mass", vp.satellite.solarPanelMass_EarthOrbit_kg);
+    this.launchToLEO_deltaVKmS = g("launch-to-leo-dv", this.launchToLEO_deltaVKmS);
+    this.escapeBurnDvKmS = g("escape-burn-dv", this.escapeBurnDvKmS);
   }
 
   setSatelliteMassConfig(emptyMass, laserTerminalMass, ringPorts) {
@@ -336,7 +309,7 @@ export class SimDeployment {
   addSurfaceLiftoffToLEO(vehicles, vehicleId) {
     const endMass_kg = this.getEndMass_kg(vehicles, vehicleId);
     const propellantRequired_kg = Math.ceil(
-      this.calculateManeuverPropellant(endMass_kg, launchToLEO_deltaV_km_per_s, vehicles[vehicleId].isp_s)
+      this.calculateManeuverPropellant(endMass_kg, this.launchToLEO_deltaVKmS, vehicles[vehicleId].isp_s)
     );
     // get vehicle propellant already used in future maneuvers
     const usedPropellantMass_kg = Math.ceil(this.getUsedPropellantMass_kg(vehicles, vehicleId));
@@ -363,7 +336,7 @@ export class SimDeployment {
       const boosterId = `Booster-${vehicleId}`;
       this.addVehicle(vehicles, boosterId, this.vehicleProperties.booster);
       const firstStage_endMass_kg = this.getEndMass_kg(vehicles, boosterId);
-      const firstStage_deltaV_required_km_per_s = launchToLEO_deltaV_km_per_s - secondStage_DeltaV_km_per_s;
+      const firstStage_deltaV_required_km_per_s = this.launchToLEO_deltaVKmS - secondStage_DeltaV_km_per_s;
       const firstStage_propellantRequired_kg = this.calculateManeuverPropellant(
         firstStage_endMass_kg,
         firstStage_deltaV_required_km_per_s,
@@ -393,7 +366,7 @@ export class SimDeployment {
       vehicles[vehicleId].maneuvers.push({
         type: "single stage liftoff to LEO",
         label: "Single stage liftoff to LEO",
-        deltaV_km_per_s: launchToLEO_deltaV_km_per_s,
+        deltaV_km_per_s: this.launchToLEO_deltaVKmS,
         usedPropellantMass_kg: propellantRequired_kg,
         startMass_kg: endMass_kg + propellantRequired_kg,
         endMass_kg: endMass_kg,

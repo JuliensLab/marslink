@@ -181,6 +181,7 @@ export class SimUi {
         "ring_earth",
         "adapted_rings",
         "launch_schedule",
+        "launch_vehicle",
       ])
     );
     // Set the initial display type
@@ -1214,7 +1215,7 @@ export class SimUi {
         // Save current config to restore later
         const baseConfig = this.getGroupsConfig([
           "economics", "simulation", "laser_technology",
-          "ring_mars", "circular_rings", "eccentric_rings", "ring_earth", "adapted_rings",
+          "ring_mars", "circular_rings", "eccentric_rings", "ring_earth", "adapted_rings", "launch_vehicle",
         ]);
         const originalSimTime = this.simMain.simTime.getDate();
 
@@ -1235,7 +1236,7 @@ export class SimUi {
             // Stable config for the inner date loop
             const scenarioConfig = this.getGroupsConfig([
               "economics", "simulation", "laser_technology",
-              "ring_mars", "circular_rings", "eccentric_rings", "ring_earth", "adapted_rings",
+              "ring_mars", "circular_rings", "eccentric_rings", "ring_earth", "adapted_rings", "launch_vehicle",
             ]);
             scenarioConfig["simulation.calctimeSec"] = 100;
             this.simMain.setSatellitesConfig(scenarioConfig);
@@ -1296,7 +1297,7 @@ export class SimUi {
                 // Rebuild satellites with corrected config
                 const newConfig = this.getGroupsConfig([
                   "economics", "simulation", "laser_technology",
-                  "ring_mars", "circular_rings", "eccentric_rings", "ring_earth", "adapted_rings",
+                  "ring_mars", "circular_rings", "eccentric_rings", "ring_earth", "adapted_rings", "launch_vehicle",
                 ]);
                 newConfig["simulation.calctimeSec"] = 100;
                 this.simMain.setSatellitesConfig(newConfig);
@@ -1895,6 +1896,7 @@ export class SimUi {
               "eccentric_rings",
               "ring_earth",
               "adapted_rings",
+              "launch_vehicle",
             ])
           );
           break;
@@ -1910,6 +1912,16 @@ export class SimUi {
           break;
 
         default:
+          // Launch-vehicle params feed the deployment / cost chain → full recompute.
+          if (section === "launch_vehicle") {
+            this.simMain.setSatellitesConfig(
+              this.getGroupsConfig([
+                "economics", "simulation", "laser_technology",
+                "ring_mars", "circular_rings", "eccentric_rings",
+                "ring_earth", "adapted_rings", "launch_vehicle",
+              ])
+            );
+          }
           break;
       }
 
