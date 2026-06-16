@@ -883,6 +883,24 @@ export class SimUi {
     const progressText = document.getElementById("sens-progress-text");
     const estimateEl = document.getElementById("sens-estimate");
 
+    // Worker-thread control: cap at the machine's logical core count, default to
+    // cores-1 (leave one for the UI). The user can override up to the available max.
+    const threadsAvailable = (typeof navigator !== "undefined" && navigator.hardwareConcurrency) || 4;
+    const workerCountInput = document.getElementById("sens-worker-count");
+    const threadAvailEl = document.getElementById("sens-thread-avail");
+    if (workerCountInput) {
+      workerCountInput.max = threadsAvailable;
+      if (!parseInt(workerCountInput.value, 10)) workerCountInput.value = Math.max(1, threadsAvailable - 1);
+      const clampWorkers = () => {
+        let v = parseInt(workerCountInput.value, 10);
+        if (!Number.isFinite(v) || v < 1) v = 1;
+        if (v > threadsAvailable) v = threadsAvailable;
+        workerCountInput.value = v;
+      };
+      workerCountInput.addEventListener("change", clampWorkers);
+    }
+    if (threadAvailEl) threadAvailEl.textContent = `of ${threadsAvailable} thread${threadsAvailable === 1 ? "" : "s"} available`;
+
     // Toggle linear step visibility based on progression type
     const progSelect = document.getElementById("sens-tech-progression");
     const stepInput = document.getElementById("sens-tech-step");
@@ -1409,7 +1427,8 @@ export class SimUi {
             }
           }
 
-          const pool = new SensitivityPool();
+          const requestedWorkers = parseInt(workerCountInput?.value, 10) || (threadsAvailable - 1);
+          const pool = new SensitivityPool(requestedWorkers);
           this._sensPool = pool;
           console.log(`[Sensitivity] parallel: ${scenarios.length} scenarios across ${pool.size} workers`);
           progressText.textContent = `0% (0/${totalScenarios}) · ${pool.size} workers`;

@@ -207,6 +207,13 @@
             <span class="muted">seconds</span>
           </div>
         </div>
+        <div class="form-group" style="margin-top:var(--s-2);">
+          <div class="sens-row" style="display:flex; gap:var(--s-2); align-items:center;">
+            <span class="muted">Worker threads</span>
+            <input type="number" id="sens-worker-count" value="0" min="1" max="64" style="width:50px;" title="Parallel workers for the sweep (ignored when displaying each step)">
+            <span id="sens-thread-avail" class="muted"></span>
+          </div>
+        </div>
         <div id="sens-estimate" class="muted" style="margin-top:var(--s-2);"></div>
         <div style="margin-top:var(--s-3); display:flex; gap:var(--s-2);">
           <button id="startSensitivity" class="btn btn-primary" style="flex:1;">Run Sensitivity</button>
