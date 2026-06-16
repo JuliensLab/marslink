@@ -1064,6 +1064,8 @@ export class SimUi {
             responsive: true,
             maintainAspectRatio: false,
             animation: false,
+            // Hover anywhere along an x to see that x and every series' value.
+            interaction: { mode: "index", intersect: false },
             layout: { padding: { top: 4, right: 4, bottom: 0, left: 0 } },
             scales: {
               x: {
@@ -1082,9 +1084,24 @@ export class SimUi {
             },
             plugins: {
               tooltip: {
+                mode: "index",
+                intersect: false,
                 backgroundColor: tooltipBg, titleColor: "#eef1f7", bodyColor: "#b9c0d0",
                 borderColor: "rgba(255,255,255,0.1)", borderWidth: 1, cornerRadius: 4,
                 titleFont: { size: 11 }, bodyFont: { size: 11 }, padding: 8,
+                callbacks: {
+                  title: (items) => {
+                    const xName = xDim === "rings" ? "Relay rings" : xDim === "tech" ? "Laser tech" : "Date";
+                    return items.length ? `${xName}: ${items[0].label}` : "";
+                  },
+                  label: (ctx) => {
+                    const v = ctx.parsed.y;
+                    if (v == null) return null; // skip series with a gap here
+                    const a = Math.abs(v);
+                    const num = a >= 1000 ? Math.round(v).toLocaleString() : a >= 1 ? v.toFixed(2) : a > 0 ? v.toPrecision(2) : "0";
+                    return `${ctx.dataset.label}: ${num}${cfg.unit ? " " + cfg.unit : ""}`;
+                  },
+                },
               },
               legend: { display: datasets.length > 1, labels: { color: textDim, font: { size: 9 }, boxWidth: 10 } },
               title: { display: true, text: cfg.title, color: textMuted, font: { size: 11, weight: "normal" }, padding: { bottom: 4 } },
