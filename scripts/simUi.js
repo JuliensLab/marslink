@@ -2,6 +2,7 @@
 import { slidersData } from "./slidersData.js?v=4.6";
 import { LukashianClock } from "./lukashianTime.js?v=4.6";
 import { wireAuthUi } from "./auth.js?v=4.6";
+import { SensitivityPool } from "./sensitivityPool.js?v=4.6";
 
 export class SimUi {
   constructor(simMain) {
@@ -1336,6 +1337,120 @@ export class SimUi {
 
         const resultArray = [];
 
+        // Post-process a worker scenario result into chart metrics (shared by both
+        // the parallel and serial paths). Returns { scenario, metrics }.
+        const buildScenarioMetrics = (res, ringCount, techUserVal, dateStr) => {
+          const costs = this.simMain.calculateCosts(res.maxFlowGbps, res.resultTreesData || []);
+          const capacityInfo = res.capacityInfo;
+          const rs = res.routeSummary;
+          const ld = res.latencyData;
+          const ringMin = (name) => {
+            const a = capacityInfo?.ringCapacities?.[name]?.inring;
+            return a && a.length ? 2 * Math.min(...a) : null;
+          };
+          let earthSats = 0, marsSats = 0, relaySats = 0;
+          for (const orbit of res.resultTreesData || []) {
+            const rn = orbit.ringName || "";
+            const c = orbit.satCount || 0;
+            if (rn === "ring_earth") earthSats += c;
+            else if (rn === "ring_mars") marsSats += c;
+            else relaySats += c;
+          }
+          const metrics = {
+            sats: res.satellitesCount,
+            earthSats, relaySats, marsSats,
+            flow: (res.maxFlowGbps ?? 0) * 1000,
+            earthFlow: ringMin("ring_earth"),
+            marsFlow: ringMin("ring_mars"),
+            relayFlow: rs?.totalThroughput ?? null,
+            cost: costs.totalCosts,
+            cpf: costs.costPerMbps,
+            latMin: ld?.bestLatency != null ? ld.bestLatency / 60 : null,
+            latP50: ld?.medianLatency != null ? ld.medianLatency / 60 : null,
+          };
+          const scenario = {
+            ringCount: ringCount ?? "(current)",
+            laserTechImprovement: techUserVal ?? "(current)",
+            launchDate: dateStr,
+            satellites: res.satellitesCount,
+          };
+          return { scenario, metrics, costs, capacityInfo, rs };
+        };
+
+        // ── Parallel path: fan scenarios out across a worker pool. Used whenever
+        //    we're not animating each constellation (the common, slow case). ──
+        if (!showDisplay) {
+          // Generate every scenario's uiConfig synchronously, in the SAME nested
+          // order as the serial path, so simLinkBudget (tech) evolves identically
+          // and the seed requiredmbps values are bit-identical. No topology here.
+          const allCats = [
+            "economics", "simulation", "laser_technology",
+            "ring_mars", "circular_rings", "eccentric_rings", "ring_earth", "adapted_rings", "launch_vehicle",
+          ];
+          // Make sure simMain's cost state matches the (unswept) baseline economics
+          // so calculateCosts on returned results is consistent for every scenario.
+          this.simMain.setCosts(this.getGroupsConfig(["economics"]));
+          this.simMain.satellitePowerKw = baseConfig["launch_vehicle.satellite-power-kw"];
+
+          const scenarios = [];
+          let scenarioId = 0;
+          for (const techUserVal of techValues) {
+            for (const ringCount of ringValues) {
+              if (ringCount != null) this.applySimpleDefaults(ringCount);
+              if (techUserVal != null) {
+                const techInternal = Math.round(Math.log2(techUserVal));
+                this.applySliderValues({ "laser_technology.improvement-factor": techInternal });
+              }
+              const scenarioConfig = this.getGroupsConfig(allCats);
+              scenarioConfig["simulation.calctimeSec"] = 100;
+              for (const dateStr of dateValues) {
+                scenarios.push({ scenarioId: scenarioId++, ringCount, techUserVal, dateStr, uiConfig: scenarioConfig });
+              }
+            }
+          }
+
+          const pool = new SensitivityPool();
+          this._sensPool = pool;
+          console.log(`[Sensitivity] parallel: ${scenarios.length} scenarios across ${pool.size} workers`);
+          progressText.textContent = `0% (0/${totalScenarios}) · ${pool.size} workers`;
+
+          try {
+            await Promise.all(scenarios.map((s) =>
+              pool.submit({
+                scenarioId: s.scenarioId,
+                uiConfig: s.uiConfig,
+                simDate: s.dateStr,
+                sizingDate: dateValues[0] || s.dateStr,
+                flowCalctimeMs: 20000,
+                maxIterations: 100,
+              }).then((res) => {
+                if (stopRequested || !res) return;
+                const { scenario, metrics, costs, capacityInfo, rs } = buildScenarioMetrics(res, s.ringCount, s.techUserVal, s.dateStr);
+                resultArray.push({
+                  scenario,
+                  liveMetrics: {
+                    satellites: res.satellitesCount,
+                    costs, metrics,
+                    capacityInfo: capacityInfo ? JSON.parse(JSON.stringify(capacityInfo)) : null,
+                    routeSummary: rs ? { ...rs } : null,
+                  },
+                  data: [{ maxFlowGbps: res.maxFlowGbps }],
+                });
+                pushChartPoint(scenario, metrics);
+                completed++;
+                const pct = Math.round((completed / totalScenarios) * 100);
+                progressBar.style.width = `${pct}%`;
+                progressText.textContent = `${pct}% (${completed}/${totalScenarios}) · ${pool.size} workers`;
+              }).catch((err) => {
+                console.error(`[Sensitivity] scenario ${s.scenarioId} failed:`, err);
+                completed++;
+              })
+            ));
+          } finally {
+            pool.terminate();
+            this._sensPool = null;
+          }
+        } else
         for (const techUserVal of techValues) {
           if (stopRequested) break;
           for (const ringCount of ringValues) {
@@ -1549,6 +1664,8 @@ export class SimUi {
 
     stopBtn.addEventListener("click", () => {
       stopRequested = true;
+      // Drop not-yet-started scenarios from the pool queue (in-flight ones finish).
+      if (this._sensPool) this._sensPool.stop();
       stopBtn.disabled = true;
       stopBtn.textContent = "Stopping...";
       setTimeout(() => { stopBtn.disabled = false; stopBtn.textContent = "Stop"; }, 0);

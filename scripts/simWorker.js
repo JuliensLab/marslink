@@ -226,6 +226,158 @@ function runPipeline({ requestId, windowIdx, configEpoch, uiConfig, satellitesCo
   };
 }
 
+/**
+ * Run ONE full sensitivity scenario end-to-end in the worker: the iterative
+ * ring-sizing feedback loop followed by the flow/latency compute. This mirrors
+ * the former main-thread sweep (simUi feedback loop + SimMain.longTermRun) so a
+ * pool of workers can compute scenarios in parallel.
+ *
+ * The feedback loop runs in integer user-facing Mbps. Because requiredmbpsbetweensats
+ * is a pow10 slider whose stored value is round(10^log10(mbps)) === round(mbps),
+ * working directly in integer Mbps is bit-identical to the old slider-position path.
+ *
+ * @param {object} msg.uiConfig          scenario config (ring/tech baked + seed requiredmbps)
+ * @param {string} msg.simDate           ISO date string for this scenario
+ * @param {number} msg.flowCalctimeMs    max-flow time budget (longTermRun uses 20000)
+ * @param {number} msg.maxIterations     feedback-loop cap (100, matching the serial path)
+ */
+function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flowCalctimeMs = 20000, maxIterations = 100 }) {
+  ensureState();
+  const t0 = performance.now();
+  const date = new Date(simDate);
+  // The constellation is sized once (serial path sizes at dateValues[0]); flow is
+  // then computed at this scenario's own date.
+  const sizeDate = new Date(sizingDate || simDate);
+
+  // 1. Sync technology + deployment config (once — these don't change during sizing).
+  simLinkBudget.setTechnologyConfig(uiConfig);
+  simDeployment.setVehicleConfig(uiConfig);
+  simDeployment.setSatelliteMassConfig(
+    uiConfig["economics.satellite-empty-mass"],
+    uiConfig["laser_technology.laser-terminal-mass"],
+    {
+      ring_earth: uiConfig["ring_earth.laser-ports-per-satellite"],
+      ring_mars: uiConfig["ring_mars.laser-ports-per-satellite"],
+      circular_rings: uiConfig["circular_rings.laser-ports-per-satellite"],
+      eccentric_rings: uiConfig["eccentric_rings.laser-ports-per-satellite"],
+      adapted_rings: uiConfig["adapted_rings.laser-ports-per-satellite"],
+    }
+  );
+  simSatellites.setMaxSatCount(uiConfig["simulation.maxSatCount"]);
+
+  const buildAndApply = () => {
+    simSatellites.setSatellitesConfig(simSatellites.buildConfigFromUi(uiConfig));
+  };
+
+  // 2. Feedback ring-sizing loop (bit-identical to the old simUi sensitivity loop).
+  buildAndApply();
+  let iterations = 0;
+  let prevEarthMin = -1, prevMarsMin = -1;
+  for (let i = 0; i < maxIterations; i++) {
+    iterations = i + 1;
+    const planets = Object.values(simSolarSystem.updatePlanetsPositions(sizeDate));
+    const satellites = simSatellites.updateSatellitesPositions(sizeDate);
+    const links = simNetwork.getPossibleLinks(planets, satellites);
+    const rs = simNetwork.routeSummary;
+    if (!rs || !rs.totalThroughput || rs.totalThroughput <= 0) break;
+    const capInfo = calculateCapacityInfo(links);
+
+    const eInring = capInfo.ringCapacities?.["ring_earth"]?.inring || [];
+    const mInring = capInfo.ringCapacities?.["ring_mars"]?.inring || [];
+    const curEarth = eInring.length ? Math.round(2 * Math.min(...eInring)) : 0;
+    const curMars = mInring.length ? Math.round(2 * Math.min(...mInring)) : 0;
+    if (curEarth === prevEarthMin && curMars === prevMarsMin) break; // no-progress
+    prevEarthMin = curEarth;
+    prevMarsMin = curMars;
+
+    // _feedbackStep, integer-Mbps form
+    if (eInring.length === 0 || mInring.length === 0) break; // skip
+    const target = rs.totalThroughput;
+    const earthMin = 2 * Math.min(...eInring);
+    const marsMin = 2 * Math.min(...mInring);
+    const lo = target * 1.02, hi = target * 1.04;
+    if (earthMin >= lo && earthMin <= hi && marsMin >= lo && marsMin <= hi) break; // converged
+
+    const oldEarth = uiConfig["ring_earth.requiredmbpsbetweensats"];
+    const oldMars = uiConfig["ring_mars.requiredmbpsbetweensats"];
+    const aim = target * 1.03;
+    const newEarth = earthMin > 0 ? Math.max(1, Math.round(oldEarth * aim / earthMin)) : oldEarth;
+    const newMars = marsMin > 0 ? Math.max(1, Math.round(oldMars * aim / marsMin)) : oldMars;
+    if (newEarth === oldEarth && newMars === oldMars) break; // converged (no slider move)
+
+    uiConfig["ring_earth.requiredmbpsbetweensats"] = newEarth;
+    uiConfig["ring_mars.requiredmbpsbetweensats"] = newMars;
+    buildAndApply(); // rebuild for the next measurement
+  }
+
+  // 3. Final scenario compute (mirrors SimMain.longTermRun for a single date).
+  const planetsObj = simSolarSystem.updatePlanetsPositions(date);
+  const planets = Object.values(planetsObj);
+  const satellites = simSatellites.updateSatellitesPositions(date);
+  const satellitesCount = satellites.length;
+
+  let missionProfilesData = null, resultTreesData = null;
+  try {
+    missionProfilesData = simDeployment.getMissionProfile(simSatellites.getOrbitalElements());
+    resultTreesData = new SimMissionValidator(missionProfilesData, {
+      costPerLaunch: uiConfig["economics.launch-cost-slider"],
+      costPerSatellite: uiConfig["economics.satellite-cost-slider"],
+      costPerLaserTerminal: uiConfig["economics.laser-terminal-cost-slider"],
+      laserPortsPerRing: simLinkBudget.maxLinksPerRing,
+      propellantCostsPerKg: {
+        "CH4/O2": uiConfig["economics.fuel-cost-ch4o2"],
+        Argon: uiConfig["economics.fuel-cost-argon"],
+      },
+      wrightsLawFactor: (uiConfig["economics.wrights-law-factor"] || 100) / 100,
+    });
+  } catch (e) {
+    console.warn("[Worker] scenario mission profile failed:", e.message);
+  }
+
+  const possibleLinks = simNetwork.getPossibleLinks(planets, satellites);
+  const routeSummary = simNetwork.routeSummary;
+  const capacityInfo = calculateCapacityInfo(possibleLinks);
+
+  const fullNetworkData = simNetwork.getNetworkData(planets, satellites, possibleLinks, flowCalctimeMs);
+  const maxFlowGbps = fullNetworkData.error ? 0 : (fullNetworkData.maxFlowGbps || 0);
+  let latencyData = null;
+  if (!fullNetworkData.error) latencyData = simNetwork.calculateLatencies(fullNetworkData);
+
+  let routeSummaryClone = null;
+  if (routeSummary) {
+    routeSummaryClone = {
+      totalThroughput: routeSummary.totalThroughput,
+      routeCount: routeSummary.routeCount,
+      minThroughput: routeSummary.minThroughput,
+      avgThroughput: routeSummary.avgThroughput,
+      maxThroughput: routeSummary.maxThroughput,
+      minLatency: routeSummary.minLatency,
+      avgLatency: routeSummary.avgLatency,
+      maxLatency: routeSummary.maxLatency,
+    };
+  }
+
+  return {
+    type: "scenario-result",
+    requestId,
+    scenarioId,
+    satellitesCount,
+    maxFlowGbps,
+    capacityInfo,
+    routeSummary: routeSummaryClone,
+    resultTreesData,
+    latencyData: latencyData
+      ? { bestLatency: latencyData.bestLatency, medianLatency: latencyData.medianLatency, averageLatency: latencyData.averageLatency }
+      : null,
+    sizedConfig: {
+      "ring_earth.requiredmbpsbetweensats": uiConfig["ring_earth.requiredmbpsbetweensats"],
+      "ring_mars.requiredmbpsbetweensats": uiConfig["ring_mars.requiredmbpsbetweensats"],
+    },
+    iterations,
+    totalMs: Math.round(performance.now() - t0),
+  };
+}
+
 self.onmessage = (event) => {
   const msg = event.data;
   if (!msg || typeof msg !== "object") return;
@@ -233,6 +385,21 @@ self.onmessage = (event) => {
   if (msg.type === "init") {
     ensureState();
     self.postMessage({ type: "ready" });
+    return;
+  }
+
+  if (msg.type === "computeScenario") {
+    try {
+      self.postMessage(runScenario(msg));
+    } catch (err) {
+      self.postMessage({
+        type: "scenario-error",
+        requestId: msg.requestId,
+        scenarioId: msg.scenarioId,
+        message: err && err.message ? err.message : String(err),
+        stack: err && err.stack ? err.stack : null,
+      });
+    }
     return;
   }
 
