@@ -275,6 +275,11 @@ export class SimUi {
         simplePane.hidden = mode !== "simple";
         configurePane.hidden = mode !== "configure";
         sensitivityPane.hidden = mode !== "sensitivity";
+        // The expand mode is sensitivity-only; collapse the drawer for other panes.
+        if (mode !== "sensitivity") {
+          modeDrawer.classList.remove("sens-expanded");
+          document.getElementById("sens-expand-btn")?.setAttribute("aria-pressed", "false");
+        }
       } else if (mode === "report") {
         closeDrawer();
         reportPanel.hidden = false;
@@ -1017,6 +1022,18 @@ export class SimUi {
         toggle.setAttribute("aria-expanded", String(show));
         toggle.classList.toggle("expanded", show);
         if (show) for (const c of sensCharts) if (c) c.resize();
+      });
+    }
+
+    // Expand button: widen the drawer (CSS) and grow chart height; resize charts
+    // once the width transition settles.
+    const expandBtn = document.getElementById("sens-expand-btn");
+    const drawer = document.getElementById("mode-drawer");
+    if (expandBtn && drawer) {
+      expandBtn.addEventListener("click", () => {
+        const expanded = drawer.classList.toggle("sens-expanded");
+        expandBtn.setAttribute("aria-pressed", String(expanded));
+        setTimeout(() => { for (const c of sensCharts) if (c) c.resize(); }, 180);
       });
     }
 

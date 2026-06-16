@@ -371,6 +371,21 @@ kbd {
   display: flex;
   flex-direction: column;
   animation: drawer-slide-in 180ms ease;
+  transition: width 160ms ease;
+}
+
+/* Expanded sensitivity panel: wider drawer + taller charts. */
+#mode-drawer.sens-expanded {
+  width: min(720px, 62vw);
+}
+#mode-drawer.sens-expanded .chart-wrap {
+  height: 260px;
+}
+
+.drawer-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 @keyframes drawer-slide-in {

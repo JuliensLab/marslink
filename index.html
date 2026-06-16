@@ -143,7 +143,10 @@
     <div id="sensitivity-pane" class="drawer-pane" hidden>
       <header class="drawer-header">
         <h2>Sensitivity Analysis</h2>
-        <button class="icon-btn drawer-close" data-close-drawer aria-label="Close">×</button>
+        <div class="drawer-header-actions">
+          <button id="sens-expand-btn" class="icon-btn" type="button" aria-label="Expand panel" aria-pressed="false" title="Expand / collapse panel (wider + taller charts)">&#10530;</button>
+          <button class="icon-btn drawer-close" data-close-drawer aria-label="Close">×</button>
+        </div>
       </header>
       <div class="drawer-body" style="padding: var(--s-4);">
         <p class="muted">
