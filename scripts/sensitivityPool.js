@@ -19,6 +19,9 @@ export class SensitivityPool {
     this.idCounter = 0;
     this.stopped = false;
     this.workers = [];
+    // Fired whenever a worker starts or finishes a job, so the UI can show live
+    // utilization: ({ active, size, queued, pending }) => void
+    this.onActivity = null;
     for (let i = 0; i < this.size; i++) {
       const worker = new Worker(new URL("./simWorker.js?v=4.6", import.meta.url), { type: "module" });
       const slot = { worker, busy: false };
@@ -26,6 +29,13 @@ export class SensitivityPool {
       worker.onerror = (e) => this._onWorkerError(slot, e);
       this.workers.push(slot);
     }
+  }
+
+  _emit() {
+    if (!this.onActivity) return;
+    let active = 0;
+    for (const slot of this.workers) if (slot.busy) active++;
+    this.onActivity({ active, size: this.size, queued: this.queue.length, pending: this.pending.size });
   }
 
   _onMessage(slot, msg) {
@@ -37,6 +47,7 @@ export class SensitivityPool {
       if (msg.type === "scenario-error") entry.reject(new Error(msg.message || "scenario failed"));
       else entry.resolve(msg);
     }
+    this._emit();
     this._pump();
   }
 
@@ -78,6 +89,7 @@ export class SensitivityPool {
       this.pending.set(next.requestId, next);
       slot.worker.postMessage({ type: "computeScenario", requestId: next.requestId, ...next.job });
     }
+    this._emit();
   }
 
   /** Soft stop: drop queued (not-yet-started) jobs; let in-flight jobs finish. */

@@ -1431,7 +1431,17 @@ export class SimUi {
           const pool = new SensitivityPool(requestedWorkers);
           this._sensPool = pool;
           console.log(`[Sensitivity] parallel: ${scenarios.length} scenarios across ${pool.size} workers`);
-          progressText.textContent = `0% (0/${totalScenarios}) · ${pool.size} workers`;
+
+          // Live progress + worker utilization. onActivity fires as workers pick up
+          // and finish jobs, so the readout reflects active threads in real time.
+          let activeWorkers = 0;
+          const renderProgress = () => {
+            const pct = Math.round((completed / totalScenarios) * 100);
+            progressBar.style.width = `${pct}%`;
+            progressText.textContent = `${pct}% (${completed}/${totalScenarios}) · ${activeWorkers}/${pool.size} workers active`;
+          };
+          pool.onActivity = ({ active }) => { activeWorkers = active; renderProgress(); };
+          renderProgress();
 
           try {
             await Promise.all(scenarios.map((s) =>
@@ -1457,9 +1467,7 @@ export class SimUi {
                 });
                 pushChartPoint(scenario, metrics);
                 completed++;
-                const pct = Math.round((completed / totalScenarios) * 100);
-                progressBar.style.width = `${pct}%`;
-                progressText.textContent = `${pct}% (${completed}/${totalScenarios}) · ${pool.size} workers`;
+                renderProgress();
               }).catch((err) => {
                 console.error(`[Sensitivity] scenario ${s.scenarioId} failed:`, err);
                 completed++;
