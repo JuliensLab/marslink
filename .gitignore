@@ -1,9 +1,11 @@
 /fast-transit/
-/latex/
 /3d/
 /.vscode/
 /.claude/
 /results/
+# Academic paper + LaTeX live in ../marslink-private (out of the public repo)
+/paper/
+/latex/
 /node_modules/
 .aider*
 
