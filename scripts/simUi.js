@@ -884,13 +884,15 @@ export class SimUi {
     const estimateEl = document.getElementById("sens-estimate");
 
     // Worker-thread control: cap at the machine's logical core count, default to
-    // cores-1 (leave one for the UI). The user can override up to the available max.
+    // cores-2 (leave headroom for the UI + main thread). The user can override
+    // up to the available max.
     const threadsAvailable = (typeof navigator !== "undefined" && navigator.hardwareConcurrency) || 4;
+    const defaultWorkers = Math.max(1, threadsAvailable - 2);
     const workerCountInput = document.getElementById("sens-worker-count");
     const threadAvailEl = document.getElementById("sens-thread-avail");
     if (workerCountInput) {
       workerCountInput.max = threadsAvailable;
-      if (!parseInt(workerCountInput.value, 10)) workerCountInput.value = Math.max(1, threadsAvailable - 1);
+      if (!parseInt(workerCountInput.value, 10)) workerCountInput.value = defaultWorkers;
       const clampWorkers = () => {
         let v = parseInt(workerCountInput.value, 10);
         if (!Number.isFinite(v) || v < 1) v = 1;
@@ -1427,7 +1429,7 @@ export class SimUi {
             }
           }
 
-          const requestedWorkers = parseInt(workerCountInput?.value, 10) || (threadsAvailable - 1);
+          const requestedWorkers = parseInt(workerCountInput?.value, 10) || defaultWorkers;
           const pool = new SensitivityPool(requestedWorkers);
           this._sensPool = pool;
           console.log(`[Sensitivity] parallel: ${scenarios.length} scenarios across ${pool.size} workers`);

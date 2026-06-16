@@ -8,12 +8,12 @@
 
 export class SensitivityPool {
   /**
-   * @param {number} [size] worker count; defaults to hardwareConcurrency-1, capped at
+   * @param {number} [size] worker count; defaults to hardwareConcurrency-2, capped at
    *   the logical core count (the UI clamps user input to the same max).
    */
   constructor(size) {
     const cores = (typeof navigator !== "undefined" && navigator.hardwareConcurrency) || 4;
-    this.size = Math.max(1, Math.min(size || cores - 1, cores));
+    this.size = Math.max(1, Math.min(size || cores - 2, cores));
     this.queue = [];
     this.pending = new Map(); // requestId -> entry
     this.idCounter = 0;
