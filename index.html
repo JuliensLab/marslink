@@ -215,26 +215,42 @@
         </div>
         <div id="sens-charts" style="display:none; margin-top:var(--s-3);">
           <div id="sens-fixed-dims" class="muted" style="margin-bottom:var(--s-2); font-size:12px;"></div>
-          <!-- Primary (high-level) charts — always visible -->
+          <!-- ── Satellites ── -->
+          <h4 class="sens-cat-header">Satellites</h4>
           <div class="chart-wrap"><canvas id="sens-chart-sats"></canvas></div>
-          <div class="chart-wrap"><canvas id="sens-chart-flow"></canvas></div>
-          <div class="chart-wrap"><canvas id="sens-chart-cost"></canvas></div>
-          <div class="chart-wrap"><canvas id="sens-chart-cpf"></canvas></div>
-          <div class="chart-wrap"><canvas id="sens-chart-cost-vs-flow"></canvas></div>
-          <div class="chart-wrap"><canvas id="sens-chart-flow-vs-sats"></canvas></div>
-          <!-- Secondary breakdown charts — collapsed by default -->
-          <button id="sens-charts-toggle" class="sens-charts-toggle" type="button" aria-expanded="false">
-            <span class="arrow" aria-hidden="true">&#9656;</span> Detailed charts — segment flows, satellites, latency
+          <button class="sens-charts-toggle" type="button" data-target="sens-fold-sats" aria-expanded="false">
+            <span class="arrow" aria-hidden="true">&#9656;</span> Per-area satellites
           </button>
-          <div id="sens-charts-secondary" hidden>
-            <div class="chart-wrap"><canvas id="sens-chart-earth-flow"></canvas></div>
-            <div class="chart-wrap"><canvas id="sens-chart-mars-flow"></canvas></div>
-            <div class="chart-wrap"><canvas id="sens-chart-relay-flow"></canvas></div>
+          <div id="sens-fold-sats" hidden>
             <div class="chart-wrap"><canvas id="sens-chart-earth-sats"></canvas></div>
             <div class="chart-wrap"><canvas id="sens-chart-relay-sats"></canvas></div>
             <div class="chart-wrap"><canvas id="sens-chart-mars-sats"></canvas></div>
+          </div>
+
+          <!-- ── Flow ── -->
+          <h4 class="sens-cat-header">Flow</h4>
+          <div class="chart-wrap"><canvas id="sens-chart-flow"></canvas></div>
+          <div class="chart-wrap"><canvas id="sens-chart-flow-vs-sats"></canvas></div>
+          <button class="sens-charts-toggle" type="button" data-target="sens-fold-flow" aria-expanded="false">
+            <span class="arrow" aria-hidden="true">&#9656;</span> Flow breakdown &amp; latency
+          </button>
+          <div id="sens-fold-flow" hidden>
+            <div class="chart-wrap"><canvas id="sens-chart-earth-flow"></canvas></div>
+            <div class="chart-wrap"><canvas id="sens-chart-mars-flow"></canvas></div>
+            <div class="chart-wrap"><canvas id="sens-chart-relay-flow"></canvas></div>
             <div class="chart-wrap"><canvas id="sens-chart-latency-min"></canvas></div>
             <div class="chart-wrap"><canvas id="sens-chart-latency-p50"></canvas></div>
+          </div>
+
+          <!-- ── Cost ── -->
+          <h4 class="sens-cat-header">Cost</h4>
+          <div class="chart-wrap"><canvas id="sens-chart-cost"></canvas></div>
+          <div class="chart-wrap"><canvas id="sens-chart-cost-vs-flow"></canvas></div>
+          <button class="sens-charts-toggle" type="button" data-target="sens-fold-cost" aria-expanded="false">
+            <span class="arrow" aria-hidden="true">&#9656;</span> Cost detail
+          </button>
+          <div id="sens-fold-cost" hidden>
+            <div class="chart-wrap"><canvas id="sens-chart-cpf"></canvas></div>
           </div>
           <div id="sens-download-wrap" style="display:none; margin-top:var(--s-2);">
             <button id="sens-download-btn" class="btn" style="width:100%;">Download Results JSON</button>

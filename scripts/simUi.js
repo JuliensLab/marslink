@@ -1005,17 +1005,17 @@ export class SimUi {
       sensCharts = [];
     };
 
-    // Collapsible secondary charts: keep the high-level set visible, hide the
-    // breakdown by default. Resize on expand since charts created while the div is
-    // hidden start at zero size.
-    const chartsToggle = document.getElementById("sens-charts-toggle");
-    const chartsSecondary = document.getElementById("sens-charts-secondary");
-    if (chartsToggle && chartsSecondary) {
-      chartsToggle.addEventListener("click", () => {
-        const show = chartsSecondary.hidden;
-        chartsSecondary.hidden = !show;
-        chartsToggle.setAttribute("aria-expanded", String(show));
-        chartsToggle.classList.toggle("expanded", show);
+    // Per-category folds: each toggle (data-target) collapses the breakdown charts
+    // in its category. Resize on expand since charts created while a fold is hidden
+    // start at zero size.
+    for (const toggle of document.querySelectorAll(".sens-charts-toggle")) {
+      const target = document.getElementById(toggle.dataset.target);
+      if (!target) continue;
+      toggle.addEventListener("click", () => {
+        const show = target.hidden;
+        target.hidden = !show;
+        toggle.setAttribute("aria-expanded", String(show));
+        toggle.classList.toggle("expanded", show);
         if (show) for (const c of sensCharts) if (c) c.resize();
       });
     }

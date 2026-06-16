@@ -1099,7 +1099,18 @@ select.slider {
   margin-top: 6px;
 }
 
-/* Sensitivity: toggle for the collapsible secondary (breakdown) charts. */
+/* Sensitivity: per-category chart group heading. */
+.sens-cat-header {
+  margin: var(--s-4) 0 var(--s-1);
+  padding-bottom: 4px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text-1);
+  border-bottom: 1px solid var(--border-1);
+}
+.sens-cat-header:first-of-type { margin-top: var(--s-2); }
+
+/* Sensitivity: toggle for the collapsible breakdown charts in a category. */
 .sens-charts-toggle {
   display: flex;
   align-items: center;
