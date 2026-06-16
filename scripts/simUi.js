@@ -1024,10 +1024,15 @@ export class SimUi {
       const thirdValues = thirdDim ? dimValues[thirdDim] : [null];
 
       const chartConfigs = [
-        { id: "sens-chart-sats", title: "Satellites", unit: "", scale: 1 },
-        { id: "sens-chart-flow", title: "Total Flow", unit: "Gbps", scale: 1/1000 },
-        { id: "sens-chart-cost", title: "Total Cost", unit: "$M", scale: 1/1_000_000 },
-        { id: "sens-chart-cpf",  title: "Cost / Flow", unit: "$/Mbps", scale: 1 },
+        { id: "sens-chart-sats", title: "Satellites", unit: "", scale: 1, key: "sats" },
+        { id: "sens-chart-flow", title: "Total Flow (achieved)", unit: "Gbps", scale: 1/1000, key: "flow" },
+        { id: "sens-chart-earth-flow", title: "Earth flow (min)", unit: "Gbps", scale: 1/1000, key: "earthFlow" },
+        { id: "sens-chart-mars-flow", title: "Mars flow (min)", unit: "Gbps", scale: 1/1000, key: "marsFlow" },
+        { id: "sens-chart-relay-flow", title: "Relay flow (aggregate)", unit: "Gbps", scale: 1/1000, key: "relayFlow" },
+        { id: "sens-chart-cost", title: "Total Cost", unit: "$M", scale: 1/1_000_000, key: "cost" },
+        { id: "sens-chart-cpf",  title: "Cost / Flow", unit: "$/Mbps", scale: 1, key: "cpf" },
+        { id: "sens-chart-latency-min", title: "Latency (min)", unit: "min", scale: 1, key: "latMin" },
+        { id: "sens-chart-latency-p50", title: "Latency (p50)", unit: "min", scale: 1, key: "latP50" },
       ];
 
       for (const cfg of chartConfigs) {
@@ -1110,6 +1115,7 @@ export class SimUi {
           },
         });
         chart._sensScale = cfg.scale;
+        chart._metricKey = cfg.key;
         chart._xDim = xDim;
         chart._seriesDim = seriesDim;
         chart._thirdDim = thirdDim;
@@ -1118,24 +1124,20 @@ export class SimUi {
     };
 
     /**
-     * Push one data point into all 4 charts.
-     * @param {object} scenario - { ringCount, laserTechImprovement, launchDate, satellites }
-     * @param {number} flowMbps - total flow in Mbps
-     * @param {number} totalCost - total cost in $
-     * @param {number} costPerMbps - $/Mbps
-     * @param {number} satCount - satellite count
+     * Push one scenario's metrics into every chart, matched by chart._metricKey.
+     * @param {object} scenario - { ringCount, laserTechImprovement, launchDate }
+     * @param {object} metrics  - { sats, flow, earthFlow, marsFlow, relayFlow,
+     *                              cost, cpf, latMin, latP50 } (raw, pre-scale)
      */
-    const pushChartPoint = (scenario, flowMbps, totalCost, costPerMbps, satCount) => {
-      const values = [satCount, flowMbps, totalCost, costPerMbps];
-      for (let ci = 0; ci < sensCharts.length; ci++) {
-        const chart = sensCharts[ci];
+    const pushChartPoint = (scenario, metrics) => {
+      for (const chart of sensCharts) {
         if (!chart) continue;
         const xDim = chart._xDim;
         const xVal = String(xDim === "rings" ? scenario.ringCount : xDim === "tech" ? scenario.laserTechImprovement : scenario.launchDate);
         const xIdx = chart.data.labels.indexOf(xVal);
         if (xIdx < 0) continue;
 
-        // Find matching dataset
+        const v = metrics[chart._metricKey];
         for (const ds of chart.data.datasets) {
           const seriesMatch = chart._seriesDim == null || String(ds._seriesVal) === String(
             chart._seriesDim === "rings" ? scenario.ringCount : chart._seriesDim === "tech" ? scenario.laserTechImprovement : scenario.launchDate
@@ -1144,10 +1146,7 @@ export class SimUi {
             chart._thirdDim === "rings" ? scenario.ringCount : chart._thirdDim === "tech" ? scenario.laserTechImprovement : scenario.launchDate
           );
           if (seriesMatch && thirdMatch) {
-            // Guard against non-finite metrics: cost/flow is Infinity when a
-            // scenario has zero flow, and a single Infinity blows out the chart's
-            // y-axis. Plot a gap (null) instead.
-            const v = values[ci];
+            // Non-finite (cost/flow Infinity at zero flow, latency when no route) → gap.
             ds.data[xIdx] = Number.isFinite(v) ? v * chart._sensScale : null;
             break;
           }
@@ -1330,6 +1329,25 @@ export class SimUi {
               );
               const capacityInfo = this.simMain.capacityInfo;
               const rs = this.simMain.routeSummary;
+              const ld = this.simMain.lastLatencyData;
+
+              // Per-segment flow capacities (Mbps): a ring's min cross-section is
+              // 2 × its narrowest in-ring link.
+              const ringMin = (name) => {
+                const a = capacityInfo?.ringCapacities?.[name]?.inring;
+                return a && a.length ? 2 * Math.min(...a) : null;
+              };
+              const metrics = {
+                sats: this.simMain.satellitesCount,
+                flow: (result.data?.[0]?.maxFlowGbps ?? 0) * 1000, // achieved max-flow, Mbps
+                earthFlow: ringMin("ring_earth"),
+                marsFlow: ringMin("ring_mars"),
+                relayFlow: rs?.totalThroughput ?? null,            // relay aggregate capacity
+                cost: costs.totalCosts,
+                cpf: costs.costPerMbps,
+                latMin: ld?.bestLatency != null ? ld.bestLatency / 60 : null,   // minutes
+                latP50: ld?.medianLatency != null ? ld.medianLatency / 60 : null,
+              };
 
               result.scenario = {
                 ringCount: ringCount ?? "(current)",
@@ -1340,14 +1358,14 @@ export class SimUi {
               result.liveMetrics = {
                 satellites: this.simMain.satellitesCount,
                 costs,
+                metrics,
                 capacityInfo: capacityInfo ? JSON.parse(JSON.stringify(capacityInfo)) : null,
                 routeSummary: rs ? { ...rs } : null,
               };
               resultArray.push(result);
 
               // --- Push to real-time charts ---
-              const flowMbps = rs?.totalThroughput ?? (result.data?.[0]?.maxFlowGbps ?? 0) * 1000;
-              pushChartPoint(result.scenario, flowMbps, costs.totalCosts, costs.costPerMbps, this.simMain.satellitesCount);
+              pushChartPoint(result.scenario, metrics);
 
               completed++;
               const pct = Math.round((completed / totalScenarios) * 100);

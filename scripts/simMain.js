@@ -1840,6 +1840,7 @@ export class SimMain {
 
           // Calculate latency data
           const latencyData = this.simNetwork.calculateLatencies(networkData);
+          this.lastLatencyData = latencyData; // surfaced to the sensitivity capture
 
           const costs = this.calculateCosts(networkData.maxFlowGbps, this.resultTrees);
 
