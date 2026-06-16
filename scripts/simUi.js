@@ -1005,6 +1005,21 @@ export class SimUi {
       sensCharts = [];
     };
 
+    // Collapsible secondary charts: keep the high-level set visible, hide the
+    // breakdown by default. Resize on expand since charts created while the div is
+    // hidden start at zero size.
+    const chartsToggle = document.getElementById("sens-charts-toggle");
+    const chartsSecondary = document.getElementById("sens-charts-secondary");
+    if (chartsToggle && chartsSecondary) {
+      chartsToggle.addEventListener("click", () => {
+        const show = chartsSecondary.hidden;
+        chartsSecondary.hidden = !show;
+        chartsToggle.setAttribute("aria-expanded", String(show));
+        chartsToggle.classList.toggle("expanded", show);
+        if (show) for (const c of sensCharts) if (c) c.resize();
+      });
+    }
+
     /**
      * Build the 3 Chart.js instances for flow / cost / cost-per-flow.
      * @param {string[]} enabledDims - e.g. ["rings"], ["rings","tech"], ["rings","tech","date"]
@@ -1029,6 +1044,9 @@ export class SimUi {
         { id: "sens-chart-earth-flow", title: "Earth flow (min)", unit: "Gbps", scale: 1/1000, key: "earthFlow" },
         { id: "sens-chart-mars-flow", title: "Mars flow (min)", unit: "Gbps", scale: 1/1000, key: "marsFlow" },
         { id: "sens-chart-relay-flow", title: "Relay flow (aggregate)", unit: "Gbps", scale: 1/1000, key: "relayFlow" },
+        { id: "sens-chart-earth-sats", title: "Earth ring satellites", unit: "", scale: 1, key: "earthSats" },
+        { id: "sens-chart-relay-sats", title: "Relay ring satellites", unit: "", scale: 1, key: "relaySats" },
+        { id: "sens-chart-mars-sats", title: "Mars ring satellites", unit: "", scale: 1, key: "marsSats" },
         { id: "sens-chart-cost", title: "Total Cost", unit: "$M", scale: 1/1_000_000, key: "cost" },
         { id: "sens-chart-cpf",  title: "Cost / Flow", unit: "$/Mbps", scale: 1, key: "cpf" },
         { id: "sens-chart-latency-min", title: "Latency (min)", unit: "min", scale: 1, key: "latMin" },
@@ -1337,8 +1355,18 @@ export class SimUi {
                 const a = capacityInfo?.ringCapacities?.[name]?.inring;
                 return a && a.length ? 2 * Math.min(...a) : null;
               };
+              // Satellites per area, aggregated from the cost trees by ring.
+              let earthSats = 0, marsSats = 0, relaySats = 0;
+              for (const orbit of this.simMain.resultTrees || []) {
+                const rn = orbit.ringName || "";
+                const c = orbit.satCount || 0;
+                if (rn === "ring_earth") earthSats += c;
+                else if (rn === "ring_mars") marsSats += c;
+                else relaySats += c; // adapted / circular / eccentric
+              }
               const metrics = {
                 sats: this.simMain.satellitesCount,
+                earthSats, relaySats, marsSats,
                 flow: (result.data?.[0]?.maxFlowGbps ?? 0) * 1000, // achieved max-flow, Mbps
                 earthFlow: ringMin("ring_earth"),
                 marsFlow: ringMin("ring_mars"),

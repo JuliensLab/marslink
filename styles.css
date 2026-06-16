@@ -1099,6 +1099,27 @@ select.slider {
   margin-top: 6px;
 }
 
+/* Sensitivity: toggle for the collapsible secondary (breakdown) charts. */
+.sens-charts-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  margin: var(--s-3) 0 var(--s-1);
+  padding: 6px 8px;
+  font: inherit;
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+  text-align: left;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-1);
+  border-radius: var(--r-1);
+  cursor: pointer;
+}
+.sens-charts-toggle:hover { color: var(--text-1); background: rgba(255, 255, 255, 0.05); }
+.sens-charts-toggle .arrow { transition: transform 120ms ease; }
+.sens-charts-toggle.expanded .arrow { transform: rotate(90deg); }
+
 .main-data {
   color: var(--text-0);
 }
