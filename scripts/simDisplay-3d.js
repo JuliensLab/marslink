@@ -1,12 +1,12 @@
 // simDisplay-3d.js
 
 import * as THREE from "three";
-import { OrbitControls } from "three/addons/controls/OrbitControls.js?v=4.3";
-import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js?v=4.3";
-import { RenderPass } from "three/addons/postprocessing/RenderPass.js?v=4.3";
-import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js?v=4.3";
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.3";
-import { createCarModel } from "./modelCar.js?v=4.3";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js?v=4.6";
+import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js?v=4.6";
+import { RenderPass } from "three/addons/postprocessing/RenderPass.js?v=4.6";
+import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js?v=4.6";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.6";
+import { createCarModel } from "./modelCar.js?v=4.6";
 
 /**
  * Converts astronomical units (AU) to 3D units using a scale factor.
@@ -15,7 +15,7 @@ import { createCarModel } from "./modelCar.js?v=4.3";
  * @returns {number} Distance in 3D units
  */
 
-import { SIM_CONSTANTS } from "./simConstants.js";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.6";
 
 export let sunScaleFactor = SIM_CONSTANTS.SUN_SCALE_FACTOR;
 export let planetScaleFactor = SIM_CONSTANTS.PLANET_SCALE_FACTOR;

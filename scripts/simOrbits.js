@@ -1,6 +1,6 @@
 // simOrbits.js
 
-import { SIM_CONSTANTS } from "./simConstants.js";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.6";
 
 /**
  * Computes heliocentric coordinates and rotation angles for an object based on its Keplerian orbital elements.

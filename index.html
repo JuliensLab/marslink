@@ -3,12 +3,29 @@
 
 <head>
   <meta charset="UTF-8">
-  <title>Marslink</title>
+
+  <title>Marslink — Earth–Mars satellite constellation simulator</title>
   <meta name="description"
     content="A simulation of Marslink, a projected heliocentric satellite constellation to link Earth and Mars via SpaceX satellites. Developed by Julien Villa-Massone. Not affiliated with SpaceX.">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <script src="scripts/imported/chart/chart.js?v=4.4"></script>
-  <link rel="stylesheet" href="styles.css?v=4.4">
+  <link rel="canonical" href="https://marslink.io/">
+  <meta name="theme-color" content="#0b0f1a">
+  <meta name="author" content="Julien Villa-Massone">
+
+  <!-- Open Graph / link previews (X, Slack, Discord, iMessage, …). -->
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://marslink.io/">
+  <meta property="og:title" content="Marslink — Earth–Mars satellite constellation simulator">
+  <meta property="og:description" content="A heliocentric SpaceX-style relay constellation linking Earth and Mars. Distances and physics to scale.">
+  <meta property="og:image" content="https://marslink.io/img/og.jpg">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:creator" content="@julienvm">
+
+  <!-- Inline SVG favicon — no extra request, scales nicely. Same ◉ as the brand. -->
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230b0f1a'/%3E%3Ccircle cx='16' cy='16' r='8' fill='none' stroke='%23ff6b35' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='3' fill='%23ff6b35'/%3E%3C/svg%3E">
+
+  <script src="scripts/imported/chart/chart.js?v=4.6"></script>
+  <link rel="stylesheet" href="styles.css?v=4.6">
 </head>
 
 <body>
@@ -34,12 +51,21 @@
       <button class="mode-tab" data-mode="sensitivity" role="tab">
         <span class="tab-icon" aria-hidden="true">◫</span> Sensitivity
       </button>
-      <button class="mode-tab" data-mode="run" role="tab">
-        <span class="tab-icon" aria-hidden="true">▶</span> Full Run
-      </button>
     </nav>
 
     <div class="top-bar-actions">
+      <div class="help-wrapper">
+        <button id="auth-btn" class="auth-btn" aria-label="Log in" aria-expanded="false">Login</button>
+        <div id="auth-popup" class="help-popup auth-popup" hidden>
+          <h3>Login</h3>
+          <p>Enter the site password to enable the Lambert solver.</p>
+          <form class="auth-form" autocomplete="off">
+            <input type="password" name="password" placeholder="Password" autocomplete="current-password" required>
+            <button type="submit" class="btn btn-primary">Sign in</button>
+          </form>
+          <div class="auth-status muted" role="status" aria-live="polite"></div>
+        </div>
+      </div>
       <div class="help-wrapper">
         <button id="help-btn" class="icon-btn" aria-label="Help" aria-expanded="false">?</button>
         <div id="help-popup" class="help-popup" hidden>
@@ -144,9 +170,9 @@
             Laser tech improvement
           </label>
           <div class="sens-row" style="display:flex; gap:var(--s-2); align-items:center;">
-            <input type="number" id="sens-tech-start" value="4" min="1" max="1048576" style="width:60px;">
+            <input type="number" id="sens-tech-start" value="32" min="1" max="1048576" style="width:60px;">
             <span class="muted">to</span>
-            <input type="number" id="sens-tech-end" value="64" min="1" max="1048576" style="width:60px;">
+            <input type="number" id="sens-tech-end" value="256" min="1" max="1048576" style="width:60px;">
             <span class="muted">step</span>
             <select id="sens-tech-progression" style="width:80px;">
               <option value="pow2" selected>x2</option>
@@ -171,60 +197,30 @@
           </div>
         </div>
 
-        <div style="margin-top:var(--s-3);">
-          <button id="startSensitivity" class="btn btn-primary" style="width:100%;">Run Sensitivity</button>
+        <div class="form-group" style="margin-top:var(--s-2);">
+          <div class="sens-row" style="display:flex; gap:var(--s-2); align-items:center;">
+            <span class="muted">Display each step for</span>
+            <input type="number" id="sens-keep-step" value="0" min="0" max="60" style="width:50px;">
+            <span class="muted">seconds</span>
+          </div>
+        </div>
+        <div id="sens-estimate" class="muted" style="margin-top:var(--s-2);"></div>
+        <div style="margin-top:var(--s-3); display:flex; gap:var(--s-2);">
+          <button id="startSensitivity" class="btn btn-primary" style="flex:1;">Run Sensitivity</button>
+          <button id="stopSensitivity" class="btn" style="display:none;">Stop</button>
         </div>
         <div id="sens-progress-wrap" style="margin-top:var(--s-2); display:none;">
           <div class="progress-bar-container"><div id="sens-progress-bar" class="progress-bar" style="width:0%;"></div></div>
           <span id="sens-progress-text" class="muted">0%</span>
         </div>
-      </div>
-    </div>
-
-    <!-- Run pane -->
-    <div id="run-pane" class="drawer-pane" hidden>
-      <header class="drawer-header">
-        <h2>Full Run</h2>
-        <button class="icon-btn drawer-close" data-close-drawer aria-label="Close">×</button>
-      </header>
-
-      <div class="drawer-body">
-        <p class="muted">
-          Sweep multiple scenarios across improvement scores, deployment dates,
-          ring counts and in-ring throughputs. Results open in a separate page.
-        </p>
-
-        <div class="form-group">
-          <label for="fullRunImprovementScores">Improvement scores</label>
-          <input type="text" id="fullRunImprovementScores" placeholder="256,512,1024">
-          <span class="form-hint">comma-separated</span>
-        </div>
-        <div class="form-group">
-          <label for="fullRunDates">Dates</label>
-          <input type="text" id="fullRunDates" placeholder="2034-08-19,2027-02-19">
-          <span class="form-hint">yyyy-mm-dd, comma-separated</span>
-        </div>
-        <div class="form-group">
-          <label for="fullRunRingCounts">Ring counts</label>
-          <input type="text" id="fullRunRingCounts" placeholder="2,3,4,5,6">
-          <span class="form-hint">comma-separated</span>
-        </div>
-        <div class="form-group">
-          <label for="fullRunMbps">In-ring throughput</label>
-          <input type="text" id="fullRunMbps" placeholder="25,50,100">
-          <span class="form-hint">Mbps, comma-separated</span>
-        </div>
-
-        <button id="startFullRun" class="btn btn-primary btn-block">Start Full Run</button>
-
-        <div id="long-term-results">
-          <div id="long-term-summary-run">
-            <h3>Run progress</h3>
-            <div id="progress-container-run">
-              <div id="progress-bar-run"></div>
-            </div>
-            <p id="progress-text-run">Idle</p>
-            <pre id="long-term-summary-run-text"></pre>
+        <div id="sens-charts" style="display:none; margin-top:var(--s-3);">
+          <div id="sens-fixed-dims" class="muted" style="margin-bottom:var(--s-2); font-size:12px;"></div>
+          <div class="chart-wrap"><canvas id="sens-chart-sats"></canvas></div>
+          <div class="chart-wrap"><canvas id="sens-chart-flow"></canvas></div>
+          <div class="chart-wrap"><canvas id="sens-chart-cost"></canvas></div>
+          <div class="chart-wrap"><canvas id="sens-chart-cpf"></canvas></div>
+          <div id="sens-download-wrap" style="display:none; margin-top:var(--s-2);">
+            <button id="sens-download-btn" class="btn" style="width:100%;">Download Results JSON</button>
           </div>
         </div>
       </div>
@@ -294,7 +290,7 @@
       }
     }
   </script>
-  <script type="module" src="scripts/simMain.js?v=4.4"></script>
+  <script type="module" src="scripts/simMain.js?v=4.6"></script>
 </body>
 
 </html>

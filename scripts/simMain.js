@@ -1,18 +1,18 @@
 // simMain.js
 
-import { SimUi } from "./simUi.js?v=4.3";
-import { SimTime } from "./simTime.js?v=4.3";
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.3";
-import { SimSatellites } from "./simSatellites.js?v=4.3";
-import { SimDeployment } from "./simDeployment.js?v=4.3";
-import { SimMissionValidator } from "./simMissionValidator.js?v=4.3";
-import { SimLinkBudget } from "./simLinkBudget.js?v=4.3";
-import { SimNetwork } from "./simNetwork.js?v=4.3";
+import { SimUi } from "./simUi.js?v=4.6";
+import { SimTime } from "./simTime.js?v=4.6";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.6";
+import { SimSatellites } from "./simSatellites.js?v=4.6";
+import { SimDeployment } from "./simDeployment.js?v=4.6";
+import { SimMissionValidator } from "./simMissionValidator.js?v=4.6";
+import { SimLinkBudget } from "./simLinkBudget.js?v=4.6";
+import { SimNetwork } from "./simNetwork.js?v=4.6";
 // Import both SimDisplay implementations with unique names
-import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=4.3";
-import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=4.3";
-import { generateReport } from "./reportGenerator.js?v=4.3";
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.3";
+import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=4.6";
+import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=4.6";
+import { generateReport } from "./reportGenerator.js?v=4.6";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.6";
 
 export class SimMain {
   // Clamp argument to [-1, 1] to prevent NaN from Math.asin domain errors
@@ -35,7 +35,7 @@ export class SimMain {
     this.simNetwork = new SimNetwork(this.simLinkBudget, this.simSatellites);
 
     // --- Worker + triple-buffered window cache (-1/0/+1) ---
-    this.simWorker = new Worker(new URL("./simWorker.js", import.meta.url), { type: "module" });
+    this.simWorker = new Worker(new URL("./simWorker.js?v=4.6", import.meta.url), { type: "module" });
     this.simWorker.onmessage = (event) => this.handleWorkerMessage(event);
     this.simWorker.onerror = (event) => console.error("[Marslink] Worker error:", event.message);
     this.simWorker.postMessage({ type: "init" });
@@ -637,6 +637,13 @@ export class SimMain {
 
     const totalCosts = totalLaunchCost + totalPropellantCost + totalSatellitesCost + totalLaserTerminalsCost;
 
+    // Wright's law savings: difference between no-learning cost (c1 * n) and actual
+    const noLearningLaunch = (this.costPerLaunch || 0) * 1_000_000 * totalLaunchCount;
+    const noLearningSat = (this.costPerSatellite || 0) * 1_000_000 * totalSatellitesCount;
+    const noLearningLaser = (this.costPerLaserTerminal || 0) * 1_000_000 * totalLaserCount;
+    const noLearningTotal = noLearningLaunch + noLearningSat + noLearningLaser + totalPropellantCost;
+    const wrightSavings = noLearningTotal - totalCosts;
+
     let costPerMbps = Infinity;
     if (maxFlowGbps) costPerMbps = Math.round(totalCosts / (maxFlowGbps * 1000));
 
@@ -654,6 +661,8 @@ export class SimMain {
       costPerMbps,
       propellantCostBreakdown,
       propellantMassBreakdown,
+      wrightSavings,
+      noLearningTotal,
     };
   }
 
@@ -687,16 +696,26 @@ export class SimMain {
         else if (rn === "ring_mars") { groups.mars.sats += orbit.satCount; groups.mars.ports = ports; }
         else { groups.adapted.sats += orbit.satCount; groups.adapted.ports = ports; }
       }
+      // Totals first so per-ring rows can show % of total laser ports.
+      let totalLasers = 0;
+      for (const g of Object.values(groups)) totalLasers += g.sats * g.ports;
+
+      const fmtPct = (ringPorts) => {
+        if (totalLasers <= 0) return "0%";
+        const p = (ringPorts / totalLasers) * 100;
+        // One decimal under 10%, whole numbers above — keeps the column tidy.
+        return p < 10 ? `${p.toFixed(1)}%` : `${Math.round(p)}%`;
+      };
+
       const ringLabel = (label, g) => {
         if (g.sats === 0) return "";
-        return `<div class="detail-row"><span class="detail-label">${label} <span style="color:var(--text-3)">${g.ports}p</span></span><span class="detail-value">${g.sats.toLocaleString()}</span></div>`;
+        const pct = fmtPct(g.sats * g.ports);
+        return `<div class="detail-row"><span class="detail-label">${label} <span style="color:var(--text-3)">${g.ports}p</span></span><span class="detail-value">${pct} · ${g.sats.toLocaleString()}</span></div>`;
       };
       html += ringLabel("Earth ring", groups.earth);
       html += ringLabel("Adapted rings", groups.adapted);
       html += ringLabel("Mars ring", groups.mars);
-      // Totals
-      let totalLasers = 0;
-      for (const g of Object.values(groups)) totalLasers += g.sats * g.ports;
+
       const totalFlights = this.resultTrees.reduce((s, o) => s + (o.deploymentFlights_count || 0), 0);
       html += `<div class="detail-row" style="border-top: 1px solid var(--border-1); padding-top: 4px; margin-top: 4px;"><span class="detail-label">Total laser ports</span><span class="detail-value">${totalLasers.toLocaleString()}</span></div>`;
       html += `<div class="detail-row"><span class="detail-label">Deployment flights</span><span class="detail-value">${totalFlights.toLocaleString()}</span></div>`;
@@ -724,6 +743,10 @@ export class SimMain {
         html += `<div class="detail-row" style="padding-left: 10px;"><span class="detail-label">${type} <span style="color:var(--text-3)">${fmtTons(massKg)}</span></span><span class="detail-value">${fmtM(cost)}</span></div>`;
       }
       html += `<div class="detail-row" style="border-top: 1px solid var(--border-1); padding-top: 4px; margin-top: 4px;"><span class="detail-label" style="color: var(--text-1);">Total</span><span class="detail-value" style="color: var(--text-0);">${fmtM(costs.totalCosts)}</span></div>`;
+      if (costs.wrightSavings > 0) {
+        const pct = Math.round(costs.wrightSavings / costs.noLearningTotal * 100);
+        html += `<div class="detail-row" style="margin-top: 4px;"><span class="detail-label" style="color: var(--accent);">Wright's law savings</span><span class="detail-value" style="color: var(--accent);">−${fmtM(costs.wrightSavings)} (${pct}%)</span></div>`;
+      }
       html += `</div></div>`;
     }
 
@@ -992,6 +1015,8 @@ export class SimMain {
   }
 
   updatePerfPanel() {
+    // Refresh sensitivity estimate whenever worker timings change
+    if (this.ui?._updateSensEstimate) this.ui._updateSensEstimate();
     const el = document.getElementById("perf-area-content");
     if (!el) return;
     let html = "";
@@ -1207,9 +1232,6 @@ export class SimMain {
     this.missionProfiles = result.missionProfilesData || null;
     this.resultTrees = result.resultTreesData || [];
     this._maybeAutoRefreshReport();
-    // Simple-config ring count slider feedback loop: if armed, rescale the
-    // earth / mars in-ring mbps to match the measured adapted-ring capacity.
-    if (this.ui?.runSimpleFeedbackStep) this.ui.runSimpleFeedbackStep();
     if (typeof result.satellitesCount === "number") this.satellitesCount = result.satellitesCount;
 
     if (this.simDisplay) {
@@ -1397,6 +1419,10 @@ export class SimMain {
    * -1/0/+1 window buffer. The main thread never blocks on link computation.
    */
   updateLoop() {
+    // During sensitivity runs, skip the entire update loop to prevent
+    // stale worker results from flashing old links on new satellites.
+    if (this._sensitivityRunning) return;
+
     let simDate = this.simTime.getDate();
     if (this.ui) this.ui.updateSimTime(simDate);
     const planets = this.simSolarSystem.updatePlanetsPositions(simDate);
@@ -1520,14 +1546,18 @@ export class SimMain {
 
   startSimulationLoop() {
     const loop = () => {
-      this.updateLoop();
+      try {
+        this.updateLoop();
+      } catch (e) {
+        console.error("[Marslink] updateLoop error:", e);
+      }
       requestAnimationFrame(loop);
     };
     loop();
   }
 
   // Assuming this is within a class context
-  async longTermRun(dates) {
+  async longTermRun(dates, { skipDisplay = false, useTimeout = false } = {}) {
     const data = [];
     const calctimeMs = 20000;
 
@@ -1582,12 +1612,14 @@ export class SimMain {
           // Retrieve network data
           networkData = this.simNetwork.getNetworkData(planets, satellites, possibleLinks, calctimeMs);
 
-          // Update the display
-          this.removeLinks();
-          this.simDisplay.updatePositions(planets, satellites);
-          this.simDisplay.updatePossibleLinks(possibleLinks);
-          this.simDisplay.updateActiveLinks(networkData.links);
-          this.simDisplay.animate();
+          // Update the display (skip during batch sensitivity runs)
+          if (!skipDisplay && this.simDisplay) {
+            this.removeLinks();
+            this.simDisplay.updatePositions(planets, satellites);
+            this.simDisplay.updatePossibleLinks(possibleLinks);
+            this.simDisplay.updateActiveLinks(networkData.links);
+            this.simDisplay.animate();
+          }
 
           // Calculate latency data
           const latencyData = this.simNetwork.calculateLatencies(networkData);
@@ -1622,12 +1654,15 @@ export class SimMain {
           return;
         }
 
-        // Schedule the next simulation step
-        requestAnimationFrame(step);
+        // Schedule the next simulation step. Use setTimeout for batch runs
+        // — rAF can stall if the animation loop crashes.
+        const schedule = (useTimeout || skipDisplay) ? (fn) => setTimeout(fn, 0) : requestAnimationFrame;
+        schedule(step);
       };
 
       // Start the simulation
-      requestAnimationFrame(step);
+      const schedule = (useTimeout || skipDisplay) ? (fn) => setTimeout(fn, 0) : requestAnimationFrame;
+      schedule(step);
     });
   }
 

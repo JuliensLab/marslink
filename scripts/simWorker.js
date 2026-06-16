@@ -9,12 +9,12 @@
 // Loaded as an ES module worker:
 //   new Worker(new URL("./simWorker.js", import.meta.url), { type: "module" })
 
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.5";
-import { SimSatellites } from "./simSatellites.js?v=4.5";
-import { SimLinkBudget } from "./simLinkBudget.js?v=4.5";
-import { SimNetwork } from "./simNetwork.js?v=4.5";
-import { SimDeployment } from "./simDeployment.js?v=4.5";
-import { SimMissionValidator } from "./simMissionValidator.js?v=4.5";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.6";
+import { SimSatellites } from "./simSatellites.js?v=4.6";
+import { SimLinkBudget } from "./simLinkBudget.js?v=4.6";
+import { SimNetwork } from "./simNetwork.js?v=4.6";
+import { SimDeployment } from "./simDeployment.js?v=4.6";
+import { SimMissionValidator } from "./simMissionValidator.js?v=4.6";
 
 // --- State (initialized lazily on the first compute) ---
 let simLinkBudget = null;

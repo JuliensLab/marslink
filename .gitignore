@@ -7,6 +7,10 @@
 /node_modules/
 .aider*
 
+# Regenerable build mirror (produced by deploy.sh) and scratch junk
+/deploy/
+/__queuestorage__/
+
 # Nyx MCP credentials (never commit — use env var NYX_API_KEY or this local file)
 /api/nyx/config.local.php
 

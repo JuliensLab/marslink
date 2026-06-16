@@ -5,8 +5,8 @@
  * with pan and zoom (mouse & touch).
  ***********************************************/
 
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.3";
-import { createCarModel } from "./modelCar.js?v=4.3";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.6";
+import { createCarModel } from "./modelCar.js?v=4.6";
 
 /**
  * Converts astronomical units (AU) to 3D units using a scale factor.

@@ -153,7 +153,9 @@ h4 { font-size: var(--fs-sm); color: var(--text-1); }
   backdrop-filter: var(--backdrop-blur);
   -webkit-backdrop-filter: var(--backdrop-blur);
   border-bottom: 1px solid var(--border-1);
-  z-index: 30;
+  /* Above the report popup-panel (z-index 50) so help/login dropdowns aren't
+     occluded when expanded over an open Deployment report. */
+  z-index: 80;
 }
 
 .brand {
@@ -1733,4 +1735,66 @@ details.flight-row[open] > summary {
 
 .report .assumptions {
   margin-top: var(--s-4);
+}
+
+/* ─────────────── Login (top bar) ─────────────── */
+.auth-btn {
+  height: 28px;
+  padding: 0 var(--s-3);
+  background: var(--bg-2);
+  color: var(--text-1);
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-1);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  transition: background 120ms, color 120ms, border-color 120ms;
+}
+.auth-btn:hover {
+  background: var(--bg-3, var(--bg-2));
+  color: var(--text-0);
+  border-color: var(--border-3, var(--border-2));
+}
+
+.auth-popup {
+  width: 280px;
+}
+.auth-form {
+  display: flex;
+  gap: var(--s-2);
+  margin-top: var(--s-2);
+}
+.auth-form input[type="password"] {
+  flex: 1;
+  height: 30px;
+  padding: 0 var(--s-2);
+  background: var(--bg-1);
+  color: var(--text-0);
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-1);
+  font-size: var(--fs-sm);
+}
+.auth-form input[type="password"]:focus {
+  outline: none;
+  border-color: var(--accent, #4a9eff);
+}
+.auth-form .btn {
+  height: 30px;
+  padding: 0 var(--s-3);
+}
+.auth-status {
+  min-height: 1.2em;
+  margin-top: var(--s-2);
+  font-size: var(--fs-xs);
+}
+
+.lambert-placeholder-auth {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-2);
+}
+.lambert-placeholder-auth .btn {
+  height: 26px;
+  padding: 0 var(--s-3);
+  font-size: var(--fs-xs);
 }

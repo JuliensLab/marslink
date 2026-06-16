@@ -15,13 +15,62 @@ error_reporting(E_ERROR);
 ini_set('display_errors', '0');
 
 header('Content-Type: application/json');
-header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Methods: POST, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type');
 
-// Handle CORS preflight
+// Configuration — load once for CORS, auth check, and the Nyx call below.
+$NYX_MCP_URL = 'https://platform.nyxspace.com/mcp';
+$NYX_API_KEY = getenv('NYX_API_KEY') ?: '';
+$AUTH_HASH = '';
+$ALLOWED_ORIGINS = [];
+$DEBUG = false;
+$configPath = __DIR__ . '/config.local.php';
+if (file_exists($configPath)) {
+    $cfg = require $configPath;
+    if (!$NYX_API_KEY) $NYX_API_KEY = $cfg['api_key'] ?? '';
+    $AUTH_HASH = strtolower(trim($cfg['auth_hash'] ?? ''));
+    $ALLOWED_ORIGINS = $cfg['allowed_origins'] ?? [];
+    $DEBUG = !empty($cfg['debug']);
+}
+
+// CORS — only allow listed origins. Same-origin requests don't need this
+// (browsers don't send Origin or skip the check), so an empty allow list is
+// the safe default for a single-domain deploy.
+$origin = $_SERVER['HTTP_ORIGIN'] ?? '';
+if ($origin !== '' && in_array($origin, $ALLOWED_ORIGINS, true)) {
+    header("Access-Control-Allow-Origin: $origin");
+    header('Vary: Origin');
+    header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
+    header('Access-Control-Allow-Headers: Content-Type, X-Auth');
+}
+
+// CORS preflight
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(204);
+    exit;
+}
+
+// Shared-password auth gate. Client sends SHA-256(password) in X-Auth; we
+// compare to the hash configured in config.local.php via hash_equals (timing-
+// safe). auth_not_configured = admin has not set auth_hash yet.
+if ($AUTH_HASH === '') {
+    http_response_code(401);
+    echo json_encode(['error' => 'auth_not_configured']);
+    exit;
+}
+$provided = strtolower(trim($_SERVER['HTTP_X_AUTH'] ?? ''));
+if (strlen($provided) !== 64 || !hash_equals($AUTH_HASH, $provided)) {
+    // Sleep on every auth failure so a brute-force attacker is rate-limited
+    // to ~4 attempts/sec per connection. Cheap and effective against casual
+    // guessing; not a defense against a determined attacker with many IPs.
+    usleep(250000);
+    http_response_code(401);
+    echo json_encode(['error' => 'auth_required']);
+    exit;
+}
+
+// Lightweight verification endpoint used by the login UI to check the
+// password without triggering a real Lambert call.
+if ($_SERVER['REQUEST_METHOD'] === 'GET' && ($_GET['ping'] ?? '') === '1') {
+    echo json_encode(['ok' => true]);
     exit;
 }
 
@@ -31,19 +80,6 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     exit;
 }
 
-// Configuration
-$NYX_MCP_URL = 'https://platform.nyxspace.com/mcp';
-// API key resolution order:
-//   1. NYX_API_KEY environment variable
-//   2. api/nyx/config.local.php (untracked — see .gitignore)
-$NYX_API_KEY = getenv('NYX_API_KEY') ?: '';
-if (!$NYX_API_KEY) {
-    $configPath = __DIR__ . '/config.local.php';
-    if (file_exists($configPath)) {
-        $cfg = require $configPath;
-        $NYX_API_KEY = $cfg['api_key'] ?? '';
-    }
-}
 if (!$NYX_API_KEY) {
     http_response_code(500);
     echo json_encode(['error' => 'Nyx API key not configured (set NYX_API_KEY env var or create api/nyx/config.local.php)']);
@@ -51,28 +87,13 @@ if (!$NYX_API_KEY) {
 }
 $TIMEOUT = 30;
 
-// Session file for persistence across requests
-$SESSION_FILE = sys_get_temp_dir() . '/marslink_nyx_session.json';
-
-function loadSession() {
-    global $SESSION_FILE;
-    if (file_exists($SESSION_FILE)) {
-        $data = json_decode(file_get_contents($SESSION_FILE), true);
-        if ($data && isset($data['sessionId']) && (time() - $data['time']) < 3600) {
-            return $data;
-        }
-    }
-    return ['sessionId' => null, 'initialized' => false, 'rpcId' => 0, 'time' => time()];
-}
-
-function saveSession($session) {
-    global $SESSION_FILE;
-    $session['time'] = time();
-    file_put_contents($SESSION_FILE, json_encode($session));
-}
+// No on-disk session persistence — every request gets a fresh MCP session.
+// On shared hosting (Hosting24) /tmp can be writable by other tenants and
+// concurrent users would race-write the file. Adds ~1s of init latency per
+// Lambert call; the Lambert solve itself is the dominant cost anyway.
 
 function mcpRequest($method, $params, &$session) {
-    global $NYX_MCP_URL, $NYX_API_KEY, $TIMEOUT;
+    global $NYX_MCP_URL, $NYX_API_KEY, $TIMEOUT, $DEBUG;
 
     $session['rpcId']++;
     $body = [
@@ -107,7 +128,8 @@ function mcpRequest($method, $params, &$session) {
         CURLOPT_HTTPHEADER => $headers,
         CURLOPT_RETURNTRANSFER => false,
         CURLOPT_TIMEOUT => $TIMEOUT,
-        CURLOPT_SSL_VERIFYPEER => false,
+        CURLOPT_SSL_VERIFYPEER => true,
+        CURLOPT_SSL_VERIFYHOST => 2,
         CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
         // Keep reading even when no data flows — the Nyx server sends a
         // keepalive SSE event immediately, then pauses while computing the
@@ -133,13 +155,17 @@ function mcpRequest($method, $params, &$session) {
     $error = curl_error($ch);
     $curlErrno = curl_errno($ch);
 
-    // Debug to PHP server stderr (visible in terminal)
-    $debug = "=== MCP $method ===\n";
-    $debug .= "HTTP $httpCode | cURL errno=$curlErrno | body=" . strlen($respBody) . " bytes\n";
-    $debug .= "Headers:\n$respHeaders\n";
-    $debug .= "Body:\n$respBody\n";
-    $debug .= "===================\n";
-    file_put_contents('php://stderr', $debug);
+    // Debug to PHP server stderr — only when explicitly enabled in
+    // config.local.php. The dump includes the Authorization header (our Nyx
+    // Bearer token), so it must not be on by default in production.
+    if ($DEBUG) {
+        $debug = "=== MCP $method ===\n";
+        $debug .= "HTTP $httpCode | cURL errno=$curlErrno | body=" . strlen($respBody) . " bytes\n";
+        $debug .= "Headers:\n$respHeaders\n";
+        $debug .= "Body:\n$respBody\n";
+        $debug .= "===================\n";
+        file_put_contents('php://stderr', $debug);
+    }
 
     if ($error) {
         throw new Exception("cURL error ($curlErrno): $error");
@@ -202,13 +228,13 @@ function ensureInitialized(&$session) {
         CURLOPT_HTTPHEADER => $headers,
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_TIMEOUT => 10,
-        CURLOPT_SSL_VERIFYPEER => false,
+        CURLOPT_SSL_VERIFYPEER => true,
+        CURLOPT_SSL_VERIFYHOST => 2,
         CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
     ]);
     curl_exec($ch);
 
     $session['initialized'] = true;
-    saveSession($session);
 }
 
 // Main handler
@@ -220,7 +246,8 @@ try {
         exit;
     }
 
-    $session = loadSession();
+    // Fresh session each request (see note above mcpRequest).
+    $session = ['sessionId' => null, 'initialized' => false, 'rpcId' => 0];
 
     // Retry once on session expiry
     for ($attempt = 0; $attempt < 2; $attempt++) {
@@ -257,17 +284,11 @@ try {
                 'arguments' => $toolArgs,
             ], $session);
 
-            saveSession($session);
-
             if (isset($resp['error'])) {
                 throw new Exception('Lambert solver failed: ' . ($resp['error']['message'] ?? 'unknown'));
             }
 
-            // Return full MCP response for debugging + the extracted result
-            echo json_encode([
-                'result' => $resp['result'],
-                '_debug_full_mcp_response' => $resp,
-            ]);
+            echo json_encode(['result' => $resp['result']]);
             exit;
 
         } catch (Exception $e) {

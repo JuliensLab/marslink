@@ -1,6 +1,6 @@
 // slidersData.js
 
-import { SIM_CONSTANTS } from "./simConstants.js";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.6";
 
 export const slidersData = {
   display: {
@@ -346,11 +346,11 @@ export const slidersData = {
     requiredmbpsbetweensats: {
       label: "Throughput in ring",
       min: 0,
-      max: 999,
-      value: 50,
+      max: 100,
+      value: 7,
       step: 1,
       unit: " Mbps",
-      scale: "linear",
+      scale: "quadratic",
       updateLongTermScore: true,
     },
   },
@@ -386,11 +386,11 @@ export const slidersData = {
     requiredmbpsbetweensats: {
       label: "Average throughput in ring",
       min: 0,
-      max: 999,
-      value: 50,
+      max: 100,
+      value: 7,
       step: 1,
       unit: " Mbps",
-      scale: "linear",
+      scale: "quadratic",
       updateLongTermScore: true,
     },
   },

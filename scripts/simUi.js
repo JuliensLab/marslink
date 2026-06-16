@@ -1,6 +1,7 @@
 // simUi.js
-import { slidersData } from "./slidersData.js?v=4.3";
-import { LukashianClock } from "./lukashianTime.js?v=4.4";
+import { slidersData } from "./slidersData.js?v=4.6";
+import { LukashianClock } from "./lukashianTime.js?v=4.6";
+import { wireAuthUi } from "./auth.js?v=4.6";
 
 export class SimUi {
   constructor(simMain) {
@@ -16,13 +17,12 @@ export class SimUi {
     this.setupSliderSearch();
     this.setupPresets();
     this.setupSimpleConfig();
-    this.setupFullRunForm();
     this.setupReportPanel();
     this.setupHelpPopup();
+    wireAuthUi();
     this.setupRightPanelToggle();
     this.setupSimTimeCycle();
     this.setupLinkLabelToggles();
-    this.setupFullRunButton();
     this.setupSensitivity();
   }
 
@@ -223,25 +223,6 @@ export class SimUi {
    * Sets up the Full Run form fields (loads saved values, persists on change).
    * The form markup itself lives in index.html (#run-pane).
    */
-  setupFullRunForm() {
-    const defaults = {
-      fullRunImprovementScores: "256,512,1024",
-      fullRunDates: "2034-08-19,2027-02-19",
-      fullRunRingCounts: "2,3,4,5,6",
-      fullRunMbps: "25,50,100",
-    };
-
-    for (const [id, fallback] of Object.entries(defaults)) {
-      const input = document.getElementById(id);
-      if (!input) continue;
-      input.value = localStorage.getItem(id) || fallback;
-      const persist = () => localStorage.setItem(id, input.value);
-      input.addEventListener("blur", persist);
-      input.addEventListener("keydown", (e) => {
-        if (e.key === "Enter") persist();
-      });
-    }
-  }
 
   /**
    * Wires the top-bar mode tabs and left-rail icon buttons.
@@ -253,7 +234,6 @@ export class SimUi {
     const simplePane = document.getElementById("simple-pane");
     const configurePane = document.getElementById("configure-pane");
     const sensitivityPane = document.getElementById("sensitivity-pane");
-    const runPane = document.getElementById("run-pane");
     const reportPanel = document.getElementById("report-panel");
 
     const setActiveButtons = (mode) => {
@@ -268,7 +248,6 @@ export class SimUi {
       simplePane.hidden = true;
       configurePane.hidden = true;
       sensitivityPane.hidden = true;
-      runPane.hidden = true;
     };
 
     const closeReportPanel = () => {
@@ -288,14 +267,13 @@ export class SimUi {
       this.activeMode = mode;
       setActiveButtons(mode);
 
-      if (mode === "simple" || mode === "configure" || mode === "sensitivity" || mode === "run") {
+      if (mode === "simple" || mode === "configure" || mode === "sensitivity") {
         closeReportPanel();
         modeDrawer.hidden = false;
         modeDrawer.setAttribute("aria-hidden", "false");
         simplePane.hidden = mode !== "simple";
         configurePane.hidden = mode !== "configure";
         sensitivityPane.hidden = mode !== "sensitivity";
-        runPane.hidden = mode !== "run";
       } else if (mode === "report") {
         closeDrawer();
         reportPanel.hidden = false;
@@ -594,11 +572,21 @@ export class SimUi {
       { toDisplay: signedPow2, toInternal: signedPow2Inv }
     );
 
-    // Laser tech improvement slider — pow2 scale
+    // Laser tech improvement slider — pow2 scale.
+    // Changing the laser tech rescales per-link capacity (and therefore the
+    // adapted-rings aggregate target), so we re-run the same defaults-and-
+    // feedback-loop the ring-count slider uses, keeping the Earth/Mars in-ring
+    // mbps locked to the new adapted capacity.
     const techRow = makeSliderRow("Laser tech improvement",
       { min: techData.min, max: techData.max, step: 1, unit: "x", value: techData.value },
       "simple-techfactor",
-      (val) => { this.applySliderValues({ "laser_technology.improvement-factor": val }); },
+      (val) => {
+        this.applySliderValues({ "laser_technology.improvement-factor": val });
+        const ringCount = parseFloat(
+          this.sliders.adapted_rings?.ringcount?.value ?? ringData.value
+        );
+        this.applySimpleDefaults(ringCount, { startFeedback: true });
+      },
       { toDisplay: (v) => Math.pow(2, v), toInternal: (v) => Math.round(Math.log2(v)) }
     );
 
@@ -665,7 +653,8 @@ export class SimUi {
     const e = ringType === "Mars" ? 0.0934231 : 0.0166967;
     const apo = a * (1 + e);
 
-    // Step 1: target capacity per link (2 links total)
+    // Step 1: target capacity per link (2 planet links, one per side).
+    // This is just a seed — the feedback loop corrects to the exact target.
     const targetPerLinkGbps = targetMbps / 2 / 1000;
     if (targetPerLinkGbps <= 0) return 50;
 
@@ -723,101 +712,87 @@ export class SimUi {
       "ring_earth.laser-ports-per-satellite": 3,
       "ring_earth.side-extension-degrees-slider": 180,
       "ring_earth.match-circular-rings": "no",
-      "ring_earth.requiredmbpsbetweensats": earthMbps,
+      "ring_earth.requiredmbpsbetweensats": Math.round(Math.sqrt(earthMbps)),
       // Mars ring — sized to match adapted capacity
       "ring_mars.laser-ports-per-satellite": 3,
       "ring_mars.side-extension-degrees-slider": 180,
       "ring_mars.match-circular-rings": "no",
-      "ring_mars.requiredmbpsbetweensats": marsMbps,
+      "ring_mars.requiredmbpsbetweensats": Math.round(Math.sqrt(marsMbps)),
     });
 
-    // Arm the feedback loop — runs up to 2 corrections after the worker
-    // delivers fresh capacityInfo for this new config. Only active when
-    // requested by the simple-config ring count slider and when we actually
-    // have adapted rings to balance against.
+    // Arm the feedback loop. Target is read live from routeSummary each
+    // iteration, so we only store the iteration counter.  Max 100 reps;
+    // stops early when both rings land within 5% of halfTarget.
     if (options.startFeedback && ringCount > 0) {
-      this._simpleFeedbackState = {
-        iterationsLeft: 2,
-        targetMbps,
-      };
+      this._simpleFeedbackState = { iterationsLeft: 100 };
     } else {
       this._simpleFeedbackState = null;
     }
   }
 
   /**
-   * Feedback step for the simple-config ring count slider.
+   * Single step of the in-ring mbps feedback loop. Reads capacity data,
+   * checks convergence, and applies a proportional correction if needed.
    *
-   * Called by simMain whenever a fresh `capacityInfo` arrives (from the
-   * worker's links-ready / flow-ready path). Reads the actual planet-to-ring
-   * per-side link capacities for Earth and Mars, and rescales the in-ring
-   * mbps sliders so both rings match the adapted-ring aggregate throughput
-   * within the 5% "balanced" tolerance used by the capacity panel.
-   *
-   * Formula (per ring):
-   *     newInput = oldInput * targetMbps / actualMinCap / 2
-   * where actualMinCap is the smaller of the two planet-link side capacities.
-   * Planet-link mbps scales ~linearly with `requiredmbpsbetweensats` (halving
-   * inter-sat gap doubles per-link throughput and also halves the planet-sat
-   * distance, doubling planet-link throughput), so a single scale factor
-   * converges in 1–2 iterations.
-   *
-   * Runs at most 2 iterations per slider move (after that the counter hits
-   * zero and subsequent capacity updates are ignored) so it can't oscillate
-   * or loop forever.
+   * @param {object} capInfo - { ringCapacities } from calculateCapacityInfo
+   * @param {number} target  - relay aggregate throughput (Mbps)
+   * @returns {"converged"|"adjusted"|"skip"} outcome of this step
+   */
+  _feedbackStep(capInfo, target) {
+    const earthInring = capInfo.ringCapacities?.["ring_earth"]?.inring || [];
+    const marsInring = capInfo.ringCapacities?.["ring_mars"]?.inring || [];
+    if (earthInring.length === 0 || marsInring.length === 0) {
+      console.log(`[Feedback] skip: earthInring=${earthInring.length}, marsInring=${marsInring.length}`);
+      return "skip";
+    }
+
+    const earthMin = 2 * Math.min(...earthInring);
+    const marsMin = 2 * Math.min(...marsInring);
+    const lo = target * 1.02, hi = target * 1.04;
+    console.log(`[Feedback] target=${target.toFixed(0)} earthMin=${earthMin.toFixed(0)} marsMin=${marsMin.toFixed(0)} band=[${lo.toFixed(0)},${hi.toFixed(0)}]`);
+    if (earthMin >= lo && earthMin <= hi && marsMin >= lo && marsMin <= hi) return "converged";
+
+    const earthInput = this.sliders.ring_earth?.requiredmbpsbetweensats;
+    const marsInput = this.sliders.ring_mars?.requiredmbpsbetweensats;
+    if (!earthInput || !marsInput) return "skip";
+    const earthSD = this.slidersData.ring_earth?.requiredmbpsbetweensats;
+    const marsSD = this.slidersData.ring_mars?.requiredmbpsbetweensats;
+    const oldEarthMbps = this.mapSliderValueToUserFacing(earthSD, parseFloat(earthInput.value));
+    const oldMarsMbps = this.mapSliderValueToUserFacing(marsSD, parseFloat(marsInput.value));
+    if (!oldEarthMbps || !oldMarsMbps) return "skip";
+
+    const aim = target * 1.03;
+    const newEarthMbps = earthMin > 0 ? Math.max(1, Math.round(oldEarthMbps * aim / earthMin)) : oldEarthMbps;
+    const newMarsMbps = marsMin > 0 ? Math.max(1, Math.round(oldMarsMbps * aim / marsMin)) : oldMarsMbps;
+    const newEarthInt = this.mapUserFacingToSliderValue(earthSD, newEarthMbps);
+    const newMarsInt = this.mapUserFacingToSliderValue(marsSD, newMarsMbps);
+    if (newEarthInt === parseFloat(earthInput.value) && newMarsInt === parseFloat(marsInput.value)) return "converged";
+
+    this.applySliderValues({
+      "ring_earth.requiredmbpsbetweensats": newEarthInt,
+      "ring_mars.requiredmbpsbetweensats": newMarsInt,
+    });
+    return "adjusted";
+  }
+
+  /**
+   * Interactive feedback step — called by simMain on links-ready.
+   * Delegates to _feedbackStep using the live capacityInfo + routeSummary.
    */
   runSimpleFeedbackStep() {
     const state = this._simpleFeedbackState;
     if (!state || state.iterationsLeft <= 0) return;
+
+    const rs = this.simMain?.routeSummary;
+    if (!rs || !rs.totalThroughput || rs.totalThroughput <= 0) return;
     const capacityInfo = this.simMain?.capacityInfo;
     if (!capacityInfo || !capacityInfo.ringCapacities) return;
 
-    const earthPlanetLinks = capacityInfo.ringCapacities["ring_earth"]?.planetLinks || [];
-    const marsPlanetLinks = capacityInfo.ringCapacities["ring_mars"]?.planetLinks || [];
-    const earthCaps = earthPlanetLinks.map((l) => l.cap).sort((a, b) => b - a);
-    const marsCaps = marsPlanetLinks.map((l) => l.cap).sort((a, b) => b - a);
-
-    // actualMinCap = smaller of the two best per-side planet-link caps. If we
-    // don't have at least two sides (happens during startup or when a ring
-    // hasn't been evaluated yet) skip — we need a full capacity snapshot.
-    const earthSideMin = earthCaps.length >= 2 ? earthCaps[1] : (earthCaps[0] || 0);
-    const marsSideMin = marsCaps.length >= 2 ? marsCaps[1] : (marsCaps[0] || 0);
-    if (earthSideMin <= 0 || marsSideMin <= 0) return;
-
-    const targetMbps = state.targetMbps;
-    if (!targetMbps || targetMbps <= 0) {
-      this._simpleFeedbackState = null;
-      return;
-    }
-
-    // Read current in-ring mbps inputs so we can scale them.
-    const earthInput = this.sliders.ring_earth?.requiredmbpsbetweensats;
-    const marsInput = this.sliders.ring_mars?.requiredmbpsbetweensats;
-    if (!earthInput || !marsInput) return;
-    const oldEarth = parseFloat(earthInput.value);
-    const oldMars = parseFloat(marsInput.value);
-    if (!isFinite(oldEarth) || !isFinite(oldMars)) return;
-
-    const newEarth = Math.max(1, Math.round(oldEarth * targetMbps / earthSideMin / 2));
-    const newMars = Math.max(1, Math.round(oldMars * targetMbps / marsSideMin / 2));
-
+    const outcome = this._feedbackStep(capacityInfo, rs.totalThroughput);
     state.iterationsLeft--;
-
-    // Only re-apply when the ratio actually changed — otherwise we'd burn a
-    // worker cycle that produces the same result and doesn't converge further.
-    if (newEarth === oldEarth && newMars === oldMars) {
+    if (outcome !== "adjusted" || state.iterationsLeft <= 0) {
       this._simpleFeedbackState = null;
-      return;
     }
-
-    this.applySliderValues({
-      "ring_earth.requiredmbpsbetweensats": newEarth,
-      "ring_mars.requiredmbpsbetweensats": newMars,
-    });
-
-    // When we hit 0 iterations, drop the state so stray capacity updates
-    // (from unrelated slider changes) don't keep rescaling.
-    if (state.iterationsLeft <= 0) this._simpleFeedbackState = null;
   }
 
   saveToJson(object, fileName) {
@@ -849,158 +824,82 @@ export class SimUi {
   /**
    * Sets up the Start Full Run button with its event listener.
    */
-  setupFullRunButton() {
-    const startButton = document.getElementById("startFullRun");
-    const summaryContainer = document.getElementById("long-term-summary-run-text");
-    const progressBar = document.getElementById("progress-bar-run"); // Ensure you have a progress bar in your HTML
-    const progressText = document.getElementById("progress-text-run"); // And a progress text element
-
-    if (startButton && summaryContainer && progressBar && progressText) {
-      startButton.addEventListener("click", async () => {
-        // Disable the button to prevent multiple clicks
-        startButton.disabled = true;
-        startButton.textContent = "Running...";
-        progressBar.style.width = "0%";
-        progressText.textContent = "Progress: 0%";
-
-        try {
-          // Get input values
-          const datesInput = document.getElementById("fullRunDates").value;
-          const dates = datesInput.split(",").map((d) => d.trim());
-
-          const ringCountsInput = document.getElementById("fullRunRingCounts").value;
-          const ringCounts = ringCountsInput.split(",").map((r) => parseInt(r.trim()));
-
-          const mbpsInput = document.getElementById("fullRunMbps").value;
-          const throughputs = mbpsInput.split(",").map((m) => parseInt(m.trim()));
-
-          const improvementScoresInput = document.getElementById("fullRunImprovementScores").value;
-          const improvementScores = improvementScoresInput.split(",").map((s) => parseFloat(s.trim()));
-
-          // Calculate total number of scenarios for progress tracking
-          const totalScenarios = dates.length * ringCounts.length * throughputs.length * improvementScores.length;
-          let completedScenarios = 0;
-
-          // Get base configuration (excluding overridden parameters)
-          const baseConfig = this.getGroupsConfig([
-            "economics",
-            "simulation",
-            "laser_technology",
-            "ring_mars",
-            "circular_rings",
-            "eccentric_rings",
-            "ring_earth",
-            "adapted_rings",
-          ]);
-
-          // Remove parameters that are overridden by the simulation
-          delete baseConfig["circular_rings.ringcount"];
-          delete baseConfig["circular_rings.requiredmbpsbetweensats"];
-          delete baseConfig["eccentric_rings.ringcount"];
-          delete baseConfig["simulation.calctimeSec"];
-          delete baseConfig["laser_technology.improvement-factor"];
-          delete baseConfig["adapted_rings.ringcount"];
-          delete baseConfig["adapted_rings.route_count"];
-
-          // Initialize satellitesConfig
-          const satellitesConfig = this.getGroupsConfig([
-            "economics",
-            "simulation",
-            "laser_technology",
-            "ring_mars",
-            "circular_rings",
-            "eccentric_rings",
-            "ring_earth",
-            "adapted_rings",
-          ]);
-
-          const resultArray = [];
-
-          // Iterate over each combination of improvementScore, ringCount, throughput, and date
-          for (const improvementScore of improvementScores) {
-            for (const ringCount of ringCounts) {
-              for (const throughput of throughputs) {
-                for (const date of dates) {
-                  // Update satellitesConfig with current scenario parameters
-                  satellitesConfig["circular_rings.ringcount"] = ringCount;
-                  satellitesConfig["circular_rings.requiredmbpsbetweensats"] = throughput;
-                  satellitesConfig["eccentric_rings.ringcount"] = 0;
-                  satellitesConfig["simulation.calctimeSec"] = 100; // No limit
-                  satellitesConfig["laser_technology.improvement-factor"] = Math.log2(improvementScore);
-                  // Set simTime to the date for deployment
-                  const originalSimTime = this.simMain.simTime.getDate();
-                  const targetDate = new Date(date);
-                  this.simMain.simTime.simMsSinceStart = targetDate.getTime() - this.simMain.simTime.initDate.getTime();
-                  this.simMain.simTime.previousRealMs = performance.now();
-
-                  // Apply the new satellites configuration
-                  this.simMain.setSatellitesConfig(satellitesConfig);
-
-                  // Run the simulation for the specific date
-                  const result = await this.simMain.longTermRun({ from: date, to: date, stepDays: 1 });
-
-                  // Restore original simTime and update display
-                  this.simMain.simTime.simMsSinceStart = originalSimTime.getTime() - this.simMain.simTime.initDate.getTime();
-                  this.simMain.simTime.previousRealMs = performance.now();
-                  this.simMain.updateLoop();
-
-                  result.scenario = { date, ringCount, throughputMbps: throughput, improvementScore };
-                  // Push the result to the resultArray
-                  resultArray.push(result);
-
-                  // Update progress
-                  completedScenarios++;
-                  const overallProgress = completedScenarios / totalScenarios;
-                  const percent = Math.round(overallProgress * 100);
-                  progressBar.style.width = `${percent}%`;
-                  progressText.textContent = `Progress: ${percent}%`;
-                }
-              }
-            }
-          }
-
-          const data = { config: baseConfig, results: resultArray };
-
-          // Store data in localStorage for the results page
-          localStorage.setItem("marslinkFullRunResults", JSON.stringify(data));
-
-          // Open the results webpage
-          window.open("results/fullrun/index.html");
-        } catch (error) {
-          console.error("Error during full run simulation:", error);
-          summaryContainer.textContent = "An error occurred during the simulation.";
-        } finally {
-          // Re-enable the button after completion
-          startButton.disabled = false;
-          startButton.textContent = "Start Full Run";
-        }
-      });
-    } else {
-      console.error("Start Full Run button or summary container not found.");
-    }
-  }
-
   /**
-   * Sets up the Sensitivity analysis button and sweep logic.
+   * Sets up the Sensitivity analysis panel: estimate, start/stop, sweep logic.
    */
   setupSensitivity() {
     const startBtn = document.getElementById("startSensitivity");
     if (!startBtn) return;
 
+    const stopBtn = document.getElementById("stopSensitivity");
     const progressWrap = document.getElementById("sens-progress-wrap");
     const progressBar = document.getElementById("sens-progress-bar");
     const progressText = document.getElementById("sens-progress-text");
+    const estimateEl = document.getElementById("sens-estimate");
 
     // Toggle linear step visibility based on progression type
     const progSelect = document.getElementById("sens-tech-progression");
     const stepInput = document.getElementById("sens-tech-step");
+
+    // --- Helpers to build value arrays (shared by estimate + run) ---
+    const buildRingValues = () => {
+      if (!document.getElementById("sens-ring-enable").checked) return [null];
+      const s = parseInt(document.getElementById("sens-ring-start").value);
+      const e = parseInt(document.getElementById("sens-ring-end").value);
+      const step = parseInt(document.getElementById("sens-ring-step").value) || 1;
+      const vals = [];
+      for (let r = s; r <= e; r += step) vals.push(r);
+      return vals.length ? vals : [null];
+    };
+    const buildTechValues = () => {
+      if (!document.getElementById("sens-tech-enable").checked) return [null];
+      const s = parseInt(document.getElementById("sens-tech-start").value);
+      const e = parseInt(document.getElementById("sens-tech-end").value);
+      const prog = progSelect.value;
+      const linStep = parseInt(stepInput.value) || 1;
+      const vals = [];
+      if (prog === "pow2") { for (let t = s; t <= e; t *= 2) vals.push(t); }
+      else { for (let t = s; t <= e; t += linStep) vals.push(t); }
+      return vals.length ? vals : [null];
+    };
+    const buildDateValues = () => {
+      if (!document.getElementById("sens-date-enable").checked) return ["2030-01-01"];
+      const startMs = new Date(document.getElementById("sens-date-start").value).getTime();
+      const endMs = new Date(document.getElementById("sens-date-end").value).getTime();
+      const stepDays = parseInt(document.getElementById("sens-date-step").value) || 1;
+      if (isNaN(startMs) || isNaN(endMs) || endMs < startMs) return ["2030-01-01"];
+      const vals = [];
+      const dayMs = 86400 * 1000;
+      for (let t = startMs; t <= endMs; t += stepDays * dayMs) {
+        vals.push(new Date(t).toISOString().slice(0, 10));
+      }
+      return vals.length ? vals : ["2030-01-01"];
+    };
+
+    // --- Estimate display (iteration count + time) ---
+    const updateEstimate = () => {
+      const total = buildRingValues().length * buildTechValues().length * buildDateValues().length;
+      const wt = this.simMain?.lastWorkerTimings;
+      const perIterMs = wt?.totalMs || wt?.links || 0;
+      const keepSec = parseFloat(document.getElementById("sens-keep-step")?.value) || 0;
+      let timeStr = "";
+      if (perIterMs > 0 || keepSec > 0) {
+        const totalSec = Math.round(total * (perIterMs / 1000 + keepSec));
+        if (totalSec < 60) timeStr = ` ~${totalSec} seconds`;
+        else if (totalSec < 3600) timeStr = ` ~${Math.round(totalSec / 60)} minutes`;
+        else timeStr = ` ~${(totalSec / 3600).toFixed(1)} hours`;
+        timeStr += " compute time";
+      }
+      estimateEl.textContent = `${total} iteration${total !== 1 ? "s" : ""}${timeStr}`;
+    };
+    this._updateSensEstimate = updateEstimate;
+
     progSelect.addEventListener("change", () => {
       stepInput.style.display = progSelect.value === "linear" ? "" : "none";
+      updateEstimate();
     });
 
-    // Enable/disable the three metric rows via their checkboxes. When a row
-    // is unchecked we only grey out its inputs (1 singleton value is used
-    // during the sweep, so that dimension collapses to a no-op).
+    // Enable/disable the three metric rows via their checkboxes.
     const wireEnable = (checkboxId, rowSelectorInputs) => {
       const cb = document.getElementById(checkboxId);
       if (!cb) return;
@@ -1009,6 +908,7 @@ export class SimUi {
           el.disabled = !cb.checked;
           el.style.opacity = cb.checked ? "" : "0.4";
         }
+        updateEstimate();
       };
       cb.addEventListener("change", sync);
       sync();
@@ -1030,9 +930,174 @@ export class SimUi {
       document.getElementById("sens-date-step"),
     ]);
 
+    // Update estimate on any input change
+    const sensInputs = document.querySelectorAll("#sensitivity-pane input, #sensitivity-pane select");
+    for (const el of sensInputs) {
+      el.addEventListener("input", updateEstimate);
+      el.addEventListener("change", updateEstimate);
+    }
+
+    // --- Chart infrastructure ---
+    const chartsWrap = document.getElementById("sens-charts");
+    const chartIds = ["sens-chart-flow", "sens-chart-cost", "sens-chart-cpf"];
+    let sensCharts = []; // [flowChart, costChart, cpfChart]
+
+    const textMuted = "#7c879f";
+    const textDim = "#525c75";
+    const gridColor = "rgba(255, 255, 255, 0.06)";
+    const tooltipBg = "#1a2030";
+    // Palette for multi-series (up to 12 distinct colors)
+    const palette = [
+      "rgba(107,138,253,0.8)", "rgba(253,138,107,0.8)", "rgba(107,253,180,0.8)",
+      "rgba(253,220,107,0.8)", "rgba(180,107,253,0.8)", "rgba(107,220,253,0.8)",
+      "rgba(253,107,180,0.8)", "rgba(180,253,107,0.8)", "rgba(253,160,107,0.8)",
+      "rgba(107,253,253,0.8)", "rgba(200,200,200,0.8)", "rgba(253,107,253,0.8)",
+    ];
+
+    const destroyCharts = () => {
+      for (const c of sensCharts) if (c) c.destroy();
+      sensCharts = [];
+    };
+
+    /**
+     * Build the 3 Chart.js instances for flow / cost / cost-per-flow.
+     * @param {string[]} enabledDims - e.g. ["rings"], ["rings","tech"], ["rings","tech","date"]
+     * @param {object} dimValues - { rings: [...], tech: [...], date: [...] }
+     */
+    const createCharts = (enabledDims, dimValues) => {
+      destroyCharts();
+      chartsWrap.style.display = "";
+
+      // Determine chart type and series grouping
+      const xDim = enabledDims[0];       // x-axis dimension
+      const seriesDim = enabledDims[1];   // series grouping dimension (if 2+ dims)
+      const thirdDim = enabledDims[2];    // third dimension (if 3 dims)
+
+      const xLabels = dimValues[xDim].map(String);
+      const seriesValues = seriesDim ? dimValues[seriesDim] : [null];
+      const thirdValues = thirdDim ? dimValues[thirdDim] : [null];
+
+      const chartConfigs = [
+        { id: "sens-chart-sats", title: "Satellites", unit: "", scale: 1 },
+        { id: "sens-chart-flow", title: "Total Flow", unit: "Gbps", scale: 1/1000 },
+        { id: "sens-chart-cost", title: "Total Cost", unit: "$M", scale: 1/1_000_000 },
+        { id: "sens-chart-cpf",  title: "Cost / Flow", unit: "$/Mbps", scale: 1 },
+      ];
+
+      for (const cfg of chartConfigs) {
+        const canvas = document.getElementById(cfg.id);
+        if (!canvas) continue;
+
+        // Build datasets: one per combination of seriesDim × thirdDim
+        const datasets = [];
+        let colorIdx = 0;
+        for (const sv of seriesValues) {
+          for (const tv of thirdValues) {
+            let label = "";
+            if (sv != null) label += `${seriesDim === "tech" ? "Tech " : seriesDim === "date" ? "" : "Rings "}${sv}`;
+            if (tv != null) label += `${label ? " / " : ""}${thirdDim === "tech" ? "Tech " : thirdDim === "date" ? "" : "Rings "}${tv}`;
+            if (!label) label = cfg.title;
+            datasets.push({
+              label,
+              data: new Array(xLabels.length).fill(null),
+              borderColor: palette[colorIdx % palette.length],
+              backgroundColor: palette[colorIdx % palette.length].replace("0.8", "0.15"),
+              borderWidth: 1.5,
+              pointRadius: 3,
+              tension: 0.2,
+              _seriesVal: sv,
+              _thirdVal: tv,
+            });
+            colorIdx++;
+          }
+        }
+
+        const chart = new Chart(canvas.getContext("2d"), {
+          type: "line",
+          data: { labels: xLabels, datasets },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: false,
+            layout: { padding: { top: 4, right: 4, bottom: 0, left: 0 } },
+            scales: {
+              x: {
+                title: { display: true, text: xDim === "rings" ? "Relay rings" : xDim === "tech" ? "Laser tech" : "Date", color: textMuted, font: { size: 10 } },
+                ticks: { color: textDim, font: { size: 9 }, maxRotation: 45, autoSkip: true, maxTicksLimit: 12 },
+                grid: { display: false },
+                border: { color: gridColor },
+              },
+              y: {
+                title: { display: true, text: `${cfg.title} (${cfg.unit})`, color: textMuted, font: { size: 10 } },
+                ticks: { color: textDim, font: { size: 9 }, maxTicksLimit: 5 },
+                grid: { color: gridColor },
+                border: { display: false },
+                beginAtZero: true,
+              },
+            },
+            plugins: {
+              tooltip: {
+                backgroundColor: tooltipBg, titleColor: "#eef1f7", bodyColor: "#b9c0d0",
+                borderColor: "rgba(255,255,255,0.1)", borderWidth: 1, cornerRadius: 4,
+                titleFont: { size: 11 }, bodyFont: { size: 11 }, padding: 8,
+              },
+              legend: { display: datasets.length > 1, labels: { color: textDim, font: { size: 9 }, boxWidth: 10 } },
+              title: { display: true, text: cfg.title, color: textMuted, font: { size: 11, weight: "normal" }, padding: { bottom: 4 } },
+            },
+          },
+        });
+        chart._sensScale = cfg.scale;
+        chart._xDim = xDim;
+        chart._seriesDim = seriesDim;
+        chart._thirdDim = thirdDim;
+        sensCharts.push(chart);
+      }
+    };
+
+    /**
+     * Push one data point into all 4 charts.
+     * @param {object} scenario - { ringCount, laserTechImprovement, launchDate, satellites }
+     * @param {number} flowMbps - total flow in Mbps
+     * @param {number} totalCost - total cost in $
+     * @param {number} costPerMbps - $/Mbps
+     * @param {number} satCount - satellite count
+     */
+    const pushChartPoint = (scenario, flowMbps, totalCost, costPerMbps, satCount) => {
+      const values = [satCount, flowMbps, totalCost, costPerMbps];
+      for (let ci = 0; ci < sensCharts.length; ci++) {
+        const chart = sensCharts[ci];
+        if (!chart) continue;
+        const xDim = chart._xDim;
+        const xVal = String(xDim === "rings" ? scenario.ringCount : xDim === "tech" ? scenario.laserTechImprovement : scenario.launchDate);
+        const xIdx = chart.data.labels.indexOf(xVal);
+        if (xIdx < 0) continue;
+
+        // Find matching dataset
+        for (const ds of chart.data.datasets) {
+          const seriesMatch = chart._seriesDim == null || String(ds._seriesVal) === String(
+            chart._seriesDim === "rings" ? scenario.ringCount : chart._seriesDim === "tech" ? scenario.laserTechImprovement : scenario.launchDate
+          );
+          const thirdMatch = chart._thirdDim == null || String(ds._thirdVal) === String(
+            chart._thirdDim === "rings" ? scenario.ringCount : chart._thirdDim === "tech" ? scenario.laserTechImprovement : scenario.launchDate
+          );
+          if (seriesMatch && thirdMatch) {
+            ds.data[xIdx] = values[ci] * chart._sensScale;
+            break;
+          }
+        }
+        chart.update();
+      }
+    };
+
+    // --- Stop flag ---
+    let stopRequested = false;
+
+    // --- Run ---
     startBtn.addEventListener("click", async () => {
+      stopRequested = false;
       startBtn.disabled = true;
-      startBtn.textContent = "Running...";
+      startBtn.style.display = "none";
+      stopBtn.style.display = "";
       progressWrap.style.display = "";
       progressBar.style.width = "0%";
       progressText.textContent = "0%";
@@ -1041,56 +1106,44 @@ export class SimUi {
         const ringEnabled = document.getElementById("sens-ring-enable").checked;
         const techEnabled = document.getElementById("sens-tech-enable").checked;
         const dateEnabled = document.getElementById("sens-date-enable").checked;
-
-        // --- Build per-dimension value arrays. Disabled dimensions get a
-        // single sentinel `null` so the nested loops still run exactly once
-        // and the corresponding override is skipped. ---
-
-        // Ring counts
-        let ringValues = [null];
-        if (ringEnabled) {
-          const ringStart = parseInt(document.getElementById("sens-ring-start").value);
-          const ringEnd = parseInt(document.getElementById("sens-ring-end").value);
-          const ringStep = parseInt(document.getElementById("sens-ring-step").value) || 1;
-          ringValues = [];
-          for (let r = ringStart; r <= ringEnd; r += ringStep) ringValues.push(r);
-        }
-
-        // Laser tech improvements
-        let techValues = [null];
-        if (techEnabled) {
-          const techStart = parseInt(document.getElementById("sens-tech-start").value);
-          const techEnd = parseInt(document.getElementById("sens-tech-end").value);
-          const techProg = progSelect.value;
-          const techLinStep = parseInt(stepInput.value) || 1;
-          techValues = [];
-          if (techProg === "pow2") {
-            for (let t = techStart; t <= techEnd; t *= 2) techValues.push(t);
-          } else {
-            for (let t = techStart; t <= techEnd; t += techLinStep) techValues.push(t);
-          }
-        }
-
-        // Launch dates (ISO YYYY-MM-DD). Disabled → a single default date so
-        // every scenario still has a concrete `from`/`to` to hand to longTermRun.
-        let dateValues = ["2030-01-01"];
-        if (dateEnabled) {
-          const dateStart = document.getElementById("sens-date-start").value;
-          const dateEnd = document.getElementById("sens-date-end").value;
-          const dateStepDays = parseInt(document.getElementById("sens-date-step").value) || 1;
-          const startMs = new Date(dateStart).getTime();
-          const endMs = new Date(dateEnd).getTime();
-          if (!isNaN(startMs) && !isNaN(endMs) && endMs >= startMs) {
-            dateValues = [];
-            const dayMs = 86400 * 1000;
-            for (let t = startMs; t <= endMs; t += dateStepDays * dayMs) {
-              dateValues.push(new Date(t).toISOString().slice(0, 10));
-            }
-          }
-        }
-
+        const keepStepSec = parseFloat(document.getElementById("sens-keep-step")?.value) || 0;
+        const showDisplay = keepStepSec >= 1;
+        // When not displaying steps, suppress updateLoop to prevent stale link flashes
+        if (!showDisplay) this.simMain._sensitivityRunning = true;
+        const ringValues = buildRingValues();
+        const techValues = buildTechValues();
+        const dateValues = buildDateValues();
         const totalScenarios = ringValues.length * techValues.length * dateValues.length;
         let completed = 0;
+        console.log(`[Sensitivity] START: ${totalScenarios} scenarios, rings=[${ringValues}], tech=[${techValues}], dates=[${dateValues}]`);
+
+        // Build chart dimension info
+        const enabledDims = [];
+        const dimValues = {};
+        if (ringEnabled) { enabledDims.push("rings"); dimValues.rings = ringValues.filter(v => v != null); }
+        if (techEnabled) { enabledDims.push("tech"); dimValues.tech = techValues.filter(v => v != null); }
+        if (dateEnabled) { enabledDims.push("date"); dimValues.date = dateValues; }
+        // If no dims enabled, use rings as a single-point x-axis
+        if (enabledDims.length === 0) { enabledDims.push("rings"); dimValues.rings = ["(current)"]; }
+
+        // Show fixed (unchecked) dimension values above charts
+        const fixedEl = document.getElementById("sens-fixed-dims");
+        const fixedParts = [];
+        if (!ringEnabled) {
+          const cur = this.slidersData.adapted_rings?.ringcount?.value ?? "?";
+          fixedParts.push(`Relay rings: ${cur}`);
+        }
+        if (!techEnabled) {
+          const cur = this.simMain?.simLinkBudget?.techImprovementFactor ?? "?";
+          fixedParts.push(`Laser tech: ${cur}x`);
+        }
+        if (!dateEnabled) {
+          const cur = this.simMain?.simTime?.getDate();
+          fixedParts.push(`Date: ${cur ? cur.toISOString().slice(0, 10) : "?"}`);
+        }
+        fixedEl.textContent = fixedParts.length ? `Fixed: ${fixedParts.join(" · ")}` : "";
+
+        createCharts(enabledDims, dimValues);
 
         // Save current config to restore later
         const baseConfig = this.getGroupsConfig([
@@ -1102,41 +1155,149 @@ export class SimUi {
         const resultArray = [];
 
         for (const techUserVal of techValues) {
+          if (stopRequested) break;
           for (const ringCount of ringValues) {
-            // Per-scenario config setup. Apply ring count (via applySimpleDefaults)
-            // and laser tech only if those dimensions are enabled.
+            if (stopRequested) break;
+
+            // Apply ring count (via simple config) and laser tech
             if (ringCount != null) this.applySimpleDefaults(ringCount);
             if (techUserVal != null) {
               const techInternal = Math.round(Math.log2(techUserVal));
               this.applySliderValues({ "laser_technology.improvement-factor": techInternal });
             }
 
-            // Get the resulting full config (stable across the inner date loop)
+            // Stable config for the inner date loop
             const scenarioConfig = this.getGroupsConfig([
               "economics", "simulation", "laser_technology",
               "ring_mars", "circular_rings", "eccentric_rings", "ring_earth", "adapted_rings",
             ]);
             scenarioConfig["simulation.calctimeSec"] = 100;
             this.simMain.setSatellitesConfig(scenarioConfig);
+            // Force-apply the pending satellite config so longTermRun uses it.
+            // Mirror updateLoop Phase 1: invalidate cache + clear display links
+            // so the rAF-driven updateLoop doesn't re-apply stale cached links.
+            if (this.simMain.newSatellitesConfig) {
+              this.simMain.simSatellites.setSatellitesConfig(this.simMain.newSatellitesConfig);
+              this.simMain.satellitesCount = this.simMain.simSatellites.getSatellites().length;
+              this.simMain.appliedSatellitesConfig = this.simMain.newSatellitesConfig;
+              this.simMain.newSatellitesConfig = null;
+              this.simMain.configEpoch++;
+              this.simMain.windowCache.clear();
+              this.simMain.displayedWindowIdx = null;
+            }
+
+            // Clear stale links immediately and update display satellites
+            // so the user sees the new constellation without old links.
+            if (this.simMain.simDisplay) {
+              this.simMain.simDisplay.updatePossibleLinks([]);
+              this.simMain.simDisplay.updateActiveLinks([]);
+              // Compute positions first so setSatellites can access .x/.y/.z
+              const dispDate = new Date(dateValues[0] || "2030-01-01");
+              const dispPlanets = this.simMain.simSolarSystem.updatePlanetsPositions(dispDate);
+              const dispSats = this.simMain.simSatellites.updateSatellitesPositions(dispDate);
+              this.simMain.simDisplay.setSatellites(this.simMain.simSatellites.getSatellites());
+              this.simMain.simDisplay.updatePositions(dispPlanets, dispSats);
+              this.simMain.simDisplay.animate();
+            }
+
+            // --- Synchronous feedback loop for earth/mars in-ring mbps ---
+            // Compute topology quickly (no flow/latency), read inring capacity,
+            // adjust sliders until earth/mars match the relay aggregate.
+            if (ringCount != null) {
+              const fbDate = new Date(dateValues[0] || "2030-01-01");
+              let prevEarthMin = -1, prevMarsMin = -1;
+              for (let fbIter = 0; fbIter < 100; fbIter++) {
+                const planets = this.simMain.simSolarSystem.updatePlanetsPositions(fbDate);
+                const satellites = this.simMain.simSatellites.updateSatellitesPositions(fbDate);
+                const links = this.simMain.simNetwork.getPossibleLinks(planets, satellites);
+                const capInfo = this.simMain.calculateCapacityInfo(links);
+                const rs = this.simMain.simNetwork.routeSummary;
+                if (!rs || !rs.totalThroughput || rs.totalThroughput <= 0) break;
+
+                // Detect oscillation: if capacity values are unchanged, the
+                // quadratic scale can't represent a closer value — stop.
+                const eInring = capInfo.ringCapacities?.["ring_earth"]?.inring || [];
+                const mInring = capInfo.ringCapacities?.["ring_mars"]?.inring || [];
+                const curEarth = eInring.length ? Math.round(2 * Math.min(...eInring)) : 0;
+                const curMars = mInring.length ? Math.round(2 * Math.min(...mInring)) : 0;
+                if (curEarth === prevEarthMin && curMars === prevMarsMin) break;
+                prevEarthMin = curEarth;
+                prevMarsMin = curMars;
+
+                const outcome = this._feedbackStep(capInfo, rs.totalThroughput);
+                if (outcome !== "adjusted") break;
+
+                // Rebuild satellites with corrected config
+                const newConfig = this.getGroupsConfig([
+                  "economics", "simulation", "laser_technology",
+                  "ring_mars", "circular_rings", "eccentric_rings", "ring_earth", "adapted_rings",
+                ]);
+                newConfig["simulation.calctimeSec"] = 100;
+                this.simMain.setSatellitesConfig(newConfig);
+                if (this.simMain.newSatellitesConfig) {
+                  this.simMain.simSatellites.setSatellitesConfig(this.simMain.newSatellitesConfig);
+                  this.simMain.satellitesCount = this.simMain.simSatellites.getSatellites().length;
+                  this.simMain.appliedSatellitesConfig = this.simMain.newSatellitesConfig;
+                  this.simMain.newSatellitesConfig = null;
+                  this.simMain.configEpoch++;
+                  this.simMain.windowCache.clear();
+                  this.simMain.displayedWindowIdx = null;
+                }
+                await new Promise((r) => setTimeout(r, 0));
+              }
+            }
 
             for (const dateStr of dateValues) {
-              const result = await this.simMain.longTermRun({ from: dateStr, to: dateStr, stepDays: 1 });
+              if (stopRequested) break;
+
+              console.log(`[Sensitivity] longTermRun: rings=${ringCount}, tech=${techUserVal}, date=${dateStr}, sats=${this.simMain.satellitesCount}`);
+              const result = await this.simMain.longTermRun(
+                { from: dateStr, to: dateStr, stepDays: 1 },
+                { useTimeout: true, skipDisplay: !showDisplay }
+              );
+
+              // Capture live-metrics-equivalent data for this scenario
+              const costs = this.simMain.calculateCosts(
+                result.data?.[0]?.maxFlowGbps ?? 0,
+                this.simMain.resultTrees
+              );
+              const capacityInfo = this.simMain.capacityInfo;
+              const rs = this.simMain.routeSummary;
 
               result.scenario = {
                 ringCount: ringCount ?? "(current)",
                 laserTechImprovement: techUserVal ?? "(current)",
                 launchDate: dateStr,
-                satellites: result.dataSummary?.possibleLinksCount?.min ?? null,
+                satellites: this.simMain.satellitesCount,
+              };
+              result.liveMetrics = {
+                satellites: this.simMain.satellitesCount,
+                costs,
+                capacityInfo: capacityInfo ? JSON.parse(JSON.stringify(capacityInfo)) : null,
+                routeSummary: rs ? { ...rs } : null,
               };
               resultArray.push(result);
+
+              // --- Push to real-time charts ---
+              const flowMbps = rs?.totalThroughput ?? (result.data?.[0]?.maxFlowGbps ?? 0) * 1000;
+              pushChartPoint(result.scenario, flowMbps, costs.totalCosts, costs.costPerMbps, this.simMain.satellitesCount);
 
               completed++;
               const pct = Math.round((completed / totalScenarios) * 100);
               progressBar.style.width = `${pct}%`;
               progressText.textContent = `${pct}% (${completed}/${totalScenarios})`;
 
-              // Yield to UI
-              await new Promise((r) => setTimeout(r, 0));
+              // Keep step: display links for the configured duration, then clear
+              if (showDisplay) {
+                await new Promise((r) => setTimeout(r, keepStepSec * 1000));
+                // Clear links before the next config change
+                if (this.simMain.simDisplay) {
+                  this.simMain.simDisplay.updatePossibleLinks([]);
+                  this.simMain.simDisplay.updateActiveLinks([]);
+                }
+              } else {
+                await new Promise((r) => setTimeout(r, 0));
+              }
             }
           }
         }
@@ -1159,18 +1320,45 @@ export class SimUi {
         this.simMain.simTime.previousRealMs = performance.now();
         this.simMain.updateLoop();
 
-        // Store and open results
+        // Offer results as a download
         const data = { config: { type: "sensitivity" }, results: resultArray };
-        localStorage.setItem("marslinkSensitivityResults", JSON.stringify(data));
-        window.open("results/fullrun/index.html");
+        this._lastSensitivityResults = data;
+        this._showSensDownload(data);
 
       } catch (error) {
         console.error("Sensitivity analysis error:", error);
       } finally {
+        this.simMain._sensitivityRunning = false;
         startBtn.disabled = false;
-        startBtn.textContent = "Run Sensitivity";
+        startBtn.style.display = "";
+        stopBtn.style.display = "none";
+        updateEstimate();
       }
     });
+
+    stopBtn.addEventListener("click", () => {
+      stopRequested = true;
+      stopBtn.disabled = true;
+      stopBtn.textContent = "Stopping...";
+      setTimeout(() => { stopBtn.disabled = false; stopBtn.textContent = "Stop"; }, 0);
+    });
+
+    // Download button
+    const downloadWrap = document.getElementById("sens-download-wrap");
+    const downloadBtn = document.getElementById("sens-download-btn");
+    if (downloadBtn) {
+      downloadBtn.addEventListener("click", () => {
+        if (this._lastSensitivityResults) {
+          const ts = new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-");
+          this.saveToJson(this._lastSensitivityResults, `marslink-sensitivity-${ts}`);
+        }
+      });
+    }
+  }
+
+  _showSensDownload(data) {
+    const wrap = document.getElementById("sens-download-wrap");
+    if (wrap && data?.results?.length) wrap.style.display = "";
   }
 
   /**
@@ -1188,6 +1376,8 @@ export class SimUi {
       // 0 → 0, +k → +2^(k-1), -k → -2^(k-1)
       if (sliderValue === 0) return 0;
       return Math.sign(sliderValue) * Math.pow(2, Math.abs(sliderValue) - 1);
+    } else if (slider.scale === "quadratic") {
+      return Math.round(sliderValue * sliderValue);
     } else {
       return sliderValue;
     }
@@ -1287,6 +1477,8 @@ export class SimUi {
             max = steps - 1;
           }
           step = 1;
+        } else if (slider.scale === "quadratic") {
+          step = 1;
         }
 
         const savedValue = localStorage.getItem(fullSliderId);
@@ -1300,8 +1492,13 @@ export class SimUi {
             const num = parseFloat(savedValue);
             if (isNaN(num)) {
               validSavedValue = null;
-            } else if (slider.scale === "pow2" || slider.scale === "pow10" || slider.scale === "signedPow2") {
+            } else if (slider.scale === "pow2" || slider.scale === "pow10" || slider.scale === "signedPow2" || slider.scale === "quadratic") {
               if (!Number.isInteger(num)) {
+                validSavedValue = null;
+              }
+              // Reject stale saved values that exceed the defined max for quadratic
+              // (old linear values like 200 would map to 40000 display).
+              if (slider.scale === "quadratic" && num > slider.max) {
                 validSavedValue = null;
               }
             }
@@ -1509,6 +1706,9 @@ export class SimUi {
       // slider can be dragged smoothly through fractional positions.
       if (userValue === 0) return 0;
       return Math.sign(userValue) * (Math.log2(Math.abs(userValue)) + 1);
+    } else if (slider.scale === "quadratic") {
+      if (userValue <= 0) return 0;
+      return Math.round(Math.sqrt(userValue));
     }
     return userValue;
   }
@@ -1680,7 +1880,10 @@ export class SimUi {
         } else {
           // Parse numbers as float, fall back to default if NaN
           const num = parseFloat(value);
-          config[`${categoryKey}.${sliderKey}`] = isNaN(num) ? sliderData.value : num;
+          let configVal = isNaN(num) ? sliderData.value : num;
+          // Quadratic sliders store sqrt(value) internally; convert to user-facing
+          if (sliderData.scale === "quadratic") configVal = Math.round(configVal * configVal);
+          config[`${categoryKey}.${sliderKey}`] = configVal;
         }
       }
     }

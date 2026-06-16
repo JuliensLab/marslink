@@ -7,8 +7,9 @@
 // All lengths are in AU, all times in milliseconds since Unix epoch, all rates
 // in launches/day. The scheduling math is closed-form; no numerical root-find.
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.3";
-import { helioCoords, positionFromSolarAngle } from "./simOrbits.js?v=4.3";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.6";
+import { helioCoords, positionFromSolarAngle } from "./simOrbits.js?v=4.6";
+import { authedFetch, isAuthed } from "./auth.js?v=4.6";
 
 const MS_PER_DAY = 86400000;
 const SECONDS_PER_DAY = 86400;
@@ -177,6 +178,18 @@ const _lambertCache = new Map(); // key: "ringName:flightIdx" → { dv1, dv2, to
 // Lambert API endpoint — local PHP proxy to nyx-space MCP platform.
 const _lambertApiUrl = "api/nyx/lambert.php";
 
+// When the user logs in or out, drop cached auth failures so the next render
+// retries (on login) or reflects the new state (on logout).
+if (typeof window !== "undefined") {
+  window.addEventListener("marslink:auth-changed", () => {
+    for (const [k, v] of _lambertCache) {
+      if (v && (v.error === "auth_required" || v.error === "auth_not_configured")) {
+        _lambertCache.delete(k);
+      }
+    }
+  });
+}
+
 /**
  * Call the nyx-space Lambert solver API for a specific flight.
  * Uses the /api/nyx/lambert endpoint on the marslink-nyx server.
@@ -195,6 +208,13 @@ export async function callLambertSolver(earthEle, targetEle, launchDate, arrival
     // Preserve the legacy contract: callers see `null` on failure. Debug
     // info for failures is still accessible via getLambertDebugEntry().
     return cached && cached.error ? null : cached;
+  }
+
+  // Skip the roundtrip if we know the user isn't logged in. Not cached —
+  // once they log in, the next call goes through.
+  if (!isAuthed()) {
+    _lambertCache.set(cacheKey, { error: "auth_required", debug: { request: null, response: null } });
+    return null;
   }
 
   const departState = helioCartesianState(earthEle, launchDate);
@@ -219,7 +239,7 @@ export async function callLambertSolver(earthEle, targetEle, launchDate, arrival
   };
 
   try {
-    const resp = await fetch(_lambertApiUrl, {
+    const resp = await authedFetch(_lambertApiUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(requestBody),
@@ -259,9 +279,13 @@ export async function callLambertSolver(earthEle, targetEle, launchDate, arrival
   } catch (err) {
     console.warn(`Lambert solver failed for ${cacheKey}:`, err.message);
     // Cache failures (with debug payload) to avoid retrying, while still
-    // letting the UI inspect what was sent/received.
+    // letting the UI inspect what was sent/received. Auth failures are
+    // stored under a dedicated code and NOT persisted across login — the
+    // cache entry gets cleared by the auth-changed listener below so the
+    // next call retries once the user logs in.
+    const isAuth = err.authRequired || err.code === "auth_required" || err.code === "auth_not_configured";
     const failure = {
-      error: err.message,
+      error: isAuth ? (err.code || "auth_required") : err.message,
       debug: { request: requestBody, response: null },
     };
     _lambertCache.set(cacheKey, failure);

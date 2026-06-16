@@ -1,6 +1,6 @@
 // reportGenerator.js
 
-import { printTree, SimMissionValidator } from "./simMissionValidator.js?v=4.3";
+import { printTree, SimMissionValidator } from "./simMissionValidator.js?v=4.6";
 import {
   createLaunchSchedule,
   renderOrbitChartSVG,
@@ -9,8 +9,9 @@ import {
   getLambertDebugEntry,
   computeHohmannDebug,
   computeHohmannRefined,
-} from "./hohmannTransfer.js?v=4.3";
-import { planLaunches, aggregateRingFromFlights } from "./launchPlanner.js?v=4.3";
+} from "./hohmannTransfer.js?v=4.6";
+import { openLoginPopup } from "./auth.js?v=4.6";
+import { planLaunches, aggregateRingFromFlights } from "./launchPlanner.js?v=4.6";
 
 // Per-ring flight list stashed by generateReport so the flight slider can
 // re-render charts without recomputing the whole schedule.
@@ -687,6 +688,9 @@ export async function generateReport(missionProfiles, resultTrees, costs, satell
   async function updateLambertPanel(container, ringName, flight) {
     const lambertHost = container.querySelector(".orbit-chart-lambert");
     if (!lambertHost) return;
+    // Stash a re-render closure so the auth-changed handler can retry without
+    // walking back through ring/flight lookup tables.
+    lambertHost._lambertRerender = () => updateLambertPanel(container, ringName, flight);
 
     // Determine target elements: for Earth/Mars rings use Earth/Mars elements
     const targetEle = ringName === "ring_earth" ? _earthElementsRef
@@ -704,7 +708,12 @@ export async function generateReport(missionProfiles, resultTrees, costs, satell
       // Surface the failure but still expose the request/response so the user
       // can inspect what was sent/received.
       const debugEntry = getLambertDebugEntry(cacheKey);
-      lambertHost.innerHTML = `<div class="lambert-placeholder">API unavailable</div>${renderLambertDebugFromEntry(debugEntry)}`;
+      const err = debugEntry?.error;
+      const placeholder =
+        err === "auth_required" ? `<div class="lambert-placeholder lambert-placeholder-auth">Login required <button type="button" class="btn" data-action="open-login">Log in</button></div>`
+        : err === "auth_not_configured" ? `<div class="lambert-placeholder">Login not configured on server</div>`
+        : `<div class="lambert-placeholder">API unavailable</div>`;
+      lambertHost.innerHTML = placeholder + renderLambertDebugFromEntry(debugEntry);
       return;
     }
 
@@ -734,6 +743,33 @@ export async function generateReport(missionProfiles, resultTrees, costs, satell
   function renderLambertDebugFromEntry(entry) {
     if (!entry || !entry.debug) return "";
     return renderOrbitDebugHtml("lambert", { request: entry.debug.request, response: entry.debug.response }, entry.error || null);
+  }
+
+  // In-chart "Log in" button (rendered when Lambert returns auth_required)
+  // opens the top-bar login popup directly. We call openLoginPopup() rather
+  // than triggering auth-btn.click() to bypass the outside-click handling
+  // that wraps the top-bar button.
+  if (!body._authClickWired) {
+    body._authClickWired = true;
+    body.addEventListener("click", (ev) => {
+      const t = ev.target.closest("[data-action=open-login]");
+      if (!t) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      openLoginPopup();
+    });
+  }
+
+  // When auth changes (login or logout), re-render every Lambert panel that
+  // had been computed in this report — the cached auth failures were already
+  // evicted in hohmannTransfer.js, so this triggers a fresh API call.
+  if (!body._authReloadWired) {
+    body._authReloadWired = true;
+    window.addEventListener("marslink:auth-changed", () => {
+      body.querySelectorAll(".orbit-chart-lambert").forEach((host) => {
+        if (typeof host._lambertRerender === "function") host._lambertRerender();
+      });
+    });
   }
 
   // Auto-compute the Lambert chart for flight 1 the first time a ring section

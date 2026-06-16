@@ -1,0 +1,9 @@
+# Belt-and-braces: deny direct access to the secrets file. Apache won't
+# normally serve .php source as text, but if PHP is ever disabled or this
+# file is renamed, this prevents the API key from leaking.
+<FilesMatch "^(config\.local\.php|.*\.local\.php)$">
+    Require all denied
+</FilesMatch>
+
+# Don't let Apache index this directory.
+Options -Indexes
