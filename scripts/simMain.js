@@ -1504,14 +1504,8 @@ export class SimMain {
     const warnEl = document.getElementById("sim-warnings");
     if (warnEl) {
       const warnings = [];
-      // Max-sat cap truncates the SIMULATED constellation — slice(0, maxSatCount)
-      // feeds topology + flow, so the results are for the capped count, not just
-      // the display.
-      if (this.simSatellites?.satellitesTruncated) {
-        warnings.push(
-          `Constellation capped at ${this.simSatellites.maxSatCount.toLocaleString()} of ${this.simSatellites.requestedSatelliteCount.toLocaleString()} sats — results limited, raise Max Satellites`
-        );
-      }
+      // (The over-cap case is a hard error on the view — see showSatCapError — not
+      // a soft warning, since the truncated sim would be misleading.)
       // Planet-ring bottleneck: an Earth/Mars ring carries meaningfully less than
       // the relay, so it (not the relay) caps flow — typically the sat budget
       // limiting its size. Reuses the capacity card's computed bottleneck.
@@ -1531,6 +1525,55 @@ export class SimMain {
         warnEl.hidden = !html;
       }
     }
+  }
+
+  /**
+   * Identify which parameter group is driving the satellite count, so the
+   * over-cap error can tell the user exactly what to reduce.
+   */
+  computeSatCapDriver() {
+    const cfg = this.appliedSatellitesConfig || [];
+    const groups = {};
+    for (const c of cfg) {
+      const rn = c.ringName || "";
+      let key;
+      if (rn === "ring_earth") key = "Earth ring throughput";
+      else if (rn === "ring_mars") key = "Mars ring throughput";
+      else if (rn.startsWith("ring_adapt") || rn.startsWith("ring_circ")) key = "Relay ring count / throughput";
+      else if (rn.startsWith("ring_ecce")) key = "Eccentric rings";
+      else key = "the ring parameters";
+      groups[key] = (groups[key] || 0) + (c.satCount || 0);
+    }
+    let top = "the ring parameters", max = -1;
+    for (const [k, v] of Object.entries(groups)) if (v > max) { max = v; top = k; }
+    return top;
+  }
+
+  /** Show the over-cap error overlay and blank stale metrics. */
+  showSatCapError() {
+    const el = document.getElementById("sim-error-overlay");
+    if (!el) return;
+    const req = this.simSatellites.requestedSatelliteCount || 0;
+    const cap = this.simSatellites.maxSatCount || 0;
+    const driver = this.computeSatCapDriver();
+    const msg =
+      `<div class="sim-error-title">Too many satellites to simulate</div>` +
+      `<div class="sim-error-body">This configuration needs <b>${req.toLocaleString()}</b> satellites — ` +
+      `over the <b>${cap.toLocaleString()}</b> cap.</div>` +
+      `<div class="sim-error-actions">Increase <b>Max Satellites in Simulation</b>, or reduce <b>${driver}</b>.</div>`;
+    if (el.hidden || el._lastMsg !== msg) {
+      el.innerHTML = msg;
+      el._lastMsg = msg;
+      el.hidden = false;
+      // Blank stale metrics so nothing misleading remains beside the error.
+      if (this.ui) this.ui.updateInfoAreaCosts("");
+    }
+  }
+
+  /** Hide the over-cap error overlay (sim is back within the cap). */
+  hideSatCapError() {
+    const el = document.getElementById("sim-error-overlay");
+    if (el && !el.hidden) { el.hidden = true; el._lastMsg = null; }
   }
 
   // ─── Core update loop ───────────────────────────────────────────────
@@ -1579,6 +1622,23 @@ export class SimMain {
       // pendingUpdates → the else-if branch dispatched window 0 again.
       this.pendingUpdates.add("satellites_display");
     }
+
+    // --- Cap guard: refuse to run an over-cap (truncated, misleading) sim ---
+    // Show an error on the view and skip all compute/display until the user
+    // raises the cap or reduces the driving parameters.
+    if (this.simSatellites.satellitesTruncated) {
+      this.satellitesCount = this.simSatellites.requestedSatelliteCount;
+      if (this.simDisplay) {
+        this.simDisplay.updatePossibleLinks([]);
+        this.simDisplay.updateActiveLinks([]);
+        if (configJustApplied) this.simDisplay.setSatellites([]);
+        this.simDisplay.updatePositions(planets, []);
+      }
+      this.showSatCapError();
+      this.updateWorkerStatus();
+      return;
+    }
+    this.hideSatCapError();
 
     // --- Phase 2: Per-frame satellite positions ---
     const satellites = this.simSatellites.updateSatellitesPositions(simDate);

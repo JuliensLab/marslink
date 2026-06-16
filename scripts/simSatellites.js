@@ -64,12 +64,22 @@ export class SimSatellites {
   }
 
   setSatellitesConfig(satellitesConfig) {
-    this.satellites = [];
+    // Cheap pre-count from the config (each ring carries its satCount) so we can
+    // refuse an over-cap build instead of generating then discarding a huge array.
+    const requested = satellitesConfig.reduce((sum, c) => sum + (c.satCount || 0), 0);
+    this.requestedSatelliteCount = requested;
+    this.satellitesTruncated = requested > this.maxSatCount;
+    if (this.satellitesTruncated) {
+      // Opinionated: a slice(0, cap) constellation yields misleading topology/flow,
+      // so don't build or run it. The orchestrator surfaces an error on the view
+      // telling the user to raise the cap or reduce the driving parameters.
+      this.satellites = [];
+      this.orbitalElements = [];
+      return;
+    }
     const newSatellites = [];
     for (let config of satellitesConfig) newSatellites.push(...this.generateSatellites(config));
-    this.requestedSatelliteCount = newSatellites.length;
-    this.satellitesTruncated = newSatellites.length > this.maxSatCount;
-    this.satellites = newSatellites.slice(0, this.maxSatCount);
+    this.satellites = newSatellites;
     this.setOrbitalElements(satellitesConfig);
   }
 

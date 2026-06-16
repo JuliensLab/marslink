@@ -1266,6 +1266,43 @@ select.slider {
   white-space: nowrap;
 }
 
+/* ── Over-cap error overlay (centered on the view) ── */
+.sim-error-overlay {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 40;
+  max-width: 420px;
+  padding: var(--s-5);
+  background: var(--bg-2);
+  backdrop-filter: var(--backdrop-blur);
+  -webkit-backdrop-filter: var(--backdrop-blur);
+  border: 1px solid rgba(248, 113, 113, 0.5);
+  border-radius: var(--r-3);
+  box-shadow: var(--shadow-pop);
+  text-align: center;
+  color: var(--text-1);
+}
+.sim-error-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--bad);
+  margin-bottom: var(--s-2);
+}
+.sim-error-body {
+  font-size: var(--fs-sm);
+  color: var(--text-1);
+  margin-bottom: var(--s-3);
+  line-height: 1.5;
+}
+.sim-error-actions {
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  line-height: 1.5;
+}
+.sim-error-overlay b { color: var(--text-0); font-weight: 600; }
+
 .disclaimer {
   text-align: right;
   color: var(--text-3);
