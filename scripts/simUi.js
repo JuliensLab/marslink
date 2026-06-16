@@ -725,12 +725,12 @@ export class SimUi {
       "ring_earth.laser-ports-per-satellite": 3,
       "ring_earth.side-extension-degrees-slider": 180,
       "ring_earth.match-circular-rings": "no",
-      "ring_earth.requiredmbpsbetweensats": Math.round(Math.sqrt(earthMbps)),
+      "ring_earth.requiredmbpsbetweensats": this.mapUserFacingToSliderValue(this.slidersData.ring_earth.requiredmbpsbetweensats, earthMbps),
       // Mars ring — sized to match adapted capacity
       "ring_mars.laser-ports-per-satellite": 3,
       "ring_mars.side-extension-degrees-slider": 180,
       "ring_mars.match-circular-rings": "no",
-      "ring_mars.requiredmbpsbetweensats": Math.round(Math.sqrt(marsMbps)),
+      "ring_mars.requiredmbpsbetweensats": this.mapUserFacingToSliderValue(this.slidersData.ring_mars.requiredmbpsbetweensats, marsMbps),
     });
 
     // Arm the feedback loop. Target is read live from routeSummary each
@@ -1517,15 +1517,11 @@ export class SimUi {
           }
           step = 1;
         } else if (slider.scale === "pow10") {
-          const steps = slider.steps || 101;
-          if (slider.min < 0 && slider.max > 0) {
-            min = -Math.floor(steps / 2);
-            max = Math.floor(steps / 2);
-          } else if (slider.min >= 0) {
-            min = 0;
-            max = steps - 1;
-          }
-          step = 1;
+          // Raw slider position IS the base-10 exponent; min/max/step come straight
+          // from slidersData (fractional step allowed for smooth log control).
+          min = slider.min;
+          max = slider.max;
+          step = slider.step;
         } else if (slider.scale === "quadratic") {
           step = 1;
         }
@@ -1541,13 +1537,19 @@ export class SimUi {
             const num = parseFloat(savedValue);
             if (isNaN(num)) {
               validSavedValue = null;
-            } else if (slider.scale === "pow2" || slider.scale === "pow10" || slider.scale === "signedPow2" || slider.scale === "quadratic") {
+            } else if (slider.scale === "pow2" || slider.scale === "signedPow2" || slider.scale === "quadratic") {
               if (!Number.isInteger(num)) {
                 validSavedValue = null;
               }
               // Reject stale saved values that exceed the defined max for quadratic
               // (old linear values like 200 would map to 40000 display).
               if (slider.scale === "quadratic" && num > slider.max) {
+                validSavedValue = null;
+              }
+            } else if (slider.scale === "pow10") {
+              // Fractional exponents are valid; reject stale out-of-range values
+              // (e.g. an old quadratic raw value loaded under the new pow10 scale).
+              if (num > slider.max || num < slider.min) {
                 validSavedValue = null;
               }
             }
@@ -1749,7 +1751,9 @@ export class SimUi {
       return Math.round(Math.log2(userValue));
     } else if (slider.scale === "pow10") {
       if (userValue <= 0) return slider.min;
-      return Math.round(Math.log10(userValue));
+      // Fractional (not rounded) so the auto-sizer can land on any throughput,
+      // not just exact powers of 10. The slider step snaps user drags.
+      return Math.log10(userValue);
     } else if (slider.scale === "signedPow2") {
       // Inverse of: 0→0, ±k→±2^(k-1). Continuous (no rounding) so the
       // slider can be dragged smoothly through fractional positions.
@@ -1930,8 +1934,11 @@ export class SimUi {
           // Parse numbers as float, fall back to default if NaN
           const num = parseFloat(value);
           let configVal = isNaN(num) ? sliderData.value : num;
-          // Quadratic sliders store sqrt(value) internally; convert to user-facing
+          // Convert nonlinear slider positions to their user-facing value.
+          // (pow2 is intentionally NOT mapped here — its raw exponent is consumed
+          // downstream, e.g. setTechnologyConfig does Math.pow(2, ...).)
           if (sliderData.scale === "quadratic") configVal = Math.round(configVal * configVal);
+          else if (sliderData.scale === "pow10") configVal = Math.round(Math.pow(10, configVal));
           config[`${categoryKey}.${sliderKey}`] = configVal;
         }
       }
