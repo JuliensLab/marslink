@@ -102,7 +102,7 @@ export const slidersData = {
     maxSatCount: {
       label: "Max Satellites in Simulation",
       min: 1000,
-      max: 100000,
+      max: 1000000,
       value: 100000,
       step: 1000,
       unit: "",
