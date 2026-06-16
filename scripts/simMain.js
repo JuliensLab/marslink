@@ -1755,6 +1755,24 @@ export class SimMain {
 
     let networkData; // Declare networkData outside the loop
 
+    // Recompute mission profiles + cost trees for THIS constellation. longTermRun
+    // is the batch path (sensitivity sweep) and nothing else refreshes these during
+    // a sweep — without this, cost/flow lag one scenario behind and produce an
+    // outlier at every tech transition (first ring shows the previous tech's last).
+    try {
+      this.missionProfiles = this.simDeployment.getMissionProfile(this.simSatellites.getOrbitalElements());
+      this.resultTrees = new SimMissionValidator(this.missionProfiles, {
+        costPerLaunch: this.costPerLaunch,
+        costPerSatellite: this.costPerSatellite,
+        costPerLaserTerminal: this.costPerLaserTerminal,
+        laserPortsPerRing: this.simLinkBudget.maxLinksPerRing,
+        propellantCostsPerKg: this.propellantCostsPerKg,
+        wrightsLawFactor: this.wrightsLawFactor,
+      });
+    } catch (e) {
+      console.warn("[longTermRun] mission profile failed:", e.message);
+    }
+
     return new Promise((resolve, reject) => {
       const step = () => {
         if (currentDate > endDate) {
@@ -1793,6 +1811,13 @@ export class SimMain {
 
           // Retrieve network data
           networkData = this.simNetwork.getNetworkData(planets, satellites, possibleLinks, calctimeMs);
+
+          // Leave simMain state consistent with the just-computed scenario so the
+          // sensitivity capture reads fresh values, not the previous scenario's.
+          this.routeSummary = this.simNetwork.routeSummary || null;
+          this.capacityInfo = this.calculateCapacityInfo(possibleLinks);
+          this.maxFlowGbps = networkData.error ? 0 : networkData.maxFlowGbps || 0;
+          this.lastNetworkData = networkData;
 
           // Update the display (skip during batch sensitivity runs)
           if (!skipDisplay && this.simDisplay) {
