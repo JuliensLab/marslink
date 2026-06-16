@@ -884,10 +884,11 @@ export class SimUi {
     const estimateEl = document.getElementById("sens-estimate");
 
     // Worker-thread control: cap at the machine's logical core count, default to
-    // cores-2 (leave headroom for the UI + main thread). The user can override
-    // up to the available max.
+    // ~half (leave real headroom for the renderer/compositor — saturating all
+    // logical cores starves the browser's main thread and freezes the UI). The
+    // user can still override up to the available max.
     const threadsAvailable = (typeof navigator !== "undefined" && navigator.hardwareConcurrency) || 4;
-    const defaultWorkers = Math.max(1, threadsAvailable - 2);
+    const defaultWorkers = Math.max(1, Math.floor(threadsAvailable / 2));
     const workerCountInput = document.getElementById("sens-worker-count");
     const threadAvailEl = document.getElementById("sens-thread-avail");
     if (workerCountInput) {
