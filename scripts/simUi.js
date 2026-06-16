@@ -1068,7 +1068,7 @@ export class SimUi {
         { id: "sens-chart-cost", title: "Total Cost", unit: "$M", scale: 1/1_000_000, key: "cost" },
         { id: "sens-chart-cpf",  title: "Cost / Flow", unit: "$/Mbps", scale: 1, key: "cpf" },
         // Scatter (metric vs metric — one point per scenario):
-        { id: "sens-chart-cost-vs-flow", scatter: true, title: "Cost vs Flow", xKey: "flow", xScale: 1 / 1000, xLabel: "Total Flow (Gbps)", yKey: "cost", yScale: 1 / 1_000_000, yLabel: "Total Cost ($M)" },
+        { id: "sens-chart-cost-vs-flow", scatter: true, title: "Flow vs Cost", xKey: "cost", xScale: 1 / 1_000_000, xLabel: "Total Cost ($M)", yKey: "flow", yScale: 1 / 1000, yLabel: "Total Flow (Gbps)" },
         { id: "sens-chart-flow-vs-sats", scatter: true, title: "Flow vs Satellites", xKey: "sats", xScale: 1, xLabel: "Satellites", yKey: "flow", yScale: 1 / 1000, yLabel: "Total Flow (Gbps)" },
         { id: "sens-chart-latency-min", title: "Latency (min)", unit: "min", scale: 1, key: "latMin" },
         { id: "sens-chart-latency-p50", title: "Latency (p50)", unit: "min", scale: 1, key: "latP50" },
