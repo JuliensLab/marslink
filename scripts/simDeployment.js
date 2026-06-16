@@ -70,7 +70,9 @@ export class SimDeployment {
     // satellite.dryMass_kg is derived (setSatelliteMassConfig); only its propulsion specs are exposed.
     vp.satellite.propellantCapacity_kg = g("satellite-propellant-capacity", vp.satellite.propellantCapacity_kg);
     vp.satellite.isp_s = g("satellite-isp", vp.satellite.isp_s);
-    vp.satellite.solarPanelMass_EarthOrbit_kg = g("satellite-solar-panel-mass", vp.satellite.solarPanelMass_EarthOrbit_kg);
+    // Solar panel mass at Earth orbit = power (kW) × specific mass (kg/kW); the
+    // deployment later scales it by distance² for outer rings.
+    vp.satellite.solarPanelMass_EarthOrbit_kg = g("satellite-power-kw", 5) * g("solar-mass-per-kw", 10);
     this.launchToLEO_deltaVKmS = g("launch-to-leo-dv", this.launchToLEO_deltaVKmS);
     this.escapeBurnDvKmS = g("escape-burn-dv", this.escapeBurnDvKmS);
   }

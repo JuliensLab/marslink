@@ -463,6 +463,7 @@ export class SimMain {
       this.previousCalctimeMs = this.simLinkBudget.calctimeMs;
     }
     this.simDeployment.setVehicleConfig(uiConfig);
+    this.satellitePowerKw = uiConfig["launch_vehicle.satellite-power-kw"]; // for solar cost
     this.simDeployment.setSatelliteMassConfig(
       uiConfig["economics.satellite-empty-mass"],
       uiConfig["laser_technology.laser-terminal-mass"],
@@ -584,6 +585,7 @@ export class SimMain {
       "CH4/O2": costConfig["economics.fuel-cost-ch4o2"],
       Argon: costConfig["economics.fuel-cost-argon"],
     };
+    this.solarCostPerKw = costConfig["economics.solar-cost-per-kw"]; // $M per kW
     // Rebuild resultTrees so propellant costs are recalculated from current slider values
     if (this.missionProfiles) {
       this.resultTrees = new SimMissionValidator(this.missionProfiles, {
@@ -645,13 +647,16 @@ export class SimMain {
       }
     }
 
-    const totalCosts = totalLaunchCost + totalPropellantCost + totalSatellitesCost + totalLaserTerminalsCost;
+    // Solar arrays: cost scales with per-satellite power (kW) × specific cost ($M/kW).
+    const totalSolarCost = totalSatellitesCount * (this.satellitePowerKw || 0) * (this.solarCostPerKw || 0) * 1_000_000;
+
+    const totalCosts = totalLaunchCost + totalPropellantCost + totalSatellitesCost + totalLaserTerminalsCost + totalSolarCost;
 
     // Wright's law savings: difference between no-learning cost (c1 * n) and actual
     const noLearningLaunch = (this.costPerLaunch || 0) * 1_000_000 * totalLaunchCount;
     const noLearningSat = (this.costPerSatellite || 0) * 1_000_000 * totalSatellitesCount;
     const noLearningLaser = (this.costPerLaserTerminal || 0) * 1_000_000 * totalLaserCount;
-    const noLearningTotal = noLearningLaunch + noLearningSat + noLearningLaser + totalPropellantCost;
+    const noLearningTotal = noLearningLaunch + noLearningSat + noLearningLaser + totalPropellantCost + totalSolarCost;
     const wrightSavings = noLearningTotal - totalCosts;
 
     let costPerMbps = Infinity;
@@ -667,6 +672,7 @@ export class SimMain {
       propellantCost: totalPropellantCost,
       satellitesCost: totalSatellitesCost,
       laserTerminalsCost: totalLaserTerminalsCost,
+      solarCost: totalSolarCost,
       totalCosts,
       costPerMbps,
       propellantCostBreakdown,
@@ -747,6 +753,9 @@ export class SimMain {
       html += `<div class="detail-row"><span class="detail-label">Launch <span style="color:var(--text-3)">${costs.launchCount.toLocaleString()} (${costs.deploymentFlights.toLocaleString()} + ${costs.tankerFlights.toLocaleString()} tankers)</span></span><span class="detail-value">${fmtM(costs.launchCost)}</span></div>`;
       html += `<div class="detail-row"><span class="detail-label">Satellites <span style="color:var(--text-3)">${costs.satellitesCount.toLocaleString()}</span></span><span class="detail-value">${fmtM(costs.satellitesCost)}</span></div>`;
       html += `<div class="detail-row"><span class="detail-label">Laser terminals <span style="color:var(--text-3)">${costs.laserCount.toLocaleString()}</span></span><span class="detail-value">${fmtM(costs.laserTerminalsCost)}</span></div>`;
+      if (costs.solarCost > 0) {
+        html += `<div class="detail-row"><span class="detail-label">Solar arrays</span><span class="detail-value">${fmtM(costs.solarCost)}</span></div>`;
+      }
       html += `<div class="detail-row"><span class="detail-label">Propellant</span><span class="detail-value">${fmtM(costs.propellantCost)}</span></div>`;
       for (const [type, cost] of Object.entries(costs.propellantCostBreakdown)) {
         const massKg = costs.propellantMassBreakdown[type] || 0;

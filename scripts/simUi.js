@@ -1907,6 +1907,7 @@ export class SimUi {
         case "economics.fuel-cost-ch4o2":
         case "economics.fuel-cost-argon":
         case "economics.wrights-law-factor":
+        case "economics.solar-cost-per-kw":
         case "economics.satellite-empty-mass":
           this.simMain.setCosts(this.getGroupsConfig(["economics"]));
           break;
