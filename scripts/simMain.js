@@ -44,6 +44,15 @@ export class SimMain {
     this.lastRequestId = 0;
     this.inFlightWindowIdx = null; // windowIdx currently being computed by worker
 
+    // Recalc status (bottom-bar indicator): which phase the worker is in and
+    // how long the last run of each phase took (used to drive the progress bar).
+    this.recalcPhase = "idle"; // "idle" | "links" | "flow"
+    this.recalcStart = 0;       // performance.now() when the current phase began
+    this._inFlightComputeFlow = false; // whether the in-flight compute includes flow
+    this._lastLinksMs = 0;     // measured links-phase duration of the last run
+    this._estLinksMs = 0;      // estimate shown for the links phase
+    this._estFlowMs = 0;       // estimate shown for the flow phase
+
     // Window cache: Map<windowIdx, { configEpoch, ...result }>
     this.WINDOW_DURATION = 1000 * 60 * 60 * 24; // 24h sim time
     this.windowCache = new Map();
@@ -1208,6 +1217,10 @@ export class SimMain {
     const computeFlow =
       this.linksColors === "Flow" &&
       (this.simLinkBudget.calctimeMs > 0 || this.pendingUpdates.has("config") || this.pendingUpdates.has("display"));
+    // Recalc status: the worker always computes topology (links) first.
+    this._inFlightComputeFlow = computeFlow;
+    this.recalcPhase = "links";
+    this.recalcStart = performance.now();
     this.simWorker.postMessage({
       type: "compute",
       requestId: this.lastRequestId,
@@ -1274,6 +1287,7 @@ export class SimMain {
       console.error("[Marslink] Worker error:", msg.message);
       this.workerBusy = false;
       this.inFlightWindowIdx = null;
+      this.recalcPhase = "idle";
       this.updateWorkerStatus();
       return;
     }
@@ -1326,6 +1340,12 @@ export class SimMain {
         console.log(`[Marslink] Topology: ${Object.entries(tt).map(([k, v]) => `${k}=${v}${typeof v === "number" && k !== "links" ? "ms" : ""}`).join(" | ")}`);
       }
       this.lastWorkerTimings = { links: msg.linksMs, topology: msg.topologyTimings };
+      // Recalc status: links done for the in-flight window → enter the flow phase.
+      if (typeof msg.linksMs === "number") { this._lastLinksMs = msg.linksMs; this._estLinksMs = msg.linksMs; }
+      if (this.inFlightWindowIdx === msg.windowIdx && this._inFlightComputeFlow) {
+        this.recalcPhase = "flow";
+        this.recalcStart = performance.now();
+      }
       this.updatePerfPanel();
       this.updateWorkerStatus();
       return;
@@ -1336,6 +1356,11 @@ export class SimMain {
 
     this.workerBusy = false;
     this.inFlightWindowIdx = null;
+    // Recalc status: full result in → back to idle; refresh the flow estimate.
+    this.recalcPhase = "idle";
+    if (this._inFlightComputeFlow && typeof msg.totalMs === "number") {
+      this._estFlowMs = Math.max(0, msg.totalMs - (this._lastLinksMs || 0));
+    }
 
     // Drop stale results (old config epoch)
     if (msg.configEpoch !== this.configEpoch) {
@@ -1397,18 +1422,101 @@ export class SimMain {
    * Update the -1/0/+1 status indicator in the bottom bar.
    */
   updateWorkerStatus() {
-    const el = document.getElementById("worker-status");
-    if (!el) return;
     const currentIdx = Math.floor(this.simTime.getDate() / this.WINDOW_DURATION);
-    const slotChar = (idx) => {
-      const cached = this.windowCache.get(idx);
-      if (cached && cached.configEpoch === this.configEpoch) {
-        return cached.partial ? "◐" : "✓"; // ◐ = links ready, flow pending
+
+    // ── Recalc phase chip: Idle / Computing links / Computing flow / Prefetching ──
+    // "Foreground" = computing the window we need NOW (e.g. right after a config
+    // change, when sim time is paused waiting). Background prefetch of an adjacent
+    // window is shown more quietly so steady playback isn't noisy.
+    const recalcEl = document.getElementById("recalc-status");
+    if (recalcEl) {
+      const foreground =
+        this.workerBusy &&
+        (this.inFlightWindowIdx === currentIdx || this.displayedWindowIdx === null || this.simTimePausedForCache);
+      const phase = !this.workerBusy ? "idle" : foreground ? this.recalcPhase : "prefetch";
+      const label = recalcEl.querySelector(".recalc-label");
+      const fill = recalcEl.querySelector(".recalc-bar-fill");
+      recalcEl.classList.remove("phase-idle", "phase-links", "phase-flow", "phase-prefetch", "phase-tuning", "indeterminate");
+      const fmtS = (ms) => (ms / 1000).toFixed(1);
+
+      // The simple-config auto-sizer ("tuning") iteratively resizes the Earth/Mars
+      // rings to match the relay target. Surface what's converging so the repeated
+      // computes read as intentional convergence, not a stuck loop.
+      const tuning = this.ui?._simpleFeedbackState ? this.ui?._tuningStatus : null;
+      if (tuning && tuning.target > 0) {
+        recalcEl.classList.add("phase-tuning", "indeterminate");
+        const pct = (v) => Math.round((v / tuning.target) * 100);
+        label.textContent = `Tuning rings · E ${pct(tuning.earthMin)}% M ${pct(tuning.marsMin)}% · #${tuning.step}`;
+        recalcEl.title =
+          `Auto-sizing Earth & Mars rings to match relay throughput (${(tuning.target / 1000).toFixed(1)} Gbps). ` +
+          `E / M = each ring's capacity vs target (converges to ~103%); #${tuning.step} = step.`;
+        fill.style.width = "100%";
+      } else {
+        recalcEl.classList.add(`phase-${phase}`);
+        recalcEl.title = "Link & flow recalculation status";
+        if (phase === "links" || phase === "flow") {
+          const est = phase === "links" ? this._estLinksMs : this._estFlowMs;
+          const elapsed = performance.now() - this.recalcStart;
+          const name = phase === "links" ? "Computing links" : "Computing flow";
+          if (est > 0) {
+            label.textContent = `${name}… ${fmtS(elapsed)} / ~${fmtS(est)}s`;
+            fill.style.width = `${Math.min(99, (elapsed / est) * 100)}%`;
+          } else {
+            label.textContent = `${name}… ${fmtS(elapsed)}s`;
+            fill.style.width = "100%";
+            recalcEl.classList.add("indeterminate"); // unknown duration → animated bar
+          }
+        } else if (phase === "prefetch") {
+          label.textContent = "Prefetching…";
+          fill.style.width = "100%";
+          recalcEl.classList.add("indeterminate");
+        } else {
+          label.textContent = "Idle";
+          fill.style.width = "0%";
+        }
       }
-      if (this.inFlightWindowIdx === idx) return "⏳";
-      return "—";
-    };
-    el.textContent = `${slotChar(currentIdx - 1)} ${slotChar(currentIdx)} ${slotChar(currentIdx + 1)}`;
+    }
+
+    // ── Past / Current / Next window cache pills ──
+    const el = document.getElementById("worker-status");
+    if (el) {
+      const slotState = (idx) => {
+        const cached = this.windowCache.get(idx);
+        if (cached && cached.configEpoch === this.configEpoch) return cached.partial ? "partial" : "ready";
+        if (this.inFlightWindowIdx === idx) return "computing";
+        return "empty";
+      };
+      const stateText = { empty: "empty", computing: "computing…", partial: "links ready, flow pending", ready: "ready" };
+      const names = ["Past", "Current", "Next"];
+      const idxs = [currentIdx - 1, currentIdx, currentIdx + 1];
+      el.querySelectorAll(".cache-pill").forEach((pill, i) => {
+        const st = slotState(idxs[i]);
+        const cls = `cache-pill state-${st}`;
+        if (pill.className !== cls) pill.className = cls;
+        const title = `${names[i]} window: ${stateText[st]}`;
+        if (pill.title !== title) pill.title = title;
+      });
+    }
+
+    // ── Warnings (flow timeout, max-sats cap) ──
+    const warnEl = document.getElementById("sim-warnings");
+    if (warnEl) {
+      const warnings = [];
+      if (this.simSatellites?.satellitesTruncated) {
+        warnings.push(
+          `Max sats reached — showing ${this.simSatellites.maxSatCount.toLocaleString()} of ${this.simSatellites.requestedSatelliteCount.toLocaleString()}`
+        );
+      }
+      if (this.linksColors === "Flow" && this.lastNetworkData && this.lastNetworkData.error) {
+        warnings.push(`Flow calc timed out — raise “Allowed flow calc time”`);
+      }
+      const html = warnings.map((w) => `<span class="sim-warning">⚠ ${w}</span>`).join("");
+      if (html !== this._lastWarnHtml) {
+        this._lastWarnHtml = html;
+        warnEl.innerHTML = html;
+        warnEl.hidden = !html;
+      }
+    }
   }
 
   // ─── Core update loop ───────────────────────────────────────────────

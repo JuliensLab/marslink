@@ -253,7 +253,23 @@
     <div class="bottom-bar-left">
       <div id="simTime" class="sim-time-display">—</div>
       <div id="fps-counter" class="fps-counter" aria-label="Frames per second">— fps</div>
-      <div id="worker-status" class="worker-status" aria-label="Worker cache status" title="-1 / 0 / +1 window cache: ✓=ready ◐=links ready, flow computing ⏳=computing —=empty">— — —</div>
+
+      <!-- Recalc phase: idle / computing links / computing flow / prefetching -->
+      <div id="recalc-status" class="recalc-status phase-idle" aria-label="Recalculation status" role="status" aria-live="polite" title="Link &amp; flow recalculation status">
+        <span class="recalc-dot" aria-hidden="true"></span>
+        <span class="recalc-label">Idle</span>
+        <span class="recalc-bar" aria-hidden="true"><span class="recalc-bar-fill"></span></span>
+      </div>
+
+      <!-- Past / current / next window cache -->
+      <div id="worker-status" class="worker-status" aria-label="Window cache: past, current, next">
+        <span class="cache-pill state-empty" data-slot="past">Past</span>
+        <span class="cache-pill state-empty" data-slot="now">Now</span>
+        <span class="cache-pill state-empty" data-slot="next">Next</span>
+      </div>
+
+      <!-- Warnings (flow timeout, max-sats cap) -->
+      <div id="sim-warnings" class="sim-warnings" role="status" aria-live="polite" hidden></div>
     </div>
     <div class="disclaimer">
       Object sizes not to scale · Distances to scale · Not affiliated with SpaceX ·

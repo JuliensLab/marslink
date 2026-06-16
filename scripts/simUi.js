@@ -788,10 +788,36 @@ export class SimUi {
     const capacityInfo = this.simMain?.capacityInfo;
     if (!capacityInfo || !capacityInfo.ringCapacities) return;
 
+    // No-progress / unreachable-target guard (mirrors the sensitivity loop):
+    // if the realized in-ring capacities are unchanged from the previous step,
+    // the slider granularity or ring geometry can't move them any closer to the
+    // target (e.g. the Mars ring is saturated below target). Stop instead of
+    // re-applying the same config every frame and recomputing forever.
+    const eInring = capacityInfo.ringCapacities?.["ring_earth"]?.inring || [];
+    const mInring = capacityInfo.ringCapacities?.["ring_mars"]?.inring || [];
+    const curEarth = eInring.length ? Math.round(2 * Math.min(...eInring)) : 0;
+    const curMars = mInring.length ? Math.round(2 * Math.min(...mInring)) : 0;
+
+    // Surface the live tuning state for the status bar. Each step adjusts the
+    // Earth/Mars requiredmbpsbetweensats (→ their satellite counts) to bring their
+    // in-ring capacity toward the relay target; expose target + both ring values
+    // so users see the convergence rather than a seemingly stuck recompute.
+    state.step = (state.step || 0) + 1;
+    this._tuningStatus = { step: state.step, target: rs.totalThroughput, earthMin: curEarth, marsMin: curMars };
+
+    if (state.prevEarth === curEarth && state.prevMars === curMars) {
+      this._simpleFeedbackState = null;
+      this._tuningStatus = null;
+      return;
+    }
+    state.prevEarth = curEarth;
+    state.prevMars = curMars;
+
     const outcome = this._feedbackStep(capacityInfo, rs.totalThroughput);
     state.iterationsLeft--;
     if (outcome !== "adjusted" || state.iterationsLeft <= 0) {
       this._simpleFeedbackState = null;
+      this._tuningStatus = null;
     }
   }
 
@@ -863,17 +889,24 @@ export class SimUi {
       return vals.length ? vals : [null];
     };
     const buildDateValues = () => {
-      if (!document.getElementById("sens-date-enable").checked) return ["2030-01-01"];
+      // When the date dimension is off (or its inputs are invalid), sweep at the
+      // current sim date — the same date shown in the "Fixed:" label and used
+      // everywhere else in the app — rather than a hardcoded value.
+      const currentDate = () => {
+        const d = this.simMain?.simTime?.getDate?.();
+        return d ? d.toISOString().slice(0, 10) : "2030-01-01";
+      };
+      if (!document.getElementById("sens-date-enable").checked) return [currentDate()];
       const startMs = new Date(document.getElementById("sens-date-start").value).getTime();
       const endMs = new Date(document.getElementById("sens-date-end").value).getTime();
       const stepDays = parseInt(document.getElementById("sens-date-step").value) || 1;
-      if (isNaN(startMs) || isNaN(endMs) || endMs < startMs) return ["2030-01-01"];
+      if (isNaN(startMs) || isNaN(endMs) || endMs < startMs) return [currentDate()];
       const vals = [];
       const dayMs = 86400 * 1000;
       for (let t = startMs; t <= endMs; t += stepDays * dayMs) {
         vals.push(new Date(t).toISOString().slice(0, 10));
       }
-      return vals.length ? vals : ["2030-01-01"];
+      return vals.length ? vals : [currentDate()];
     };
 
     // --- Estimate display (iteration count + time) ---
@@ -939,8 +972,7 @@ export class SimUi {
 
     // --- Chart infrastructure ---
     const chartsWrap = document.getElementById("sens-charts");
-    const chartIds = ["sens-chart-flow", "sens-chart-cost", "sens-chart-cpf"];
-    let sensCharts = []; // [flowChart, costChart, cpfChart]
+    let sensCharts = []; // [satsChart, flowChart, costChart, cpfChart]
 
     const textMuted = "#7c879f";
     const textDim = "#525c75";
@@ -1081,7 +1113,11 @@ export class SimUi {
             chart._thirdDim === "rings" ? scenario.ringCount : chart._thirdDim === "tech" ? scenario.laserTechImprovement : scenario.launchDate
           );
           if (seriesMatch && thirdMatch) {
-            ds.data[xIdx] = values[ci] * chart._sensScale;
+            // Guard against non-finite metrics: cost/flow is Infinity when a
+            // scenario has zero flow, and a single Infinity blows out the chart's
+            // y-axis. Plot a gap (null) instead.
+            const v = values[ci];
+            ds.data[xIdx] = Number.isFinite(v) ? v * chart._sensScale : null;
             break;
           }
         }

@@ -13,6 +13,8 @@ export class SimSatellites {
     this.satellites = [];
     this.orbitalElements = [];
     this.maxSatCount = 20000; // Default high limit
+    this.requestedSatelliteCount = 0; // sats requested before the maxSatCount cap
+    this.satellitesTruncated = false; // true when the cap clipped the constellation
     this.solarAngleStep = 1.0; // Degrees for precomputing positions along orbit
     this.ringCrossings = new Map(); // ringName -> { earth: [...], mars: [...] }
   }
@@ -65,6 +67,8 @@ export class SimSatellites {
     this.satellites = [];
     const newSatellites = [];
     for (let config of satellitesConfig) newSatellites.push(...this.generateSatellites(config));
+    this.requestedSatelliteCount = newSatellites.length;
+    this.satellitesTruncated = newSatellites.length > this.maxSatCount;
     this.satellites = newSatellites.slice(0, this.maxSatCount);
     this.setOrbitalElements(satellitesConfig);
   }

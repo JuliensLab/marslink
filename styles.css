@@ -1151,16 +1151,119 @@ select.slider {
   background: rgba(255, 255, 255, 0.02);
 }
 
-.worker-status {
-  font-family: ui-monospace, "JetBrains Mono", "SF Mono", Consolas, monospace;
+/* ── Recalc phase chip (idle / links / flow / prefetch) ── */
+.recalc-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-size: var(--fs-xs);
-  color: var(--text-3);
-  padding: 2px 6px;
-  border: 1px solid var(--border-1);
-  border-radius: var(--r-1);
-  background: rgba(255, 255, 255, 0.02);
-  letter-spacing: 2px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.recalc-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-3);
+  flex: none;
+}
+.recalc-bar {
+  width: 54px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+  flex: none;
+}
+.recalc-bar-fill {
+  display: block;
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  transition: width 120ms linear;
+}
+/* Idle: dim, no bar */
+.recalc-status.phase-idle { color: var(--text-3); }
+.recalc-status.phase-idle .recalc-dot { background: var(--text-3); }
+.recalc-status.phase-idle .recalc-bar { visibility: hidden; }
+/* Active foreground recompute */
+.recalc-status.phase-links .recalc-label,
+.recalc-status.phase-flow .recalc-label { color: var(--text-1); }
+.recalc-status.phase-links .recalc-dot,
+.recalc-status.phase-flow .recalc-dot { animation: recalc-pulse 1s ease-in-out infinite; }
+.recalc-status.phase-links .recalc-dot { background: var(--accent); }
+.recalc-status.phase-links .recalc-bar-fill { background: var(--accent); }
+.recalc-status.phase-flow .recalc-dot { background: var(--warn); }
+.recalc-status.phase-flow .recalc-bar-fill { background: var(--warn); }
+/* Auto-sizer convergence ("tuning") */
+.recalc-status.phase-tuning .recalc-label { color: var(--text-1); }
+.recalc-status.phase-tuning .recalc-dot { background: var(--accent-hot); animation: recalc-pulse 0.8s ease-in-out infinite; }
+.recalc-status.phase-tuning .recalc-bar-fill { background: var(--accent-hot); }
+/* Background prefetch: quiet, no bar */
+.recalc-status.phase-prefetch { color: var(--text-3); }
+.recalc-status.phase-prefetch .recalc-dot { background: var(--text-3); animation: recalc-pulse 1.6s ease-in-out infinite; }
+.recalc-status.phase-prefetch .recalc-bar { visibility: hidden; }
+/* Unknown duration → animated indeterminate bar */
+.recalc-status.indeterminate .recalc-bar-fill {
+  width: 38% !important;
+  animation: recalc-indet 1.1s ease-in-out infinite;
+}
+@keyframes recalc-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+@keyframes recalc-indet { 0% { transform: translateX(-110%); } 100% { transform: translateX(300%); } }
+
+/* ── Past / current / next window cache pills ── */
+.worker-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   cursor: default;
+}
+.cache-pill {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  padding: 3px 5px;
+  border-radius: var(--r-1);
+  border: 1px solid var(--border-1);
+  color: var(--text-3);
+  background: rgba(255, 255, 255, 0.02);
+}
+.cache-pill.state-computing {
+  color: var(--warn);
+  border-color: rgba(245, 177, 74, 0.5);
+  background: rgba(245, 177, 74, 0.1);
+  animation: recalc-pulse 1s ease-in-out infinite;
+}
+.cache-pill.state-partial {
+  color: var(--accent-hot);
+  border-color: rgba(107, 138, 253, 0.5);
+  background: var(--accent-dim);
+}
+.cache-pill.state-ready {
+  color: var(--good);
+  border-color: rgba(74, 222, 128, 0.45);
+  background: rgba(74, 222, 128, 0.1);
+}
+
+/* ── Bottom-bar warnings (flow timeout, max-sats cap) ── */
+.sim-warnings {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.sim-warning {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--fs-xs);
+  color: var(--warn);
+  background: rgba(245, 177, 74, 0.1);
+  border: 1px solid rgba(245, 177, 74, 0.35);
+  border-radius: var(--r-1);
+  padding: 2px 6px;
+  white-space: nowrap;
 }
 
 .disclaimer {
