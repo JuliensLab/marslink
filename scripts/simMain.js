@@ -808,12 +808,14 @@ export class SimMain {
       if (rs) segments.push({ name: "adapted rings", cap: rs.totalThroughput });
       if (marsCapTotal > 0) segments.push({ name: "mars ring", cap: marsCapTotal });
       let bottleneckLine = "";
+      this._bottleneckInfo = null; // surfaced to the bottom-bar warnings
       if (segments.length > 1) {
         const minCap = Math.min(...segments.map((s) => s.cap));
         const maxCap = Math.max(...segments.map((s) => s.cap));
         if (maxCap > 0 && (maxCap - minCap) / maxCap > 0.05) {
           const bottleneck = segments.reduce((a, b) => (a.cap < b.cap ? a : b));
           bottleneckLine = `Bottleneck: ${bottleneck.name}`;
+          this._bottleneckInfo = { name: bottleneck.name, cap: bottleneck.cap, relayCap: rs ? rs.totalThroughput : 0 };
         } else {
           bottleneckLine = `Balanced`;
         }
@@ -1502,10 +1504,22 @@ export class SimMain {
     const warnEl = document.getElementById("sim-warnings");
     if (warnEl) {
       const warnings = [];
+      // Max-sat cap truncates the SIMULATED constellation — slice(0, maxSatCount)
+      // feeds topology + flow, so the results are for the capped count, not just
+      // the display.
       if (this.simSatellites?.satellitesTruncated) {
         warnings.push(
-          `Max sats reached — showing ${this.simSatellites.maxSatCount.toLocaleString()} of ${this.simSatellites.requestedSatelliteCount.toLocaleString()}`
+          `Constellation capped at ${this.simSatellites.maxSatCount.toLocaleString()} of ${this.simSatellites.requestedSatelliteCount.toLocaleString()} sats — results limited, raise Max Satellites`
         );
+      }
+      // Planet-ring bottleneck: an Earth/Mars ring carries meaningfully less than
+      // the relay, so it (not the relay) caps flow — typically the sat budget
+      // limiting its size. Reuses the capacity card's computed bottleneck.
+      const bn = this._bottleneckInfo;
+      if (bn && (bn.name === "earth ring" || bn.name === "mars ring") && bn.relayCap > 0 && bn.cap < bn.relayCap * 0.9) {
+        const planet = bn.name === "mars ring" ? "Mars" : "Earth";
+        const g = (mbps) => (mbps >= 1000 ? `${(mbps / 1000).toFixed(1)} Gbps` : `${Math.round(mbps)} Mbps`);
+        warnings.push(`${planet} ring limits flow (${g(bn.cap)} < relay ${g(bn.relayCap)})`);
       }
       if (this.linksColors === "Flow" && this.lastNetworkData && this.lastNetworkData.error) {
         warnings.push(`Flow calc timed out — raise “Allowed flow calc time”`);

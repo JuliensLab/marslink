@@ -669,7 +669,20 @@ export class SimUi {
     const sinHalf = worstDistAu / (2 * apo);
     if (sinHalf >= 1) return 50; // can't achieve this capacity
     const halfSpacingRad = Math.asin(sinHalf);
-    const satCount = Math.ceil(Math.PI / halfSpacingRad);
+    let satCount = Math.ceil(Math.PI / halfSpacingRad);
+
+    // Connectivity floor: never let adjacent spacing exceed the link range, or
+    // the ring fragments into disconnected arcs (measured: flow collapses
+    // nonlinearly once spacing > maxDistanceAU). Bump the count so the
+    // worst-case chord stays within range regardless of the throughput target.
+    const maxDistanceAU = lb.maxDistanceAU;
+    if (maxDistanceAU > 0) {
+      const sinConnect = maxDistanceAU / (2 * apo);
+      if (sinConnect > 0 && sinConnect < 1) {
+        const nConnect = Math.ceil(Math.PI / Math.asin(sinConnect));
+        if (nConnect > satCount) satCount = nConnect;
+      }
+    }
     if (satCount < 2) return 50;
 
     // Step 4: inter-satellite distance from satellite count

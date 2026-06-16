@@ -346,7 +346,7 @@ export const slidersData = {
     requiredmbpsbetweensats: {
       label: "Throughput in ring",
       min: 0,
-      max: 100,
+      max: 320,
       value: 7,
       step: 1,
       unit: " Mbps",
@@ -386,7 +386,7 @@ export const slidersData = {
     requiredmbpsbetweensats: {
       label: "Average throughput in ring",
       min: 0,
-      max: 100,
+      max: 320,
       value: 7,
       step: 1,
       unit: " Mbps",
