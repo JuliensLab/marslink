@@ -1049,13 +1049,79 @@ export class SimUi {
         { id: "sens-chart-mars-sats", title: "Mars ring satellites", unit: "", scale: 1, key: "marsSats" },
         { id: "sens-chart-cost", title: "Total Cost", unit: "$M", scale: 1/1_000_000, key: "cost" },
         { id: "sens-chart-cpf",  title: "Cost / Flow", unit: "$/Mbps", scale: 1, key: "cpf" },
+        // Scatter (metric vs metric — one point per scenario):
+        { id: "sens-chart-cost-vs-flow", scatter: true, title: "Cost vs Flow", xKey: "flow", xScale: 1 / 1000, xLabel: "Total Flow (Gbps)", yKey: "cost", yScale: 1 / 1_000_000, yLabel: "Total Cost ($M)" },
+        { id: "sens-chart-flow-vs-sats", scatter: true, title: "Flow vs Satellites", xKey: "sats", xScale: 1, xLabel: "Satellites", yKey: "flow", yScale: 1 / 1000, yLabel: "Total Flow (Gbps)" },
         { id: "sens-chart-latency-min", title: "Latency (min)", unit: "min", scale: 1, key: "latMin" },
         { id: "sens-chart-latency-p50", title: "Latency (p50)", unit: "min", scale: 1, key: "latP50" },
       ];
 
+      // Build the per-series labelled, coloured datasets (shared by both types).
+      const buildSeriesDatasets = (titleFallback, emptyData) => {
+        const ds = [];
+        let ci = 0;
+        for (const sv of seriesValues) {
+          for (const tv of thirdValues) {
+            let label = "";
+            if (sv != null) label += `${seriesDim === "tech" ? "Tech " : seriesDim === "date" ? "" : "Rings "}${sv}`;
+            if (tv != null) label += `${label ? " / " : ""}${thirdDim === "tech" ? "Tech " : thirdDim === "date" ? "" : "Rings "}${tv}`;
+            if (!label) label = titleFallback;
+            ds.push({
+              label,
+              data: emptyData(),
+              borderColor: palette[ci % palette.length],
+              backgroundColor: palette[ci % palette.length].replace("0.8", "0.15"),
+              borderWidth: 1.5, pointRadius: 3, tension: 0.2,
+              _seriesVal: sv, _thirdVal: tv,
+            });
+            ci++;
+          }
+        }
+        return ds;
+      };
+
       for (const cfg of chartConfigs) {
         const canvas = document.getElementById(cfg.id);
         if (!canvas) continue;
+
+        // ── Scatter charts: metric-vs-metric, {x,y} points, linear x-axis ──
+        if (cfg.scatter) {
+          const datasets = buildSeriesDatasets(cfg.title, () => []);
+          const fmtAx = (v) => (Math.abs(v) >= 1000 ? Math.round(v).toLocaleString() : Math.abs(v) >= 1 ? +v.toFixed(2) : +v.toPrecision(2));
+          const chart = new Chart(canvas.getContext("2d"), {
+            type: "line",
+            data: { datasets },
+            options: {
+              responsive: true, maintainAspectRatio: false, animation: false,
+              interaction: { mode: "nearest", intersect: false },
+              layout: { padding: { top: 4, right: 8, bottom: 0, left: 0 } },
+              scales: {
+                x: { type: "linear", beginAtZero: true, title: { display: true, text: cfg.xLabel, color: textMuted, font: { size: 10 } }, ticks: { color: textDim, font: { size: 9 }, maxTicksLimit: 6 }, grid: { color: gridColor }, border: { color: gridColor } },
+                y: { beginAtZero: true, title: { display: true, text: cfg.yLabel, color: textMuted, font: { size: 10 } }, ticks: { color: textDim, font: { size: 9 }, maxTicksLimit: 5 }, grid: { color: gridColor }, border: { display: false } },
+              },
+              plugins: {
+                tooltip: {
+                  mode: "nearest", intersect: false,
+                  backgroundColor: tooltipBg, titleColor: "#eef1f7", bodyColor: "#b9c0d0",
+                  borderColor: "rgba(255,255,255,0.1)", borderWidth: 1, cornerRadius: 4,
+                  titleFont: { size: 11 }, bodyFont: { size: 11 }, padding: 8,
+                  callbacks: {
+                    title: () => "",
+                    label: (ctx) => `${ctx.dataset.label}: ${fmtAx(ctx.parsed.x)} ${cfg.xLabel.match(/\(([^)]+)\)/)?.[1] || ""} → ${fmtAx(ctx.parsed.y)} ${cfg.yLabel.match(/\(([^)]+)\)/)?.[1] || ""}`,
+                  },
+                },
+                legend: { display: datasets.length > 1, labels: { color: textDim, font: { size: 9 }, boxWidth: 10 } },
+                title: { display: true, text: cfg.title, color: textMuted, font: { size: 11, weight: "normal" }, padding: { bottom: 4 } },
+              },
+            },
+          });
+          chart._scatter = true;
+          chart._xKey = cfg.xKey; chart._yKey = cfg.yKey;
+          chart._xScale = cfg.xScale; chart._yScale = cfg.yScale;
+          chart._seriesDim = seriesDim; chart._thirdDim = thirdDim;
+          sensCharts.push(chart);
+          continue;
+        }
 
         // Build datasets: one per combination of seriesDim × thirdDim
         const datasets = [];
@@ -1147,23 +1213,38 @@ export class SimUi {
      * @param {object} metrics  - { sats, flow, earthFlow, marsFlow, relayFlow,
      *                              cost, cpf, latMin, latP50 } (raw, pre-scale)
      */
+    const dimVal = (dim, scenario) =>
+      dim === "rings" ? scenario.ringCount : dim === "tech" ? scenario.laserTechImprovement : scenario.launchDate;
+    const matchesSeries = (chart, ds, scenario) =>
+      (chart._seriesDim == null || String(ds._seriesVal) === String(dimVal(chart._seriesDim, scenario))) &&
+      (chart._thirdDim == null || String(ds._thirdVal) === String(dimVal(chart._thirdDim, scenario)));
+
     const pushChartPoint = (scenario, metrics) => {
       for (const chart of sensCharts) {
         if (!chart) continue;
-        const xDim = chart._xDim;
-        const xVal = String(xDim === "rings" ? scenario.ringCount : xDim === "tech" ? scenario.laserTechImprovement : scenario.launchDate);
+
+        // Scatter charts: append an {x,y} point to the matching series.
+        if (chart._scatter) {
+          const x = metrics[chart._xKey], y = metrics[chart._yKey];
+          if (Number.isFinite(x) && Number.isFinite(y)) {
+            for (const ds of chart.data.datasets) {
+              if (matchesSeries(chart, ds, scenario)) {
+                ds.data.push({ x: x * chart._xScale, y: y * chart._yScale });
+                break;
+              }
+            }
+          }
+          chart.update();
+          continue;
+        }
+
+        // Category charts: write the metric at the swept-dimension index.
+        const xVal = String(dimVal(chart._xDim, scenario));
         const xIdx = chart.data.labels.indexOf(xVal);
         if (xIdx < 0) continue;
-
         const v = metrics[chart._metricKey];
         for (const ds of chart.data.datasets) {
-          const seriesMatch = chart._seriesDim == null || String(ds._seriesVal) === String(
-            chart._seriesDim === "rings" ? scenario.ringCount : chart._seriesDim === "tech" ? scenario.laserTechImprovement : scenario.launchDate
-          );
-          const thirdMatch = chart._thirdDim == null || String(ds._thirdVal) === String(
-            chart._thirdDim === "rings" ? scenario.ringCount : chart._thirdDim === "tech" ? scenario.laserTechImprovement : scenario.launchDate
-          );
-          if (seriesMatch && thirdMatch) {
+          if (matchesSeries(chart, ds, scenario)) {
             // Non-finite (cost/flow Infinity at zero flow, latency when no route) → gap.
             ds.data[xIdx] = Number.isFinite(v) ? v * chart._sensScale : null;
             break;
