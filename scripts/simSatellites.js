@@ -13,6 +13,9 @@ export class SimSatellites {
 
     this.satellites = [];
     this.orbitalElements = [];
+    // Adapted-ring RAAN/arg-perigee blend: 0% = Earth's plane, 100% = Mars's.
+    // Set per-build in buildConfigFromUi; read in getOrbitaElements.
+    this.adaptedRaanArgPeriPct = 100;
     this.maxSatCount = 20000; // Default high limit
     this.requestedSatelliteCount = 0; // sats requested before the maxSatCount cap
     this.satellitesTruncated = false; // true when the cap clipped the constellation
@@ -169,6 +172,10 @@ export class SimSatellites {
     if (routeCount == 0) return [];
 
     const linearSatCountIncrease = uiConfig["adapted_rings.linear_satcount_increase"];
+    // Orbital-plane blend (RAAN + arg-perigee): 0% = Earth, 100% = Mars. Carried
+    // on the config so any consumer (main display + workers) applies it.
+    const rapRaw = uiConfig["adapted_rings.earth-mars-raan-argperi-pct"];
+    const raanArgPeriPct = typeof rapRaw === "number" ? rapRaw : 100;
 
     const distOuterAu = this.getMars().a;
     const distInnerAu = this.getEarthApsis().periapsis * 1.006;
@@ -205,6 +212,7 @@ export class SimSatellites {
         raan: null,
         argPeri: null,
         earthMarsInclinationPct: 0.5,
+        raanArgPeriPct,
       });
     }
     return satellitesConfig;
@@ -341,6 +349,10 @@ export class SimSatellites {
   }
 
   setSatellitesConfig(satellitesConfig) {
+    // Pull the adapted-ring orbital-plane blend off the config so getOrbitaElements
+    // can read it (set here so every consumer — main display + workers — applies it).
+    const adaptedCfg = satellitesConfig.find((c) => c.ringType === "Adapted" && typeof c.raanArgPeriPct === "number");
+    this.adaptedRaanArgPeriPct = adaptedCfg ? adaptedCfg.raanArgPeriPct : 100;
     // Cheap pre-count from the config (each ring carries its satCount) so we can
     // refuse an over-cap build instead of generating then discarding a huge array.
     const requested = satellitesConfig.reduce((sum, c) => sum + (c.satCount || 0), 0);
@@ -1216,11 +1228,15 @@ export class SimSatellites {
         Dele: this.Mars.Dele, // J2000 epoch
         apsides,
       };
-    else if (ringType == "Adapted")
+    else if (ringType == "Adapted") {
+      // Blend RAAN (o) and argument of perigee (p) linearly between Earth (0%)
+      // and Mars (100%) — no middle stop, unlike the inclination bias above.
+      const rapPct = this.adaptedRaanArgPeriPct ?? 100;
+      const blend = (earthVal, marsVal) => earthVal + (marsVal - earthVal) * (rapPct / 100);
       return {
         i: this.addInterpolationBias(this.interpolateOrbitalElement(a, "i"), 50, "i"),
-        o: this.Mars.o, //RAAN
-        p: this.Mars.p, //this.interpolateOrbitalElementNonLinear(a, "p"), // arg perigee
+        o: blend(this.Earth.o, this.Mars.o), // RAAN
+        p: blend(this.Earth.p, this.Mars.p), // arg perigee
         a: a,
         n: n,
         e: this.interpolateOrbitalElementNonLinear(a, "e"),
@@ -1228,6 +1244,7 @@ export class SimSatellites {
         Dele: this.Mars.Dele, // J2000 epoch
         apsides,
       };
+    }
     else if (ringType == "Eccentric")
       return {
         i: this.addInterpolationBias(this.interpolateOrbitalElement(a, "i"), earthMarsInclinationPct, "i"),
