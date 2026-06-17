@@ -181,9 +181,13 @@ export class SimSatellites {
     const raanRaw = uiConfig["adapted_rings.earth-mars-raan-pct"];
     const argPeriRaw = uiConfig["adapted_rings.earth-mars-argperi-pct"];
     const eccRaw = uiConfig["adapted_rings.earth-mars-eccentricity-pct"];
+    const inclRaw = uiConfig["adapted_rings.earth-mars-orbit-inclination-pct"];
     const raanPct = typeof raanRaw === "number" ? raanRaw : 100;
     const argPeriPct = typeof argPeriRaw === "number" ? argPeriRaw : 100;
     const eccentricityPct = typeof eccRaw === "number" ? eccRaw : 100;
+    // Inclination uses the same scheme as circular rings: addInterpolationBias
+    // with a 0–100 slider (middle stop at 50 = the natural distance interpolation).
+    const inclinationPct = typeof inclRaw === "number" ? inclRaw : 50;
 
     const distOuterAu = this.getMars().a;
     const distInnerAu = this.getEarthApsis().periapsis * 1.006;
@@ -219,7 +223,7 @@ export class SimSatellites {
         eccentricity: null,
         raan: null,
         argPeri: null,
-        earthMarsInclinationPct: 0.5,
+        earthMarsInclinationPct: inclinationPct,
         raanPct,
         argPeriPct,
         eccentricityPct,
@@ -1252,7 +1256,7 @@ export class SimSatellites {
       // behaviour (100%): Mars's constant node/perigee, and the nonlinear-`e` curve.
       const towardCurrent = (linear, current, pct) => linear + (current - linear) * (pct / 100);
       return {
-        i: this.addInterpolationBias(this.interpolateOrbitalElement(a, "i"), 50, "i"),
+        i: this.addInterpolationBias(this.interpolateOrbitalElement(a, "i"), earthMarsInclinationPct, "i"),
         o: towardCurrent(linearByA("o"), this.Mars.o, raanPct), // RAAN
         p: towardCurrent(linearByA("p"), this.Mars.p, argPeriPct), // arg perigee
         a: a,
