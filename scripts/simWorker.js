@@ -15,6 +15,7 @@ import { SimLinkBudget } from "./simLinkBudget.js?v=4.6";
 import { SimNetwork } from "./simNetwork.js?v=4.6";
 import { SimDeployment } from "./simDeployment.js?v=4.6";
 import { SimMissionValidator } from "./simMissionValidator.js?v=4.6";
+import { minOf } from "./simMath.js?v=4.6";
 
 // --- State (initialized lazily on the first compute) ---
 let simLinkBudget = null;
@@ -241,7 +242,7 @@ function runPipeline({ requestId, windowIdx, configEpoch, uiConfig, satellitesCo
  * @param {number} msg.flowCalctimeMs    max-flow time budget (longTermRun uses 20000)
  * @param {number} msg.maxIterations     feedback-loop cap (100, matching the serial path)
  */
-function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flowCalctimeMs = 20000, maxIterations = 100 }) {
+function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flowCalctimeMs = 20000, maxIterations = 15, sizingBudgetMs = 6000 }) {
   ensureState();
   const t0 = performance.now();
   const date = new Date(simDate);
@@ -269,12 +270,18 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
     simSatellites.setSatellitesConfig(simSatellites.buildConfigFromUi(uiConfig));
   };
 
-  // 2. Feedback ring-sizing loop (bit-identical to the old simUi sensitivity loop).
+  // 2. Feedback ring-sizing loop (mirrors the old simUi sensitivity loop, but
+  //    bounded: a low iteration cap, a wall-clock budget, and cycle detection so
+  //    a non-converging config can't spin ~100 expensive iterations — each rebuilds
+  //    the full constellation + topology, which both hangs the sweep and grows the
+  //    worker's share of the shared V8 heap cage until the renderer OOMs).
   buildAndApply();
   let iterations = 0;
   let prevEarthMin = -1, prevMarsMin = -1;
+  const seenStates = new Set();
   for (let i = 0; i < maxIterations; i++) {
     iterations = i + 1;
+    if (performance.now() - t0 > sizingBudgetMs) break; // wall-clock guard
     const planets = Object.values(simSolarSystem.updatePlanetsPositions(sizeDate));
     const satellites = simSatellites.updateSatellitesPositions(sizeDate);
     const links = simNetwork.getPossibleLinks(planets, satellites);
@@ -284,17 +291,22 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
 
     const eInring = capInfo.ringCapacities?.["ring_earth"]?.inring || [];
     const mInring = capInfo.ringCapacities?.["ring_mars"]?.inring || [];
-    const curEarth = eInring.length ? Math.round(2 * Math.min(...eInring)) : 0;
-    const curMars = mInring.length ? Math.round(2 * Math.min(...mInring)) : 0;
-    if (curEarth === prevEarthMin && curMars === prevMarsMin) break; // no-progress
+    const curEarth = eInring.length ? Math.round(2 * minOf(eInring)) : 0;
+    const curMars = mInring.length ? Math.round(2 * minOf(mInring)) : 0;
+    if (curEarth === prevEarthMin && curMars === prevMarsMin) break; // no-progress (period-1)
+    // Oscillation guard: if we revisit a measured state, the config is cycling
+    // (e.g. A→B→A) and will never settle in the band — stop on the current build.
+    const stateKey = `${curEarth},${curMars}`;
+    if (seenStates.has(stateKey)) break;
+    seenStates.add(stateKey);
     prevEarthMin = curEarth;
     prevMarsMin = curMars;
 
     // _feedbackStep, integer-Mbps form
     if (eInring.length === 0 || mInring.length === 0) break; // skip
     const target = rs.totalThroughput;
-    const earthMin = 2 * Math.min(...eInring);
-    const marsMin = 2 * Math.min(...mInring);
+    const earthMin = 2 * minOf(eInring);
+    const marsMin = 2 * minOf(mInring);
     const lo = target * 1.02, hi = target * 1.04;
     if (earthMin >= lo && earthMin <= hi && marsMin >= lo && marsMin <= hi) break; // converged
 

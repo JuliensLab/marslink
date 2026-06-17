@@ -355,7 +355,13 @@ export class SimSatellites {
       return;
     }
     const newSatellites = [];
-    for (let config of satellitesConfig) newSatellites.push(...this.generateSatellites(config));
+    // NOTE: push one-by-one, not push(...arr) — spreading a large ring's array
+    // into call arguments overflows the stack past ~65k elements ("Maximum call
+    // stack size exceeded"), which big planet rings can exceed.
+    for (let config of satellitesConfig) {
+      const sats = this.generateSatellites(config);
+      for (let i = 0; i < sats.length; i++) newSatellites.push(sats[i]);
+    }
     this.satellites = newSatellites;
     this.setOrbitalElements(satellitesConfig);
   }

@@ -3,6 +3,7 @@ import { slidersData } from "./slidersData.js?v=4.6";
 import { LukashianClock } from "./lukashianTime.js?v=4.6";
 import { wireAuthUi } from "./auth.js?v=4.6";
 import { SensitivityPool } from "./sensitivityPool.js?v=4.6";
+import { minOf } from "./simMath.js?v=4.6";
 
 export class SimUi {
   constructor(simMain) {
@@ -766,8 +767,8 @@ export class SimUi {
       return "skip";
     }
 
-    const earthMin = 2 * Math.min(...earthInring);
-    const marsMin = 2 * Math.min(...marsInring);
+    const earthMin = 2 * minOf(earthInring);
+    const marsMin = 2 * minOf(marsInring);
     const lo = target * 1.02, hi = target * 1.04;
     console.log(`[Feedback] target=${target.toFixed(0)} earthMin=${earthMin.toFixed(0)} marsMin=${marsMin.toFixed(0)} band=[${lo.toFixed(0)},${hi.toFixed(0)}]`);
     if (earthMin >= lo && earthMin <= hi && marsMin >= lo && marsMin <= hi) return "converged";
@@ -815,8 +816,8 @@ export class SimUi {
     // re-applying the same config every frame and recomputing forever.
     const eInring = capacityInfo.ringCapacities?.["ring_earth"]?.inring || [];
     const mInring = capacityInfo.ringCapacities?.["ring_mars"]?.inring || [];
-    const curEarth = eInring.length ? Math.round(2 * Math.min(...eInring)) : 0;
-    const curMars = mInring.length ? Math.round(2 * Math.min(...mInring)) : 0;
+    const curEarth = eInring.length ? Math.round(2 * minOf(eInring)) : 0;
+    const curMars = mInring.length ? Math.round(2 * minOf(mInring)) : 0;
 
     // Surface the live tuning state for the status bar. Each step adjusts the
     // Earth/Mars requiredmbpsbetweensats (→ their satellite counts) to bring their
@@ -1367,7 +1368,7 @@ export class SimUi {
           const ld = res.latencyData;
           const ringMin = (name) => {
             const a = capacityInfo?.ringCapacities?.[name]?.inring;
-            return a && a.length ? 2 * Math.min(...a) : null;
+            return a && a.length ? 2 * minOf(a) : null;
           };
           let earthSats = 0, marsSats = 0, relaySats = 0;
           for (const orbit of res.resultTreesData || []) {
@@ -1424,8 +1425,16 @@ export class SimUi {
               }
               const scenarioConfig = this.getGroupsConfig(allCats);
               scenarioConfig["simulation.calctimeSec"] = 100;
+              // Estimate this scenario's peak worker heap from its (seed) satellite
+              // count — cheap, no topology. Drives the pool's cumulative memory
+              // budget so big constellations don't run so many-wide they overflow
+              // the shared V8 heap cage. Over-cap scenarios build nothing (~0).
+              const seedCfg = this.simMain.simSatellites.buildConfigFromUi(scenarioConfig);
+              const estSats = seedCfg.reduce((sum, c) => sum + (c.satCount || 0), 0);
+              const maxSat = scenarioConfig["simulation.maxSatCount"] || Infinity;
+              const estMB = estSats > maxSat ? 20 : Math.max(20, estSats * 0.016);
               for (const dateStr of dateValues) {
-                scenarios.push({ scenarioId: scenarioId++, ringCount, techUserVal, dateStr, uiConfig: scenarioConfig });
+                scenarios.push({ scenarioId: scenarioId++, ringCount, techUserVal, dateStr, uiConfig: scenarioConfig, estMB });
               }
             }
           }
@@ -1438,12 +1447,17 @@ export class SimUi {
           // Live progress + worker utilization. onActivity fires as workers pick up
           // and finish jobs, so the readout reflects active threads in real time.
           let activeWorkers = 0;
+          let memNote = "";
           const renderProgress = () => {
             const pct = Math.round((completed / totalScenarios) * 100);
             progressBar.style.width = `${pct}%`;
-            progressText.textContent = `${pct}% (${completed}/${totalScenarios}) · ${activeWorkers}/${pool.size} workers active`;
+            progressText.textContent = `${pct}% (${completed}/${totalScenarios}) · ${activeWorkers}/${pool.size} workers active${memNote}`;
           };
-          pool.onActivity = ({ active }) => { activeWorkers = active; renderProgress(); };
+          pool.onActivity = ({ active, inFlightMB, memBudgetMB }) => {
+            activeWorkers = active;
+            memNote = ` · ~${inFlightMB}/${memBudgetMB} MB`;
+            renderProgress();
+          };
           renderProgress();
 
           try {
@@ -1454,8 +1468,7 @@ export class SimUi {
                 simDate: s.dateStr,
                 sizingDate: dateValues[0] || s.dateStr,
                 flowCalctimeMs: 20000,
-                maxIterations: 100,
-              }).then((res) => {
+              }, s.estMB).then((res) => {
                 if (stopRequested || !res) return;
                 const { scenario, metrics, costs, capacityInfo, rs } = buildScenarioMetrics(res, s.ringCount, s.techUserVal, s.dateStr);
                 resultArray.push({
@@ -1545,8 +1558,8 @@ export class SimUi {
                 // quadratic scale can't represent a closer value — stop.
                 const eInring = capInfo.ringCapacities?.["ring_earth"]?.inring || [];
                 const mInring = capInfo.ringCapacities?.["ring_mars"]?.inring || [];
-                const curEarth = eInring.length ? Math.round(2 * Math.min(...eInring)) : 0;
-                const curMars = mInring.length ? Math.round(2 * Math.min(...mInring)) : 0;
+                const curEarth = eInring.length ? Math.round(2 * minOf(eInring)) : 0;
+                const curMars = mInring.length ? Math.round(2 * minOf(mInring)) : 0;
                 if (curEarth === prevEarthMin && curMars === prevMarsMin) break;
                 prevEarthMin = curEarth;
                 prevMarsMin = curMars;
@@ -1596,7 +1609,7 @@ export class SimUi {
               // 2 × its narrowest in-ring link.
               const ringMin = (name) => {
                 const a = capacityInfo?.ringCapacities?.[name]?.inring;
-                return a && a.length ? 2 * Math.min(...a) : null;
+                return a && a.length ? 2 * minOf(a) : null;
               };
               // Satellites per area, aggregated from the cost trees by ring.
               let earthSats = 0, marsSats = 0, relaySats = 0;

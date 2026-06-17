@@ -11,17 +11,27 @@ export class SensitivityPool {
    * @param {number} [size] worker count; defaults to ~half the logical cores
    *   (saturating all cores starves the renderer), capped at the logical core
    *   count (the UI clamps user input to the same max).
+   * @param {object} [opts]
+   * @param {number} [opts.memBudgetMB] cumulative estimated worker-heap budget. All
+   *   workers share ONE ~4GB V8 pointer-compression cage with the main thread
+   *   (Chrome M92+), so their heap is additive; exceeding it crashes the renderer
+   *   ("Aw, Snap! Out of Memory"). We admit jobs only while the sum of their
+   *   estimated heap stays under this budget. Defaults to ~half the cage.
    */
-  constructor(size) {
+  constructor(size, opts = {}) {
     const cores = (typeof navigator !== "undefined" && navigator.hardwareConcurrency) || 4;
     this.size = Math.max(1, Math.min(size || Math.floor(cores / 2), cores));
+    const heapLimitMB = (typeof performance !== "undefined" && performance.memory)
+      ? Math.round(performance.memory.jsHeapSizeLimit / 1048576) : 4096;
+    this.memBudgetMB = opts.memBudgetMB || Math.floor(heapLimitMB * 0.5);
+    this.inFlightMB = 0;
     this.queue = [];
     this.pending = new Map(); // requestId -> entry
     this.idCounter = 0;
     this.stopped = false;
     this.workers = [];
     // Fired whenever a worker starts or finishes a job, so the UI can show live
-    // utilization: ({ active, size, queued, pending }) => void
+    // utilization: ({ active, size, queued, pending, inFlightMB, memBudgetMB }) => void
     this.onActivity = null;
     for (let i = 0; i < this.size; i++) {
       const worker = new Worker(new URL("./simWorker.js?v=4.6", import.meta.url), { type: "module" });
@@ -36,7 +46,12 @@ export class SensitivityPool {
     if (!this.onActivity) return;
     let active = 0;
     for (const slot of this.workers) if (slot.busy) active++;
-    this.onActivity({ active, size: this.size, queued: this.queue.length, pending: this.pending.size });
+    this.onActivity({ active, size: this.size, queued: this.queue.length, pending: this.pending.size, inFlightMB: Math.round(this.inFlightMB), memBudgetMB: this.memBudgetMB });
+  }
+
+  _release(entry) {
+    this.inFlightMB -= entry.estMB || 0;
+    if (this.inFlightMB < 0) this.inFlightMB = 0;
   }
 
   _onMessage(slot, msg) {
@@ -45,6 +60,7 @@ export class SensitivityPool {
     const entry = this.pending.get(msg.requestId);
     if (entry) {
       this.pending.delete(msg.requestId);
+      this._release(entry);
       if (msg.type === "scenario-error") entry.reject(new Error(msg.message || "scenario failed"));
       else entry.resolve(msg);
     }
@@ -58,6 +74,7 @@ export class SensitivityPool {
     for (const [id, entry] of this.pending) {
       if (entry.slot === slot) {
         this.pending.delete(id);
+        this._release(entry);
         entry.reject(new Error(e && e.message ? e.message : "worker error"));
         break;
       }
@@ -69,12 +86,14 @@ export class SensitivityPool {
    * Submit one scenario job. Resolves with the worker's scenario-result message,
    * or with null if the pool was stopped before this job started.
    * @param {object} job { uiConfig, simDate, scenarioId, flowCalctimeMs?, maxIterations? }
+   * @param {number} [estMB] estimated peak worker heap for this scenario (for the
+   *   cumulative memory budget); 0 means "doesn't count against the budget".
    */
-  submit(job) {
+  submit(job, estMB = 0) {
     return new Promise((resolve, reject) => {
       if (this.stopped) { resolve(null); return; }
       const requestId = ++this.idCounter;
-      this.queue.push({ requestId, job, resolve, reject, slot: null });
+      this.queue.push({ requestId, job, estMB, resolve, reject, slot: null });
       this._pump();
     });
   }
@@ -83,10 +102,17 @@ export class SensitivityPool {
     if (this.stopped) return;
     for (const slot of this.workers) {
       if (slot.busy) continue;
-      const next = this.queue.shift();
+      const next = this.queue[0];
       if (!next) break;
+      // Memory admission: don't start a job that would push estimated cumulative
+      // worker heap past the budget — unless nothing is running, so a single
+      // oversized scenario can't deadlock the queue.
+      const est = next.estMB || 0;
+      if (this.inFlightMB > 0 && this.inFlightMB + est > this.memBudgetMB) break;
+      this.queue.shift();
       slot.busy = true;
       next.slot = slot;
+      this.inFlightMB += est;
       this.pending.set(next.requestId, next);
       slot.worker.postMessage({ type: "computeScenario", requestId: next.requestId, ...next.job });
     }
@@ -104,6 +130,7 @@ export class SensitivityPool {
   terminate() {
     this.stopped = true;
     this.queue = [];
+    this.inFlightMB = 0;
     for (const slot of this.workers) {
       try { slot.worker.terminate(); } catch {}
     }

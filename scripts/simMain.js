@@ -13,6 +13,7 @@ import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=4.6";
 import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=4.6";
 import { generateReport } from "./reportGenerator.js?v=4.6";
 import { SIM_CONSTANTS } from "./simConstants.js?v=4.6";
+import { minOf, maxOf } from "./simMath.js?v=4.6";
 
 export class SimMain {
   // Clamp argument to [-1, 1] to prevent NaN from Math.asin domain errors
@@ -512,7 +513,7 @@ export class SimMain {
       const fmtNum = (v) => v >= 1000 ? `${(v / 1000).toFixed(1)}` : `${Math.round(v)}`;
       const pct = (flow, cap) => cap > 0 ? `${Math.round(flow / cap * 100)}%` : "";
       const fmtRange = (...vals) => {
-        const unit = Math.min(...vals) >= 1000 ? "Gbps" : "Mbps";
+        const unit = minOf(vals) >= 1000 ? "Gbps" : "Mbps";
         const fmt = unit === "Gbps" ? (v) => (v / 1000).toFixed(1) : (v) => Math.round(v);
         return vals.map(fmt).join("|") + " " + unit;
       };
@@ -557,8 +558,8 @@ export class SimMain {
       let bottleneckLine = "";
       this._bottleneckInfo = null; // surfaced to the bottom-bar warnings
       if (segments.length > 1) {
-        const minCap = Math.min(...segments.map((s) => s.cap));
-        const maxCap = Math.max(...segments.map((s) => s.cap));
+        const minCap = minOf(segments.map((s) => s.cap));
+        const maxCap = maxOf(segments.map((s) => s.cap));
         if (maxCap > 0 && (maxCap - minCap) / maxCap > 0.05) {
           const bottleneck = segments.reduce((a, b) => (a.cap < b.cap ? a : b));
           bottleneckLine = `Bottleneck: ${bottleneck.name}`;
@@ -592,7 +593,7 @@ export class SimMain {
       // capacity at this orbital position.
       const ringRange = (inring) => {
         if (!inring || inring.length === 0) return null;
-        const lo = 2 * Math.min(...inring), hi = 2 * Math.max(...inring);
+        const lo = 2 * minOf(inring), hi = 2 * maxOf(inring);
         if (lo === hi) return fmtMbps(lo);
         const unit = Math.min(lo, hi) >= 1000 ? "Gbps" : "Mbps";
         const fmt = unit === "Gbps" ? (v) => (v / 1000).toFixed(1) : (v) => Math.round(v);
@@ -614,7 +615,7 @@ export class SimMain {
 
       if (earthCapTotal > 0 || earthInring.length > 0) {
         if (earthInring.length > 0) {
-          const eMin = Math.min(...earthInring), eMax = Math.max(...earthInring);
+          const eMin = minOf(earthInring), eMax = maxOf(earthInring);
           const eAvg = earthInring.reduce((a, b) => a + b, 0) / earthInring.length;
           html += `ring Earth ${fmtRange(eMin, eAvg, eMax)}\n`;
         }
@@ -633,7 +634,7 @@ export class SimMain {
       if (marsCapTotal > 0 || marsInring.length > 0) {
         html += planetLine(marsCap.side1, "\u2022", marsCap.side2, `Mars ${marsRingRange || fmtMbps(marsCapTotal)}`, 2);
         if (marsInring.length > 0) {
-          const mMin = Math.min(...marsInring), mMax = Math.max(...marsInring);
+          const mMin = minOf(marsInring), mMax = maxOf(marsInring);
           const mAvg = marsInring.reduce((a, b) => a + b, 0) / marsInring.length;
           html += `ring Mars ${fmtRange(mMin, mAvg, mMax)}\n`;
         }
@@ -1656,8 +1657,8 @@ export class SimMain {
 
       if (values.length > 0) {
         // Calculate minimum value
-        const min = Math.min(...values);
-        const max = Math.max(...values);
+        const min = minOf(values);
+        const max = maxOf(values);
 
         // Calculate average value
         const sum = values.reduce((acc, val) => acc + val, 0);
