@@ -956,10 +956,10 @@ export class SimUi {
       const total = buildRingValues().length * buildTechValues().length * buildDateValues().length;
       const wt = this.simMain?.lastWorkerTimings;
       const perIterMs = wt?.totalMs || wt?.links || 0;
-      const keepSec = parseFloat(document.getElementById("sens-keep-step")?.value) || 0;
       let timeStr = "";
-      if (perIterMs > 0 || keepSec > 0) {
-        const totalSec = Math.round(total * (perIterMs / 1000 + keepSec));
+      if (perIterMs > 0) {
+        // Rough upper bound; the worker pool runs several scenarios concurrently.
+        const totalSec = Math.round(total * (perIterMs / 1000));
         if (totalSec < 60) timeStr = ` ~${totalSec} seconds`;
         else if (totalSec < 3600) timeStr = ` ~${Math.round(totalSec / 60)} minutes`;
         else timeStr = ` ~${(totalSec / 3600).toFixed(1)} hours`;
@@ -1311,10 +1311,9 @@ export class SimUi {
         const ringEnabled = document.getElementById("sens-ring-enable").checked;
         const techEnabled = document.getElementById("sens-tech-enable").checked;
         const dateEnabled = document.getElementById("sens-date-enable").checked;
-        const keepStepSec = parseFloat(document.getElementById("sens-keep-step")?.value) || 0;
-        const showDisplay = keepStepSec >= 1;
-        // When not displaying steps, suppress updateLoop to prevent stale link flashes
-        if (!showDisplay) this.simMain._sensitivityRunning = true;
+        // Suppress the reactive updateLoop during the sweep so it doesn't waste the
+        // main thread rebuilding/rendering constellations the worker path computes.
+        this.simMain._sensitivityRunning = true;
         const ringValues = buildRingValues();
         const techValues = buildTechValues();
         const dateValues = buildDateValues();
@@ -1399,12 +1398,12 @@ export class SimUi {
           return { scenario, metrics, costs, capacityInfo, rs };
         };
 
-        // ── Parallel path: fan scenarios out across a worker pool. Used whenever
-        //    we're not animating each constellation (the common, slow case). ──
-        if (!showDisplay) {
-          // Generate every scenario's uiConfig synchronously, in the SAME nested
-          // order as the serial path, so simLinkBudget (tech) evolves identically
-          // and the seed requiredmbps values are bit-identical. No topology here.
+        // ── Fan scenarios out across a worker pool. This is the only mode —
+        //    per-step animation isn't possible while scenarios run in workers. ──
+        {
+          // Generate every scenario's uiConfig synchronously, in a stable nested
+          // order so simLinkBudget (tech) evolves deterministically and the seed
+          // requiredmbps values are reproducible. No topology here.
           const allCats = [
             "economics", "simulation", "laser_technology",
             "ring_mars", "circular_rings", "eccentric_rings", "ring_earth", "adapted_rings", "launch_vehicle",
@@ -1492,182 +1491,6 @@ export class SimUi {
           } finally {
             pool.terminate();
             this._sensPool = null;
-          }
-        } else
-        for (const techUserVal of techValues) {
-          if (stopRequested) break;
-          for (const ringCount of ringValues) {
-            if (stopRequested) break;
-
-            // Apply ring count (via simple config) and laser tech
-            if (ringCount != null) this.applySimpleDefaults(ringCount);
-            if (techUserVal != null) {
-              const techInternal = Math.round(Math.log2(techUserVal));
-              this.applySliderValues({ "laser_technology.improvement-factor": techInternal });
-            }
-
-            // Stable config for the inner date loop
-            const scenarioConfig = this.getGroupsConfig([
-              "economics", "simulation", "laser_technology",
-              "ring_mars", "circular_rings", "eccentric_rings", "ring_earth", "adapted_rings", "launch_vehicle",
-            ]);
-            scenarioConfig["simulation.calctimeSec"] = 100;
-            this.simMain.setSatellitesConfig(scenarioConfig);
-            // Force-apply the pending satellite config so longTermRun uses it.
-            // Mirror updateLoop Phase 1: invalidate cache + clear display links
-            // so the rAF-driven updateLoop doesn't re-apply stale cached links.
-            if (this.simMain.newSatellitesConfig) {
-              this.simMain.simSatellites.setSatellitesConfig(this.simMain.newSatellitesConfig);
-              this.simMain.satellitesCount = this.simMain.simSatellites.getSatellites().length;
-              this.simMain.appliedSatellitesConfig = this.simMain.newSatellitesConfig;
-              this.simMain.newSatellitesConfig = null;
-              this.simMain.configEpoch++;
-              this.simMain.windowCache.clear();
-              this.simMain.displayedWindowIdx = null;
-            }
-
-            // Clear stale links immediately and update display satellites
-            // so the user sees the new constellation without old links.
-            if (this.simMain.simDisplay) {
-              this.simMain.simDisplay.updatePossibleLinks([]);
-              this.simMain.simDisplay.updateActiveLinks([]);
-              // Compute positions first so setSatellites can access .x/.y/.z
-              const dispDate = new Date(dateValues[0] || "2030-01-01");
-              const dispPlanets = this.simMain.simSolarSystem.updatePlanetsPositions(dispDate);
-              const dispSats = this.simMain.simSatellites.updateSatellitesPositions(dispDate);
-              this.simMain.simDisplay.setSatellites(this.simMain.simSatellites.getSatellites());
-              this.simMain.simDisplay.updatePositions(dispPlanets, dispSats);
-              this.simMain.simDisplay.animate();
-            }
-
-            // --- Synchronous feedback loop for earth/mars in-ring mbps ---
-            // Compute topology quickly (no flow/latency), read inring capacity,
-            // adjust sliders until earth/mars match the relay aggregate.
-            if (ringCount != null) {
-              const fbDate = new Date(dateValues[0] || "2030-01-01");
-              let prevEarthMin = -1, prevMarsMin = -1;
-              for (let fbIter = 0; fbIter < 100; fbIter++) {
-                const planets = this.simMain.simSolarSystem.updatePlanetsPositions(fbDate);
-                const satellites = this.simMain.simSatellites.updateSatellitesPositions(fbDate);
-                const links = this.simMain.simNetwork.getPossibleLinks(planets, satellites);
-                const capInfo = this.simMain.calculateCapacityInfo(links);
-                const rs = this.simMain.simNetwork.routeSummary;
-                if (!rs || !rs.totalThroughput || rs.totalThroughput <= 0) break;
-
-                // Detect oscillation: if capacity values are unchanged, the
-                // quadratic scale can't represent a closer value — stop.
-                const eInring = capInfo.ringCapacities?.["ring_earth"]?.inring || [];
-                const mInring = capInfo.ringCapacities?.["ring_mars"]?.inring || [];
-                const curEarth = eInring.length ? Math.round(2 * minOf(eInring)) : 0;
-                const curMars = mInring.length ? Math.round(2 * minOf(mInring)) : 0;
-                if (curEarth === prevEarthMin && curMars === prevMarsMin) break;
-                prevEarthMin = curEarth;
-                prevMarsMin = curMars;
-
-                const outcome = this._feedbackStep(capInfo, rs.totalThroughput);
-                if (outcome !== "adjusted") break;
-
-                // Rebuild satellites with corrected config
-                const newConfig = this.getGroupsConfig([
-                  "economics", "simulation", "laser_technology",
-                  "ring_mars", "circular_rings", "eccentric_rings", "ring_earth", "adapted_rings", "launch_vehicle",
-                ]);
-                newConfig["simulation.calctimeSec"] = 100;
-                this.simMain.setSatellitesConfig(newConfig);
-                if (this.simMain.newSatellitesConfig) {
-                  this.simMain.simSatellites.setSatellitesConfig(this.simMain.newSatellitesConfig);
-                  this.simMain.satellitesCount = this.simMain.simSatellites.getSatellites().length;
-                  this.simMain.appliedSatellitesConfig = this.simMain.newSatellitesConfig;
-                  this.simMain.newSatellitesConfig = null;
-                  this.simMain.configEpoch++;
-                  this.simMain.windowCache.clear();
-                  this.simMain.displayedWindowIdx = null;
-                }
-                await new Promise((r) => setTimeout(r, 0));
-              }
-            }
-
-            for (const dateStr of dateValues) {
-              if (stopRequested) break;
-
-              console.log(`[Sensitivity] longTermRun: rings=${ringCount}, tech=${techUserVal}, date=${dateStr}, sats=${this.simMain.satellitesCount}`);
-              const result = await this.simMain.longTermRun(
-                { from: dateStr, to: dateStr, stepDays: 1 },
-                { useTimeout: true, skipDisplay: !showDisplay }
-              );
-
-              // Capture live-metrics-equivalent data for this scenario
-              const costs = this.simMain.calculateCosts(
-                result.data?.[0]?.maxFlowGbps ?? 0,
-                this.simMain.resultTrees
-              );
-              const capacityInfo = this.simMain.capacityInfo;
-              const rs = this.simMain.routeSummary;
-              const ld = this.simMain.lastLatencyData;
-
-              // Per-segment flow capacities (Mbps): a ring's min cross-section is
-              // 2 × its narrowest in-ring link.
-              const ringMin = (name) => {
-                const a = capacityInfo?.ringCapacities?.[name]?.inring;
-                return a && a.length ? 2 * minOf(a) : null;
-              };
-              // Satellites per area, aggregated from the cost trees by ring.
-              let earthSats = 0, marsSats = 0, relaySats = 0;
-              for (const orbit of this.simMain.resultTrees || []) {
-                const rn = orbit.ringName || "";
-                const c = orbit.satCount || 0;
-                if (rn === "ring_earth") earthSats += c;
-                else if (rn === "ring_mars") marsSats += c;
-                else relaySats += c; // adapted / circular / eccentric
-              }
-              const metrics = {
-                sats: this.simMain.satellitesCount,
-                earthSats, relaySats, marsSats,
-                flow: (result.data?.[0]?.maxFlowGbps ?? 0) * 1000, // achieved max-flow, Mbps
-                earthFlow: ringMin("ring_earth"),
-                marsFlow: ringMin("ring_mars"),
-                relayFlow: rs?.totalThroughput ?? null,            // relay aggregate capacity
-                cost: costs.totalCosts,
-                cpf: costs.costPerMbps,
-                latMin: ld?.bestLatency != null ? ld.bestLatency / 60 : null,   // minutes
-                latP50: ld?.medianLatency != null ? ld.medianLatency / 60 : null,
-              };
-
-              result.scenario = {
-                ringCount: ringCount ?? "(current)",
-                laserTechImprovement: techUserVal ?? "(current)",
-                launchDate: dateStr,
-                satellites: this.simMain.satellitesCount,
-              };
-              result.liveMetrics = {
-                satellites: this.simMain.satellitesCount,
-                costs,
-                metrics,
-                capacityInfo: capacityInfo ? JSON.parse(JSON.stringify(capacityInfo)) : null,
-                routeSummary: rs ? { ...rs } : null,
-              };
-              resultArray.push(result);
-
-              // --- Push to real-time charts ---
-              pushChartPoint(result.scenario, metrics);
-
-              completed++;
-              const pct = Math.round((completed / totalScenarios) * 100);
-              progressBar.style.width = `${pct}%`;
-              progressText.textContent = `${pct}% (${completed}/${totalScenarios})`;
-
-              // Keep step: display links for the configured duration, then clear
-              if (showDisplay) {
-                await new Promise((r) => setTimeout(r, keepStepSec * 1000));
-                // Clear links before the next config change
-                if (this.simMain.simDisplay) {
-                  this.simMain.simDisplay.updatePossibleLinks([]);
-                  this.simMain.simDisplay.updateActiveLinks([]);
-                }
-              } else {
-                await new Promise((r) => setTimeout(r, 0));
-              }
-            }
           }
         }
 
