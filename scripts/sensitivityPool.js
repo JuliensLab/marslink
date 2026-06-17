@@ -16,14 +16,16 @@ export class SensitivityPool {
    *   workers share ONE ~4GB V8 pointer-compression cage with the main thread
    *   (Chrome M92+), so their heap is additive; exceeding it crashes the renderer
    *   ("Aw, Snap! Out of Memory"). We admit jobs only while the sum of their
-   *   estimated heap stays under this budget. Defaults to ~half the cage.
+   *   estimated heap stays under this budget. Defaults to ~60% of the cage,
+   *   leaving headroom for the main thread, result deserialization, GC lag, and
+   *   per-scenario estimate error.
    */
   constructor(size, opts = {}) {
     const cores = (typeof navigator !== "undefined" && navigator.hardwareConcurrency) || 4;
     this.size = Math.max(1, Math.min(size || Math.floor(cores / 2), cores));
     const heapLimitMB = (typeof performance !== "undefined" && performance.memory)
       ? Math.round(performance.memory.jsHeapSizeLimit / 1048576) : 4096;
-    this.memBudgetMB = opts.memBudgetMB || Math.floor(heapLimitMB * 0.5);
+    this.memBudgetMB = opts.memBudgetMB || Math.floor(heapLimitMB * 0.6);
     this.inFlightMB = 0;
     this.queue = [];
     this.pending = new Map(); // requestId -> entry
