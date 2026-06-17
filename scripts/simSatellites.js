@@ -18,6 +18,7 @@ export class SimSatellites {
     // getOrbitaElements. RAAN and argument of perigee are independent sliders.
     this.adaptedRaanPct = 100;
     this.adaptedArgPeriPct = 100;
+    this.adaptedEccentricityPct = 100;
     this.maxSatCount = 20000; // Default high limit
     this.requestedSatelliteCount = 0; // sats requested before the maxSatCount cap
     this.satellitesTruncated = false; // true when the cap clipped the constellation
@@ -179,8 +180,10 @@ export class SimSatellites {
     // workers) applies them.
     const raanRaw = uiConfig["adapted_rings.earth-mars-raan-pct"];
     const argPeriRaw = uiConfig["adapted_rings.earth-mars-argperi-pct"];
+    const eccRaw = uiConfig["adapted_rings.earth-mars-eccentricity-pct"];
     const raanPct = typeof raanRaw === "number" ? raanRaw : 100;
     const argPeriPct = typeof argPeriRaw === "number" ? argPeriRaw : 100;
+    const eccentricityPct = typeof eccRaw === "number" ? eccRaw : 100;
 
     const distOuterAu = this.getMars().a;
     const distInnerAu = this.getEarthApsis().periapsis * 1.006;
@@ -219,6 +222,7 @@ export class SimSatellites {
         earthMarsInclinationPct: 0.5,
         raanPct,
         argPeriPct,
+        eccentricityPct,
       });
     }
     return satellitesConfig;
@@ -360,6 +364,7 @@ export class SimSatellites {
     const adaptedCfg = satellitesConfig.find((c) => c.ringType === "Adapted");
     this.adaptedRaanPct = adaptedCfg && typeof adaptedCfg.raanPct === "number" ? adaptedCfg.raanPct : 100;
     this.adaptedArgPeriPct = adaptedCfg && typeof adaptedCfg.argPeriPct === "number" ? adaptedCfg.argPeriPct : 100;
+    this.adaptedEccentricityPct = adaptedCfg && typeof adaptedCfg.eccentricityPct === "number" ? adaptedCfg.eccentricityPct : 100;
     // Cheap pre-count from the config (each ring carries its satCount) so we can
     // refuse an over-cap build instead of generating then discarding a huge array.
     const requested = satellitesConfig.reduce((sum, c) => sum + (c.satCount || 0), 0);
@@ -1236,18 +1241,23 @@ export class SimSatellites {
         apsides,
       };
     else if (ringType == "Adapted") {
-      // Blend RAAN (o) and argument of perigee (p) linearly between Earth (0%)
-      // and Mars (100%) — independent sliders, no middle stop (unlike inclination).
       const raanPct = this.adaptedRaanPct ?? 100;
       const argPeriPct = this.adaptedArgPeriPct ?? 100;
-      const blend = (earthVal, marsVal, pct) => earthVal + (marsVal - earthVal) * (pct / 100);
+      const eccPct = this.adaptedEccentricityPct ?? 100;
+      // Linear-by-`a` value with setpoints at Earth's and Mars's semi-major axis,
+      // UNCLAMPED (extrapolates linearly below a_earth / above a_mars).
+      const aFrac = (a - this.Earth.a) / (this.Mars.a - this.Earth.a);
+      const linearByA = (el) => this.Earth[el] + (this.Mars[el] - this.Earth[el]) * aFrac;
+      // Each slider blends from the linear-by-`a` value (0%) to the current
+      // behaviour (100%): Mars's constant node/perigee, and the nonlinear-`e` curve.
+      const towardCurrent = (linear, current, pct) => linear + (current - linear) * (pct / 100);
       return {
         i: this.addInterpolationBias(this.interpolateOrbitalElement(a, "i"), 50, "i"),
-        o: blend(this.Earth.o, this.Mars.o, raanPct), // RAAN
-        p: blend(this.Earth.p, this.Mars.p, argPeriPct), // arg perigee
+        o: towardCurrent(linearByA("o"), this.Mars.o, raanPct), // RAAN
+        p: towardCurrent(linearByA("p"), this.Mars.p, argPeriPct), // arg perigee
         a: a,
         n: n,
-        e: this.interpolateOrbitalElementNonLinear(a, "e"),
+        e: Math.max(0, towardCurrent(linearByA("e"), this.interpolateOrbitalElementNonLinear(a, "e"), eccPct)),
         l: long,
         Dele: this.Mars.Dele, // J2000 epoch
         apsides,
