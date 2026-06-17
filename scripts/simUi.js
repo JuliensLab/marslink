@@ -1354,6 +1354,24 @@ export class SimUi {
           "economics", "simulation", "laser_technology",
           "ring_mars", "circular_rings", "eccentric_rings", "ring_earth", "adapted_rings", "launch_vehicle",
         ]);
+        // Snapshot the RAW slider element values (internal positions) so we can
+        // restore exactly. getGroupsConfig returns user-facing values; writing
+        // those back onto a nonlinear range slider (pow10/quadratic) corrupts it —
+        // e.g. maxSatCount (pow10) clamps to the slider max → a 10M-cap, 10M-mbps
+        // monster constellation whose live flow calc never finishes after a sweep.
+        const baseSliderState = [];
+        for (const cat of Object.keys(this.sliders)) {
+          for (const id of Object.keys(this.sliders[cat])) {
+            const input = this.sliders[cat][id];
+            if (!input) continue;
+            if (input.classList && input.classList.contains("radio-container")) {
+              const checked = input.querySelector("input[type=radio]:checked");
+              baseSliderState.push({ input, radio: checked ? checked.value : null });
+            } else {
+              baseSliderState.push({ input, value: input.value });
+            }
+          }
+        }
         const originalSimTime = this.simMain.simTime.getDate();
 
         const resultArray = [];
@@ -1494,17 +1512,18 @@ export class SimUi {
           }
         }
 
-        // Restore original config
-        for (const [key, val] of Object.entries(baseConfig)) {
-          const [section, sliderId] = key.split(".");
-          const input = this.sliders[section]?.[sliderId];
-          if (!input) continue;
-          if (input.classList && input.classList.contains("radio-container")) {
-            const radio = input.querySelector(`input[type=radio][value="${CSS.escape(String(val))}"]`);
-            if (radio) { radio.checked = true; radio.dispatchEvent(new Event("change", { bubbles: true })); }
+        // Restore original config from the raw slider snapshot (exact internal
+        // positions — never the user-facing baseConfig values, which corrupt
+        // nonlinear sliders).
+        for (const s of baseSliderState) {
+          if (s.radio !== undefined) {
+            if (s.radio != null) {
+              const radio = s.input.querySelector(`input[type=radio][value="${CSS.escape(String(s.radio))}"]`);
+              if (radio) { radio.checked = true; radio.dispatchEvent(new Event("change", { bubbles: true })); }
+            }
           } else {
-            input.value = val;
-            input.dispatchEvent(new Event("input", { bubbles: true }));
+            s.input.value = s.value;
+            s.input.dispatchEvent(new Event("input", { bubbles: true }));
           }
         }
         // Restore sim time
