@@ -1245,23 +1245,17 @@ export class SimSatellites {
         apsides,
       };
     else if (ringType == "Adapted") {
-      const raanPct = this.adaptedRaanPct ?? 100;
-      const argPeriPct = this.adaptedArgPeriPct ?? 100;
-      const eccPct = this.adaptedEccentricityPct ?? 100;
-      // Linear-by-`a` value with setpoints at Earth's and Mars's semi-major axis,
-      // UNCLAMPED (extrapolates linearly below a_earth / above a_mars).
-      const aFrac = (a - this.Earth.a) / (this.Mars.a - this.Earth.a);
-      const linearByA = (el) => this.Earth[el] + (this.Mars[el] - this.Earth[el]) * aFrac;
-      // Each slider blends from the linear-by-`a` value (0%) to the current
-      // behaviour (100%): Mars's constant node/perigee, and the nonlinear-`e` curve.
-      const towardCurrent = (linear, current, pct) => linear + (current - linear) * (pct / 100);
+      // RAAN, arg-perigee, eccentricity and inclination all blend identically to
+      // the circular-ring inclination: addInterpolationBias over the linear per-`a`
+      // interpolation. 0% = Earth value (every sat), 50% = the natural per-`a`
+      // interpolation (Earth near Earth, Mars near Mars), 100% = Mars value (every sat).
       return {
         i: this.addInterpolationBias(this.interpolateOrbitalElement(a, "i"), earthMarsInclinationPct, "i"),
-        o: towardCurrent(linearByA("o"), this.Mars.o, raanPct), // RAAN
-        p: towardCurrent(linearByA("p"), this.Mars.p, argPeriPct), // arg perigee
+        o: this.addInterpolationBias(this.interpolateOrbitalElement(a, "o"), this.adaptedRaanPct ?? 100, "o"), // RAAN
+        p: this.addInterpolationBias(this.interpolateOrbitalElement(a, "p"), this.adaptedArgPeriPct ?? 100, "p"), // arg perigee
         a: a,
         n: n,
-        e: Math.max(0, towardCurrent(linearByA("e"), this.interpolateOrbitalElementNonLinear(a, "e"), eccPct)),
+        e: this.addInterpolationBias(this.interpolateOrbitalElement(a, "e"), this.adaptedEccentricityPct ?? 100, "e"),
         l: long,
         Dele: this.Mars.Dele, // J2000 epoch
         apsides,
