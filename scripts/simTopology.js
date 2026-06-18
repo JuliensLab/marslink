@@ -231,6 +231,11 @@ export class TopologyBuilder {
 
       const innerSats = ringSatellites[inner.name];
       const outerSats = ringSatellites[outer.name];
+      // A ring whose satellites all fall outside the between-Earth-and-Mars zone
+      // (e.g. an adapted ring pushed inside Earth / outside Mars by the endpoint
+      // anchors) is filtered to empty above — skip it so the %-length indexing
+      // below can't divide by zero and read .inwards of undefined.
+      if (!innerSats.length || !outerSats.length) continue;
       const outerAngles = outerSats.map((s) => s.position.solarAngle);
 
       const rInner = inner.radius;
@@ -799,6 +804,11 @@ export class TopologyBuilder {
 
       const innerSats = ringSatellites[inner.name];
       const outerSats = ringSatellites[outer.name];
+      // A ring whose satellites all fall outside the between-Earth-and-Mars zone
+      // (e.g. an adapted ring pushed inside Earth / outside Mars by the endpoint
+      // anchors) is filtered to empty above — skip it so the %-length indexing
+      // below can't divide by zero and read .inwards of undefined.
+      if (!innerSats.length || !outerSats.length) continue;
       const outerAngles = outerSats.map((s) => s.position.solarAngle);
 
       const rInner = inner.radius;
