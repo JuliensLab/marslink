@@ -189,30 +189,46 @@ export class SimSatellites {
     // with a 0–100 slider (middle stop at 50 = the natural distance interpolation).
     const inclinationPct = typeof inclRaw === "number" ? inclRaw : 50;
 
-    const distOuterAu = this.getMars().a;
-    const distInnerAu = this.getEarthApsis().periapsis * 1.006;
+    // --- Radial range + distribution -----------------------------------------
+    const num = (v, d) => (typeof v === "number" && !Number.isNaN(v) ? v : d);
+    const earthAnchor = uiConfig["adapted_rings.earth-endpoint-anchor"] || "a";
+    const marsAnchor = uiConfig["adapted_rings.mars-endpoint-anchor"] || "a";
+    const spaceBy = uiConfig["adapted_rings.space-by-radius"] || "a";
+    const earthOffset = num(uiConfig["adapted_rings.earth-side-offset-pct"], 0.6);
+    const marsOffset = num(uiConfig["adapted_rings.mars-side-offset-pct"], 0);
+    const middlePct = num(uiConfig["adapted_rings.distribution-middle-pct"], 50);
+    const innerFracPct = num(uiConfig["adapted_rings.distribution-inner-fraction-pct"], 50);
 
-    const eInner = this.interpolateOrbitalElementNonLinear(distInnerAu, "e");
-    const eOuter = this.interpolateOrbitalElementNonLinear(distOuterAu, "e");
+    // Endpoint distances: the planet's chosen radius (perihelion a(1-e) / a /
+    // apohelion a(1+e)) nudged by the side offset. These sit at ringId 0 and
+    // ringCount-1, which the loop skips — keeping the rings between the planet rings.
+    const planetRadius = (p, anchor) =>
+      anchor === "perihelion" ? p.a * (1 - p.e) : anchor === "apohelion" ? p.a * (1 + p.e) : p.a;
+    const R_in = planetRadius(this.getEarth(), earthAnchor) * (1 + earthOffset / 100);
+    const R_out = planetRadius(this.getMars(), marsAnchor) * (1 + marsOffset / 100);
 
-    const rpInner = distInnerAu * (1 - eInner);
-    const rpOuter = distOuterAu * (1 - eOuter);
+    // Skew: piecewise-linear warp of the even parameter u∈(0,1). innerFraction of
+    // the rings land in [R_in, R_mid] (even), the rest in [R_mid, R_out] (even).
+    // innerFraction = middle% ⇒ uniform.
+    const R_mid = R_in + (middlePct / 100) * (R_out - R_in);
+    const F = Math.min(0.999, Math.max(0.001, innerFracPct / 100));
+    const warpR = (u) =>
+      u <= F ? R_in + (u / F) * (R_mid - R_in) : R_mid + ((u - F) / (1 - F)) * (R_out - R_mid);
 
-    const rpStep = (rpOuter - rpInner) / (ringCount - 1);
+    // Solve the semi-major axis whose "space-by" radius equals R.
+    const solveA = (R) => {
+      if (spaceBy === "a") return R;
+      const sign = spaceBy === "apohelion" ? 1 : -1; // perihelion a(1-e) | apohelion a(1+e)
+      let a = R;
+      for (let i = 0; i < 5; i++) a += R - a * (1 + sign * this.interpolateOrbitalElementNonLinear(a, "e"));
+      return a;
+    };
 
     const satellitesConfig = [];
 
     for (let ringId = 1; ringId < ringCount - 1; ringId++) {
       const ringType = "Adapted";
-      const targetRp = rpInner + rpStep * ringId;
-      let a_calc = targetRp;
-      for (let i = 0; i < 5; i++) {
-        let e_current = this.interpolateOrbitalElementNonLinear(a_calc, "e");
-        let rp_current = a_calc * (1 - e_current);
-        let error = targetRp - rp_current;
-        a_calc = a_calc + error;
-      }
-      let satDistanceSunAu = a_calc;
+      const satDistanceSunAu = solveA(warpR(ringId / (ringCount - 1)));
       let satCount = Math.ceil(routeCount * (1 + (linearSatCountIncrease * ringId) / ringCount));
       satellitesConfig.push({
         satCount: satCount,
