@@ -238,6 +238,12 @@ export class SimSatellites {
     // Inclination uses the same scheme as circular rings: addInterpolationBias
     // with a 0–100 slider (middle stop at 50 = the natural distance interpolation).
     const inclinationPct = typeof inclRaw === "number" ? inclRaw : 50;
+    // Per-`a` blend curves (anchor arrays from the chart editors): when present they
+    // override the constant scalar above, so the Earth↔Mars mix can vary by ring.
+    const raanCurve = uiConfig["adapted_rings.raan-curve"];
+    const argPeriCurve = uiConfig["adapted_rings.argperi-curve"];
+    const eccentricityCurve = uiConfig["adapted_rings.eccentricity-curve"];
+    const inclinationCurve = uiConfig["adapted_rings.inclination-curve"];
 
     // --- Radial range + distribution -----------------------------------------
     const num = (v, d) => (typeof v === "number" && !Number.isNaN(v) ? v : d);
@@ -323,6 +329,10 @@ export class SimSatellites {
         raanPct,
         argPeriPct,
         eccentricityPct,
+        raanCurve,
+        argPeriCurve,
+        eccentricityCurve,
+        inclinationCurve,
       });
     }
     return satellitesConfig;
@@ -465,6 +475,12 @@ export class SimSatellites {
     this.adaptedRaanPct = adaptedCfg && typeof adaptedCfg.raanPct === "number" ? adaptedCfg.raanPct : 100;
     this.adaptedArgPeriPct = adaptedCfg && typeof adaptedCfg.argPeriPct === "number" ? adaptedCfg.argPeriPct : 100;
     this.adaptedEccentricityPct = adaptedCfg && typeof adaptedCfg.eccentricityPct === "number" ? adaptedCfg.eccentricityPct : 100;
+    // Per-`a` blend curves (anchor arrays) — override the scalars above when present.
+    const arr = (v) => (Array.isArray(v) && v.length >= 2 ? v : null);
+    this.adaptedRaanCurve = adaptedCfg ? arr(adaptedCfg.raanCurve) : null;
+    this.adaptedArgPeriCurve = adaptedCfg ? arr(adaptedCfg.argPeriCurve) : null;
+    this.adaptedEccentricityCurve = adaptedCfg ? arr(adaptedCfg.eccentricityCurve) : null;
+    this.adaptedInclinationCurve = adaptedCfg ? arr(adaptedCfg.inclinationCurve) : null;
     // Cheap pre-count from the config (each ring carries its satCount) so we can
     // refuse an over-cap build instead of generating then discarding a huge array.
     const requested = satellitesConfig.reduce((sum, c) => sum + (c.satCount || 0), 0);
@@ -1377,17 +1393,24 @@ export class SimSatellites {
         apsides,
       };
     else if (ringType == "Adapted") {
-      // RAAN, arg-perigee, eccentricity and inclination all blend identically to
-      // the circular-ring inclination: addInterpolationBias over the linear per-`a`
-      // interpolation. 0% = Earth value (every sat), 50% = the natural per-`a`
-      // interpolation (Earth near Earth, Mars near Mars), 100% = Mars value (every sat).
+      // RAAN, arg-perigee, eccentricity and inclination each blend Earth↔Mars by a
+      // per-`a` percentage via addInterpolationBias over the natural per-`a`
+      // interpolation: 0% = Earth value, 50% = the natural interpolation, 100% = Mars
+      // value. That percentage is itself a curve over the ring's position u =
+      // (a−aEarth)/(aMars−aEarth): the chart editor supplies the anchors; if absent we
+      // fall back to the constant scalar (the old single-slider behaviour).
+      const u = Math.min(1, Math.max(0, (a - this.Earth.a) / ((this.Mars.a - this.Earth.a) || 1)));
+      const pctOf = (curve, fallback) =>
+        Array.isArray(curve) && curve.length >= 2
+          ? Math.min(100, Math.max(0, this.densityFromAnchors(curve, u)))
+          : fallback;
       return {
-        i: this.addInterpolationBias(this.interpolateOrbitalElement(a, "i"), earthMarsInclinationPct, "i"),
-        o: this.addInterpolationBias(this.interpolateOrbitalElement(a, "o"), this.adaptedRaanPct ?? 100, "o"), // RAAN
-        p: this.addInterpolationBias(this.interpolateOrbitalElement(a, "p"), this.adaptedArgPeriPct ?? 100, "p"), // arg perigee
+        i: this.addInterpolationBias(this.interpolateOrbitalElement(a, "i"), pctOf(this.adaptedInclinationCurve, earthMarsInclinationPct), "i"),
+        o: this.addInterpolationBias(this.interpolateOrbitalElement(a, "o"), pctOf(this.adaptedRaanCurve, this.adaptedRaanPct ?? 100), "o"), // RAAN
+        p: this.addInterpolationBias(this.interpolateOrbitalElement(a, "p"), pctOf(this.adaptedArgPeriCurve, this.adaptedArgPeriPct ?? 100), "p"), // arg perigee
         a: a,
         n: n,
-        e: this.addInterpolationBias(this.interpolateOrbitalElement(a, "e"), this.adaptedEccentricityPct ?? 100, "e"),
+        e: this.addInterpolationBias(this.interpolateOrbitalElement(a, "e"), pctOf(this.adaptedEccentricityCurve, this.adaptedEccentricityPct ?? 100), "e"),
         l: long,
         Dele: this.Mars.Dele, // J2000 epoch
         apsides,
