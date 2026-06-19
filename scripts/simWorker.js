@@ -106,6 +106,7 @@ function runPipeline({ requestId, windowIdx, configEpoch, uiConfig, satellitesCo
       circular_rings: uiConfig["circular_rings.laser-ports-per-satellite"],
       eccentric_rings: uiConfig["eccentric_rings.laser-ports-per-satellite"],
       adapted_rings: uiConfig["adapted_rings.laser-ports-per-satellite"],
+      adapted_eccentric_rings: uiConfig["adapted_eccentric_rings.laser-ports-per-satellite"],
     }
   );
 
@@ -279,6 +280,7 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
       circular_rings: uiConfig["circular_rings.laser-ports-per-satellite"],
       eccentric_rings: uiConfig["eccentric_rings.laser-ports-per-satellite"],
       adapted_rings: uiConfig["adapted_rings.laser-ports-per-satellite"],
+      adapted_eccentric_rings: uiConfig["adapted_eccentric_rings.laser-ports-per-satellite"],
     }
   );
   simSatellites.setMaxSatCount(uiConfig["simulation.maxSatCount"]);
@@ -349,11 +351,19 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
     const satellites = simSatellites.updateSatellitesPositions(date);
     simNetwork.getPossibleLinks(planets, satellites);
     const rs = simNetwork.routeSummary;
+    // Zone counts so the optimizer can constrain rings to stay between the planet
+    // orbits (no satellite inside Earth's orbit or outside Mars's).
+    let insideEarth = 0, outsideMars = 0;
+    for (const s of satellites) {
+      if (s.orbitalZone === "INSIDE_EARTH") insideEarth++;
+      else if (s.orbitalZone === "OUTSIDE_MARS") outsideMars++;
+    }
     return {
       type: "scenario-result",
       requestId,
       scenarioId,
       satellitesCount: satellites.length,
+      zoneCounts: { insideEarth, outsideMars },
       maxFlowGbps: 0,
       capacityInfo: null,
       routeSummary: rs
