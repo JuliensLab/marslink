@@ -26,21 +26,25 @@ function gaussian() {
   return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
 }
 
-/** Clamp every weight to [0,100], then rescale so the mean is MEAN. */
-function normalize(w) {
-  const c = w.map((x) => Math.min(100, Math.max(0, x)));
+/**
+ * Clamp to [lo,100], rescale toward a mean of MEAN to strip the overall-scale
+ * dimension (which the consumer normalizes away anyway, so it's a wasted degree of
+ * freedom for the search), then re-apply the floor so `lo` is honoured exactly.
+ */
+function normalize(w, lo = 0) {
+  let c = w.map((x) => Math.min(100, Math.max(lo, x)));
   const sum = c.reduce((a, b) => a + b, 0);
-  if (sum <= 0) return new Array(NB).fill(MEAN);
+  if (sum <= 0) return new Array(NB).fill(Math.max(lo, MEAN));
   const k = (NB * MEAN) / sum;
-  return c.map((x) => Math.min(100, x * k));
+  return c.map((x) => Math.min(100, Math.max(lo, x * k)));
 }
 
-function perturb(w, sigma) {
-  return normalize(w.map((x) => x + gaussian() * sigma));
+function perturb(w, sigma, lo = 0) {
+  return normalize(w.map((x) => x + gaussian() * sigma), lo);
 }
 
-function randomWeights() {
-  return normalize(Array.from({ length: NB }, () => Math.random() * 100));
+function randomWeights(lo = 0) {
+  return normalize(Array.from({ length: NB }, () => lo + Math.random() * (100 - lo)), lo);
 }
 
 /**
@@ -53,6 +57,7 @@ function randomWeights() {
  * @param {()=>boolean}      [o.shouldStop] return true to halt early
  * @param {number} [o.maxEvals=300]  evaluation budget (incl. the baseline)
  * @param {number} [o.batchSize=8]   candidates proposed & evaluated per generation
+ * @param {number} [o.minValue=0]    per-band floor: no weight goes below this
  * @returns {Promise<{weights:number[], objective:number, evals:number, baseline:number}>}
  */
 export async function solveBandDistribution({
@@ -62,8 +67,10 @@ export async function solveBandDistribution({
   shouldStop = () => false,
   maxEvals = 300,
   batchSize = 8,
+  minValue = 0,
 }) {
-  let current = normalize((initialWeights && initialWeights.length === NB ? initialWeights : new Array(NB).fill(MEAN)).slice());
+  const lo = Math.min(100, Math.max(0, minValue || 0));
+  let current = normalize((initialWeights && initialWeights.length === NB ? initialWeights : new Array(NB).fill(MEAN)).slice(), lo);
   let curObj = await evaluate(current);
   let evals = 1;
 
@@ -84,8 +91,8 @@ export async function solveBandDistribution({
     const batch = [];
     for (let i = 0; i < n; i++) {
       // Reserve ~1 slot per generation for a random restart while it's still warm.
-      if (i === n - 1 && Math.random() < 0.25 * T) batch.push(randomWeights());
-      else batch.push(perturb(current, sigma));
+      if (i === n - 1 && Math.random() < 0.25 * T) batch.push(randomWeights(lo));
+      else batch.push(perturb(current, sigma, lo));
     }
 
     const objs = await Promise.all(batch.map((w) => evaluate(w)));
