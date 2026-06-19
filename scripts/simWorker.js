@@ -98,7 +98,7 @@ function runPipeline({ requestId, windowIdx, configEpoch, uiConfig, satellitesCo
   simLinkBudget.setTechnologyConfig(uiConfig);
   simDeployment.setVehicleConfig(uiConfig);
   simDeployment.setSatelliteMassConfig(
-    uiConfig["economics.satellite-empty-mass"],
+    uiConfig["satellite.satellite-empty-mass"],
     uiConfig["laser_technology.laser-terminal-mass"],
     {
       ring_earth: uiConfig["ring_earth.laser-ports-per-satellite"],
@@ -122,6 +122,23 @@ function runPipeline({ requestId, windowIdx, configEpoch, uiConfig, satellitesCo
   const satellites = simSatellites.updateSatellitesPositions(simDate);
   const satellitesCount = satellites.length;
   mark("updatePositions", t);
+
+  // 3b. Run the station-keeping model (avg thruster count + n-year propellant per
+  //     ring, with per-sat sizing on planetary rings) so the deployment dry mass +
+  //     SK propellant — and therefore launch flights & cost — reflect it.
+  {
+    const bodyPos = {};
+    for (const p of planets) if (p && p.position) bodyPos[p.name] = p.position;
+    const skCfg = {
+      F: (uiConfig["satellite.satellite-thrust"] || 170) / 1000,
+      tm: uiConfig["satellite.thruster-system-mass"] >= 0 ? uiConfig["satellite.thruster-system-mass"] : 15,
+      maxN: uiConfig["satellite.max-thrusters"] >= 1 ? uiConfig["satellite.max-thrusters"] : 64,
+      n: uiConfig["satellite.sk-years"] >= 1 ? uiConfig["satellite.sk-years"] : 5,
+      isp: uiConfig["satellite.satellite-isp"] || 2500,
+      capacity: uiConfig["satellite.satellite-propellant-capacity"] || 1500,
+    };
+    simDeployment.computeStationKeeping(satellites, simSatellites.getOrbitalElements(), bodyPos, skCfg);
+  }
 
   // 4. Mission profile + cost trees
   let missionProfilesData = null;
@@ -242,7 +259,7 @@ function runPipeline({ requestId, windowIdx, configEpoch, uiConfig, satellitesCo
  * @param {number} msg.flowCalctimeMs    max-flow time budget (longTermRun uses 20000)
  * @param {number} msg.maxIterations     feedback-loop cap (100, matching the serial path)
  */
-function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flowCalctimeMs = 20000, maxIterations = 15, sizingBudgetMs = 6000 }) {
+function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flowCalctimeMs = 20000, maxIterations = 15, sizingBudgetMs = 6000, objectiveOnly = false }) {
   ensureState();
   const t0 = performance.now();
   const date = new Date(simDate);
@@ -254,7 +271,7 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
   simLinkBudget.setTechnologyConfig(uiConfig);
   simDeployment.setVehicleConfig(uiConfig);
   simDeployment.setSatelliteMassConfig(
-    uiConfig["economics.satellite-empty-mass"],
+    uiConfig["satellite.satellite-empty-mass"],
     uiConfig["laser_technology.laser-terminal-mass"],
     {
       ring_earth: uiConfig["ring_earth.laser-ports-per-satellite"],
@@ -320,6 +337,33 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
     uiConfig["ring_earth.requiredmbpsbetweensats"] = newEarth;
     uiConfig["ring_mars.requiredmbpsbetweensats"] = newMars;
     buildAndApply(); // rebuild for the next measurement
+  }
+
+  // Fast path for optimizers: the adapted-ring relay capacity (routeSummary
+  // .totalThroughput) comes straight from the topology builder and is independent
+  // of both the planet-ring sizing loop and the max-flow solve. So skip the
+  // mission profile, cost trees, max-flow and latencies — just build the topology
+  // once and return the relay throughput. Orders of magnitude cheaper per eval.
+  if (objectiveOnly) {
+    const planets = Object.values(simSolarSystem.updatePlanetsPositions(date));
+    const satellites = simSatellites.updateSatellitesPositions(date);
+    simNetwork.getPossibleLinks(planets, satellites);
+    const rs = simNetwork.routeSummary;
+    return {
+      type: "scenario-result",
+      requestId,
+      scenarioId,
+      satellitesCount: satellites.length,
+      maxFlowGbps: 0,
+      capacityInfo: null,
+      routeSummary: rs
+        ? { totalThroughput: rs.totalThroughput, routeCount: rs.routeCount, minThroughput: rs.minThroughput, avgThroughput: rs.avgThroughput, maxThroughput: rs.maxThroughput }
+        : null,
+      resultTreesData: null,
+      latencyData: null,
+      iterations,
+      totalMs: Math.round(performance.now() - t0),
+    };
   }
 
   // 3. Final scenario compute (mirrors SimMain.longTermRun for a single date).
