@@ -15,8 +15,7 @@
 // weight vector to a Promise of its score (higher = better). This module is pure
 // search logic with no DOM or worker knowledge, so it stays testable and ownable.
 
-const NB = 10;
-const MEAN = 50; // weights normalized to this mean (sum = NB*MEAN) each step
+const MEAN = 50; // weights normalized to this mean (sum = count*MEAN) each step
 
 /** Standard normal via Box–Muller. */
 function gaussian() {
@@ -34,8 +33,8 @@ function gaussian() {
 function normalize(w, lo = 0) {
   let c = w.map((x) => Math.min(100, Math.max(lo, x)));
   const sum = c.reduce((a, b) => a + b, 0);
-  if (sum <= 0) return new Array(NB).fill(Math.max(lo, MEAN));
-  const k = (NB * MEAN) / sum;
+  if (sum <= 0) return new Array(w.length).fill(Math.max(lo, MEAN));
+  const k = (w.length * MEAN) / sum;
   return c.map((x) => Math.min(100, Math.max(lo, x * k)));
 }
 
@@ -43,8 +42,8 @@ function perturb(w, sigma, lo = 0) {
   return normalize(w.map((x) => x + gaussian() * sigma), lo);
 }
 
-function randomWeights(lo = 0) {
-  return normalize(Array.from({ length: NB }, () => lo + Math.random() * (100 - lo)), lo);
+function randomWeights(lo = 0, n = 10) {
+  return normalize(Array.from({ length: n }, () => lo + Math.random() * (100 - lo)), lo);
 }
 
 /**
@@ -89,8 +88,11 @@ export async function solveBandDistribution({
   const a = Math.min(1, Math.max(0, alpha || 0));
   const pure = a <= 0 ? "cap" : a >= 1 ? "lat" : null; // skip normalization at the ends
   const evalAll = (ws) => Promise.all(ws.map((w) => evaluate(w)));
+  // The number of weights (= density anchors the optimizer searches) is whatever the
+  // caller seeds; everything below is count-agnostic.
+  const bandCount = initialWeights && initialWeights.length >= 2 ? initialWeights.length : 10;
 
-  let current = normalize((initialWeights && initialWeights.length === NB ? initialWeights : new Array(NB).fill(MEAN)).slice(), lo);
+  let current = normalize((initialWeights && initialWeights.length === bandCount ? initialWeights : new Array(bandCount).fill(MEAN)).slice(), lo);
   const baseM = await evaluate(current);
   let evals = 1;
 
@@ -109,7 +111,7 @@ export async function solveBandDistribution({
     while (evals < nCal && !shouldStop()) {
       const n = Math.min(batchSize, nCal - evals);
       const ws = [];
-      for (let i = 0; i < n; i++) ws.push(randomWeights(lo));
+      for (let i = 0; i < n; i++) ws.push(randomWeights(lo, bandCount));
       const ms = await evalAll(ws);
       evals += n;
       ws.forEach((w, i) => { observe(ms[i]); samples.push({ w, m: ms[i] }); });
@@ -145,7 +147,7 @@ export async function solveBandDistribution({
     const n = Math.min(batchSize, maxEvals - evals);
     const ws = [];
     for (let i = 0; i < n; i++) {
-      if (i === n - 1 && Math.random() < 0.25 * T) ws.push(randomWeights(lo));
+      if (i === n - 1 && Math.random() < 0.25 * T) ws.push(randomWeights(lo, bandCount));
       else ws.push(perturb(current, sigma, lo));
     }
     const ms = await evalAll(ws);
