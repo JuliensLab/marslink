@@ -196,9 +196,6 @@ export class SimSatellites {
     const spaceBy = uiConfig["adapted_rings.space-by-radius"] || "a";
     const earthOffset = num(uiConfig["adapted_rings.earth-side-offset-pct"], 0.6);
     const marsOffset = num(uiConfig["adapted_rings.mars-side-offset-pct"], 0);
-    const middlePct = num(uiConfig["adapted_rings.distribution-middle-pct"], 50);
-    const innerFracPct = num(uiConfig["adapted_rings.distribution-inner-fraction-pct"], 50);
-
     // Endpoint distances: the planet's chosen radius (perihelion a(1-e) / a /
     // apohelion a(1+e)) nudged by the side offset. These sit at ringId 0 and
     // ringCount-1, which the loop skips — keeping the rings between the planet rings.
@@ -207,13 +204,54 @@ export class SimSatellites {
     const R_in = planetRadius(this.getEarth(), earthAnchor) * (1 + earthOffset / 100);
     const R_out = planetRadius(this.getMars(), marsAnchor) * (1 + marsOffset / 100);
 
-    // Skew: piecewise-linear warp of the even parameter u∈(0,1). innerFraction of
-    // the rings land in [R_in, R_mid] (even), the rest in [R_mid, R_out] (even).
-    // innerFraction = middle% ⇒ uniform.
-    const R_mid = R_in + (middlePct / 100) * (R_out - R_in);
-    const F = Math.min(0.999, Math.max(0.001, innerFracPct / 100));
-    const warpR = (u) =>
-      u <= F ? R_in + (u / F) * (R_mid - R_in) : R_mid + ((u - F) / (1 - F)) * (R_out - R_mid);
+    // Distribution equalizer: NB band weights shape a smooth ring-density curve
+    // across the Earth→Mars span (band 0 = Earth side, band NB-1 = Mars side). The
+    // weights are relative (auto-normalized); flat weights ⇒ uniform spacing.
+    const NB = 10;
+    const bandWeights = [];
+    for (let i = 0; i < NB; i++)
+      bandWeights.push(Math.max(0, num(uiConfig[`adapted_rings.band-${i}-pct`], 50)));
+    if (bandWeights.reduce((a, b) => a + b, 0) <= 0) bandWeights.fill(1);
+
+    // Density ρ(u) = Σ wᵢ·φ((u−cᵢ)/Δ) with overlapping raised-cosine (Hann) bumps —
+    // a partition of unity, so flat weights ⇒ flat ρ. Ghost end-bands (clamped
+    // index, j = -1 and NB) hold ρ flat at u=0,1 so the end spacing stays coherent.
+    const dU = 1 / NB;
+    const density = (u) => {
+      let s = 0;
+      for (let j = -1; j <= NB; j++) {
+        const x = (u - (j + 0.5) * dU) / dU;
+        if (x > -1 && x < 1)
+          s += bandWeights[Math.min(NB - 1, Math.max(0, j))] * 0.5 * (1 + Math.cos(Math.PI * x));
+      }
+      return s;
+    };
+
+    // Cumulative-density table → inverse-CDF: maps an even mass fraction t∈(0,1) to
+    // the radial coordinate u, so ring spacing comes out ∝ 1/ρ (dense where boosted,
+    // sparse where cut, varying smoothly). Exactly N rings regardless of weights.
+    const M = 2000;
+    const cdf = new Float64Array(M + 1);
+    let prevD = density(0);
+    for (let m = 1; m <= M; m++) {
+      const d = density(m / M);
+      cdf[m] = cdf[m - 1] + (prevD + d) / 2; // trapezoid
+      prevD = d;
+    }
+    const total = cdf[M] || 1;
+    const cdfInverse = (t) => {
+      const target = Math.min(1, Math.max(0, t)) * total;
+      let lo = 0, hi = M;
+      while (hi - lo > 1) {
+        const mid = (lo + hi) >> 1;
+        if (cdf[mid] < target) lo = mid;
+        else hi = mid;
+      }
+      const span = cdf[hi] - cdf[lo] || 1;
+      return (lo + (target - cdf[lo]) / span) / M;
+    };
+
+    const warpR = (t) => R_in + cdfInverse(t) * (R_out - R_in);
 
     // Solve the semi-major axis whose "space-by" radius equals R.
     const solveA = (R) => {
