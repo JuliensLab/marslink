@@ -55,10 +55,24 @@ function randomWeights(lo = 0) {
  * @param {(w:number[])=>Promise<number>} o.evaluate  objective, higher = better
  * @param {(s:object)=>void} [o.onProgress] called after every generation
  * @param {()=>boolean}      [o.shouldStop] return true to halt early
- * @param {number} [o.maxEvals=300]  evaluation budget (incl. the baseline)
- * @param {number} [o.batchSize=8]   candidates proposed & evaluated per generation
- * @param {number} [o.minValue=0]    per-band floor: no weight goes below this
- * @returns {Promise<{weights:number[], objective:number, evals:number, baseline:number}>}
+ * The objective is a capacity/latency blend. `evaluate` returns the (already
+ * geometry-aggregated) metrics {capacity, latency} for a weight vector; this module
+ * scalarizes them with `alpha` (0 = pure capacity, 1 = pure latency) using
+ * range-normalization so the blend is unit-agnostic and the slider is balanced.
+ * For the pure endpoints no normalization is needed (a monotone rescale doesn't
+ * move the argmax), so calibration is skipped — keeping α=0 as fast as before.
+ *
+ * @param {number[]} o.initialWeights      starting weights (length 10)
+ * @param {(w:number[])=>Promise<{capacity:number,latency:number}>} o.evaluate
+ * @param {(s:object)=>void} [o.onProgress]
+ * @param {()=>boolean}      [o.shouldStop]
+ * @param {number} [o.maxEvals=300]  candidate-evaluation budget
+ * @param {number} [o.batchSize=8]   candidates per generation
+ * @param {number} [o.minValue=0]    per-band floor
+ * @param {number} [o.alpha=0]       0 = capacity, 1 = latency, between = blend
+ * @param {number} [o.calibrationFrac=0.2] share of the budget spent finding the
+ *   capacity/latency ranges (blended modes only) before the ranges are frozen
+ * @returns {Promise<{weights:number[], metrics:object, baseline:object, score:number, baselineScore:number, evals:number, alpha:number}>}
  */
 export async function solveBandDistribution({
   initialWeights,
@@ -68,51 +82,89 @@ export async function solveBandDistribution({
   maxEvals = 300,
   batchSize = 8,
   minValue = 0,
+  alpha = 0,
+  calibrationFrac = 0.2,
 }) {
   const lo = Math.min(100, Math.max(0, minValue || 0));
+  const a = Math.min(1, Math.max(0, alpha || 0));
+  const pure = a <= 0 ? "cap" : a >= 1 ? "lat" : null; // skip normalization at the ends
+  const evalAll = (ws) => Promise.all(ws.map((w) => evaluate(w)));
+
   let current = normalize((initialWeights && initialWeights.length === NB ? initialWeights : new Array(NB).fill(MEAN)).slice(), lo);
-  let curObj = await evaluate(current);
+  const baseM = await evaluate(current);
   let evals = 1;
 
-  const baseline = curObj;
-  let best = current.slice();
-  let bestObj = curObj;
-  let generation = 0;
+  // ── Calibration (blended modes only): sample random layouts to bracket the
+  //    achievable capacity/latency ranges, then freeze them so the scalarized
+  //    objective is stationary (shifting ranges would break simulated annealing).
+  let capMin = baseM.capacity, capMax = baseM.capacity, latMin = baseM.latency, latMax = baseM.latency;
+  const observe = (m) => {
+    if (!m) return;
+    if (isFinite(m.capacity)) { capMin = Math.min(capMin, m.capacity); capMax = Math.max(capMax, m.capacity); }
+    if (isFinite(m.latency)) { latMin = Math.min(latMin, m.latency); latMax = Math.max(latMax, m.latency); }
+  };
+  const samples = [{ w: current.slice(), m: baseM }];
+  if (!pure) {
+    const nCal = Math.min(maxEvals, Math.max(2 * batchSize, Math.round(maxEvals * calibrationFrac)));
+    while (evals < nCal && !shouldStop()) {
+      const n = Math.min(batchSize, nCal - evals);
+      const ws = [];
+      for (let i = 0; i < n; i++) ws.push(randomWeights(lo));
+      const ms = await evalAll(ws);
+      evals += n;
+      ws.forEach((w, i) => { observe(ms[i]); samples.push({ w, m: ms[i] }); });
+      onProgress({ phase: "calibrating", evals, maxEvals, temperature: 1, metrics: baseM, baseline: baseM, score: 0, baselineScore: 0 });
+    }
+  }
+  const capRange = (capMax - capMin) || 1;
+  const latRange = (latMax - latMin) || 1;
+  const score = (m) => {
+    if (!m) return -Infinity;
+    if (pure === "cap") return m.capacity;
+    if (pure === "lat") return isFinite(m.latency) ? -m.latency : -Infinity;
+    const sc = Math.min(1, Math.max(0, (m.capacity - capMin) / capRange));
+    const sl = isFinite(m.latency) ? Math.min(1, Math.max(0, (latMax - m.latency) / latRange)) : 0;
+    return (1 - a) * sc + a * sl;
+  };
 
-  onProgress({ best, bestObj, curObj, baseline, evals, maxEvals, generation, temperature: 1 });
+  const baselineScore = score(baseM);
+  // Seed the search from the best layout seen so far (baseline or a calibration hit).
+  let bestW = current.slice(), bestM = baseM, bestS = baselineScore;
+  for (const s of samples) { const sc = score(s.m); if (sc > bestS) { bestS = sc; bestM = s.m; bestW = s.w.slice(); } }
+  current = bestW.slice();
+  let curS = bestS, curM = bestM;
+
+  onProgress({ phase: "optimizing", evals, maxEvals, temperature: 1, metrics: bestM, baseline: baseM, score: bestS, baselineScore });
 
   while (evals < maxEvals && !shouldStop()) {
-    // Temperature 1 → 0 over the budget. High T = large perturbations + worse-move
-    // and restart acceptance (explore); low T = small steps, greedy (refine).
-    const T = Math.max(0.0, 1 - evals / maxEvals);
-    const sigma = 3 + 32 * T; // weight-units of Gaussian step
+    // Temperature 1 → 0 over the remaining budget: hot = big steps + worse-move /
+    // restart acceptance (explore), cold = small greedy steps (refine).
+    const T = Math.max(0, 1 - evals / maxEvals);
+    const sigma = 3 + 32 * T;
 
     const n = Math.min(batchSize, maxEvals - evals);
-    const batch = [];
+    const ws = [];
     for (let i = 0; i < n; i++) {
-      // Reserve ~1 slot per generation for a random restart while it's still warm.
-      if (i === n - 1 && Math.random() < 0.25 * T) batch.push(randomWeights(lo));
-      else batch.push(perturb(current, sigma, lo));
+      if (i === n - 1 && Math.random() < 0.25 * T) ws.push(randomWeights(lo));
+      else ws.push(perturb(current, sigma, lo));
     }
+    const ms = await evalAll(ws);
+    evals += n;
 
-    const objs = await Promise.all(batch.map((w) => evaluate(w)));
-    evals += batch.length;
+    let bi = 0, biS = score(ms[0]);
+    for (let i = 1; i < ms.length; i++) { const s = score(ms[i]); if (s > biS) { biS = s; bi = i; } }
+    const candW = ws[bi], candM = ms[bi], candS = biS;
 
-    let bi = 0;
-    for (let i = 1; i < objs.length; i++) if (objs[i] > objs[bi]) bi = i;
-    const cand = batch[bi], candObj = objs[bi];
-
-    // Metropolis acceptance against the current state, scaled relative to the
-    // objective magnitude so it's unit-agnostic (Mbps today, anything tomorrow).
+    // Metropolis acceptance, scaled by the objective magnitude so it behaves the
+    // same for raw capacity (Mbps), negative latency (s) or the [0,1] blend.
     const accept =
-      candObj >= curObj ||
-      (T > 0 && Math.random() < Math.exp((candObj - curObj) / (Math.max(1e-9, Math.abs(curObj)) * 0.05 * T)));
-    if (accept) { current = cand; curObj = candObj; }
-    if (candObj > bestObj) { best = cand.slice(); bestObj = candObj; }
+      candS >= curS ||
+      (T > 0 && Math.random() < Math.exp((candS - curS) / (Math.max(1e-9, Math.abs(curS) || 1) * 0.05 * T)));
+    if (accept) { current = candW; curS = candS; curM = candM; }
+    if (candS > bestS) { bestS = candS; bestW = candW.slice(); bestM = candM; }
 
-    generation++;
-    onProgress({ best, bestObj, curObj, baseline, evals, maxEvals, generation, temperature: T });
+    onProgress({ phase: "optimizing", evals, maxEvals, temperature: T, metrics: bestM, baseline: baseM, score: bestS, baselineScore });
   }
 
-  return { weights: best, objective: bestObj, evals, baseline };
+  return { weights: bestW, metrics: bestM, baseline: baseM, score: bestS, baselineScore, evals, alpha: a };
 }

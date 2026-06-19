@@ -357,7 +357,13 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
       maxFlowGbps: 0,
       capacityInfo: null,
       routeSummary: rs
-        ? { totalThroughput: rs.totalThroughput, routeCount: rs.routeCount, minThroughput: rs.minThroughput, avgThroughput: rs.avgThroughput, maxThroughput: rs.maxThroughput }
+        ? {
+            totalThroughput: rs.totalThroughput, routeCount: rs.routeCount,
+            minThroughput: rs.minThroughput, avgThroughput: rs.avgThroughput, maxThroughput: rs.maxThroughput,
+            // Latency stats are produced by the topology route builder (no max-flow
+            // needed), so they ride the fast path for the optimizer's latency goal.
+            minLatency: rs.minLatency, avgLatency: rs.avgLatency, maxLatency: rs.maxLatency,
+          }
         : null,
       resultTreesData: null,
       latencyData: null,
