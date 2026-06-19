@@ -26,16 +26,13 @@ function gaussian() {
 }
 
 /**
- * Clamp to [lo,100], rescale toward a mean of MEAN to strip the overall-scale
- * dimension (which the consumer normalizes away anyway, so it's a wasted degree of
- * freedom for the search), then re-apply the floor so `lo` is honoured exactly.
+ * Clamp each weight to [lo,100]. The search vector may concatenate several curves
+ * (ring density + Earth↔Mars blend curves); the blend values are absolute
+ * percentages, so we must NOT rescale toward a shared mean (that would couple the
+ * curves). The density is scale-free anyway, so a plain clamp serves both.
  */
 function normalize(w, lo = 0) {
-  let c = w.map((x) => Math.min(100, Math.max(lo, x)));
-  const sum = c.reduce((a, b) => a + b, 0);
-  if (sum <= 0) return new Array(w.length).fill(Math.max(lo, MEAN));
-  const k = (w.length * MEAN) / sum;
-  return c.map((x) => Math.min(100, Math.max(lo, x * k)));
+  return w.map((x) => Math.min(100, Math.max(lo, isFinite(x) ? x : MEAN)));
 }
 
 function perturb(w, sigma, lo = 0) {
