@@ -7,6 +7,8 @@
 
 import { SimSolarSystem } from "./simSolarSystem.js?v=4.6";
 import { createCarModel } from "./modelCar.js?v=4.6";
+import { positionFromSolarAngle } from "./simOrbits.js?v=4.6";
+import { stationKeepingAccel, GM, sampleThrustField, marchingSquares, satSchemeT, rampRGB, OVER_BUDGET_RGB, isThrustScheme, satStationKeeping, satTotalProp, G0, SECONDS_PER_YEAR } from "./simStationKeeping.js?v=4.6";
 
 /**
  * Converts astronomical units (AU) to 3D units using a scale factor.
@@ -49,6 +51,32 @@ export let sunScaleFactor = 1;
 export let planetScaleFactor = 1;
 export let satelliteScaleFactor = 1;
 
+// Superscript formatting for compact iso-thrust labels (e.g. "3.7×10⁻⁷ m/s²").
+const _SUP = { "-": "⁻", 0: "⁰", 1: "¹", 2: "²", 3: "³", 4: "⁴", 5: "⁵", 6: "⁶", 7: "⁷", 8: "⁸", 9: "⁹" };
+function supStr(n) {
+  return String(n).split("").map((ch) => _SUP[ch] || ch).join("");
+}
+function formatAccel(a) {
+  const exp = Math.floor(Math.log10(a));
+  const mant = a / Math.pow(10, exp);
+  return `${mant.toFixed(1)}×10${supStr(exp)} m/s²`;
+}
+
+// Format a duration given in years into the largest sensible unit: years → months
+// → days → hours → minutes (so a < 1 yr station-keeping life reads naturally).
+function fmtDuration(yr) {
+  if (!isFinite(yr)) return "∞";
+  const f = (v) => (v >= 10 ? String(Math.round(v)) : v.toFixed(1));
+  if (yr >= 1) return f(yr) + "y";
+  const mo = yr * 12;
+  if (mo >= 1) return f(mo) + "mo";
+  const d = yr * 365.25;
+  if (d >= 1) return f(d) + "d";
+  const h = d * 24;
+  if (h >= 1) return f(h) + "h";
+  return f(h * 60) + "min";
+}
+
 export class SimDisplay {
   /**
    * Creates an instance of SimDisplay (2D).
@@ -88,6 +116,15 @@ export class SimDisplay {
     this.possibleLinks = [];
     this.activeLinks = [];
     this.planetPositions = {};
+    this.thrustBodies = []; // bodies whose gravity is contoured in 2D ([] = hidden)
+    this.satPhysics = null; // ringName -> { dryMass, nRing, skPropRing, aThreshold, ports }
+    this.skCfg = { F: 0.17, tm: 15, maxN: 64, n: 5, isp: 2500, capacity: 1500 };
+    this.showPlanetOrbits = false;
+    this.geoOrbits = []; // planets whose geostationary orbit circle is drawn (true scale)
+    this.satLabelMode = false; // per-satellite value labels (S key)
+    this.satThrusterMax = 1;   // fleet max thruster count (Thrusters colour scale)
+    this.satLaserMax = 1;      // fleet max laser terminals (Lasers colour scale)
+    this.satLaserValues = [1];
     this.satellitePositions = [];
     this.satellites = [];
 
@@ -304,6 +341,72 @@ export class SimDisplay {
     this.drawSolarSystem();
   }
 
+  setThrustBodies(value) {
+    // Accept a comma string ("Sun,Earth") or an array of body names.
+    const arr = Array.isArray(value) ? value : String(value || "").split(",").map((s) => s.trim()).filter(Boolean);
+    this.thrustBodies = arr;
+    this.drawSolarSystem();
+  }
+
+  setSatellitePhysics(map, cfg) {
+    this.satPhysics = map;
+    if (cfg) this.skCfg = cfg;
+  }
+
+  setPlanetOrbits(value) {
+    this.showPlanetOrbits = Array.isArray(value) ? value.length > 0 : !!(value && String(value).length);
+    this.drawSolarSystem();
+  }
+
+  setGeostationaryOrbits(value) {
+    this.geoOrbits = Array.isArray(value) ? value : String(value || "").split(",").map((s) => s.trim()).filter(Boolean);
+    this.drawSolarSystem();
+  }
+
+  setSatLabelMode(on) {
+    this.satLabelMode = !!on;
+    this.drawSolarSystem();
+  }
+
+  /** Short value string for a satellite under the current colour mode (S labels). */
+  satLabelText(satellite, pos) {
+    const mode = this.satelliteColorMode;
+    if (mode === "Quad") {
+      const sa = ((((satellite.position && satellite.position.solarAngle) || 0) % 360) + 360) % 360;
+      return "Q" + Math.floor(sa / 90);
+    }
+    if (mode === "Zone") {
+      const z = satellite.orbitalZone;
+      return z ? ({ INSIDE_EARTH: "<E", BETWEEN_EARTH_AND_MARS: "E–M", OUTSIDE_MARS: ">M", EARTH_RING: "Er", MARS_RING: "Mr" }[z] || "?") : "?";
+    }
+    if (mode === "Suit") {
+      const s = satellite.suitable;
+      if (!s) return "–";
+      const e = s.includes("Earth"), m = s.includes("Mars");
+      return e && m ? "EM" : e ? "E" : m ? "M" : "–";
+    }
+    const ring = this.satPhysics && this.satPhysics[satellite.ringName];
+    if (!ring) return null;
+    if (mode === "Lasers") return String(ring.ports || 0);
+    const a = stationKeepingAccel(pos, this.planetPositions);
+    const isPlanetary = satellite.ringName === "ring_earth" || satellite.ringName === "ring_mars";
+    const { N, skProp, m } = satStationKeeping(a, ring.dryMass, ring, isPlanetary, this.skCfg);
+    const favail = N * this.skCfg.F;
+    if (mode === "Thrusters") return String(N);
+    if (mode === "Accel") return a.toExponential(1);
+    if (mode === "Thrust") { const mn = m * a * 1000; return (mn < 10 ? mn.toFixed(1) : Math.round(mn)) + "mN"; }
+    if (mode === "Thrust%") return Math.round((m * a) / favail * 100) + "%";
+    if (mode === "Time") {
+      const mThr = m - skProp; // mass once SK propellant is spent
+      const yr = (a > 0 && mThr > 0) ? (this.skCfg.isp * G0 / a) * Math.log(m / mThr) / SECONDS_PER_YEAR : Infinity;
+      return fmtDuration(yr);
+    }
+    if (mode === "Mass") return Math.round(m) + "kg";
+    if (mode === "SKprop") return Math.round(skProp) + "kg";
+    if (mode === "Totprop") return Math.round(satTotalProp(ring, skProp, isPlanetary)) + "kg";
+    return null;
+  }
+
   /**
    * Sets the size factors for sun and planets.
    *
@@ -393,6 +496,177 @@ export class SimDisplay {
   }
 
   /**
+   * Draw 20 iso-acceleration contours of the combined gravity field
+   * a = Σ G·M/ρ² of the user-selected bodies (`this.thrustBodies`, a subset of
+   * Sun/Earth/Mars/Jupiter). Levels are log-spaced across the field's actual
+   * range, so 20 zones are always visible. A coarse global grid handles the
+   * smooth far field; a fine sub-grid sampled in a box around each body keeps the
+   * tight near-body contours smooth instead of polygonal. Cached (throttled) —
+   * only the AU→screen transform runs per frame, so pan/zoom stay cheap.
+   *
+   * @param {number} centerX - screen x of the Sun (px)
+   * @param {number} centerY - screen y of the Sun (px)
+   * @param {number} scale   - AU→px scale factor (baseScale * zoom)
+   */
+  drawThrustZones(centerX, centerY, scale) {
+    const N = 20;            // always 20 zones
+    const GRID = 180;        // coarse grid samples per axis
+    const GRIDF = 160;       // fine grid samples per axis (per body)
+
+    const bodies = this.thrustBodies || [];
+    const sig = bodies.slice().sort().join(",");
+
+    const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+    if (!this._contour) this._contour = { ms: -1e9, sig: null, colors: [], segs: [], labels: [] };
+    const c = this._contour;
+    // Recompute the (slowly-varying) field+contours only on body change or throttle.
+    if (c.sig !== sig || now - c.ms > 400) {
+      if (!this._contourField || this._contourField.length !== GRID * GRID) {
+        this._contourField = new Float32Array(GRID * GRID);
+      }
+      if (!this._fineField || this._fineField.length !== GRIDF * GRIDF) {
+        this._fineField = new Float32Array(GRIDF * GRIDF);
+      }
+      // Selected bodies → { name: G·M }, positions (Sun at origin), and box centres.
+      const gmSel = {}, posSel = {}, centers = [];
+      let maxDist = 0;
+      for (const name of bodies) {
+        if (GM[name] === undefined) continue;
+        const pos = name === "Sun" ? { x: 0, y: 0, z: 0 } : this.planetPositions[name];
+        if (!pos) continue;
+        gmSel[name] = GM[name];
+        posSel[name] = pos;
+        centers.push(pos);
+        const d = Math.hypot(pos.x, pos.y);
+        if (d > maxDist) maxDist = d;
+      }
+
+      // Region grows to enclose the farthest selected body (e.g. Jupiter ~5.2 AU);
+      // the ±2.2 AU floor keeps inner-system resolution high for inner-only sets.
+      const R = Math.max(2.2, maxDist + 0.8);
+      const x0 = -R, y0 = -R;
+      const dx = (2 * R) / (GRID - 1), dy = dx;
+      const RBOX = Math.max(0.2, dx * 6); // fine box spans ~6 coarse cells
+
+      // --- Coarse global field + adaptive log-spaced levels ---
+      const field = this._contourField;
+      sampleThrustField(field, GRID, GRID, x0, y0, dx, dy, posSel, gmSel);
+      let fmin = Infinity, fmax = 0;
+      for (let i = 0; i < field.length; i++) { const v = field[i]; if (v < fmin) fmin = v; if (v > fmax) fmax = v; }
+      const levels = [];
+      if (fmax > 0 && fmax > fmin) {
+        const lnMin = Math.log10(Math.max(fmin, fmax * 1e-9)); // guard a tiny/zero floor
+        const lnMax = Math.log10(fmax);
+        for (let i = 0; i < N; i++) {
+          const t = (i + 0.5) / N;
+          levels.push(Math.pow(10, lnMin + t * (lnMax - lnMin)));
+        }
+      }
+
+      c.colors = levels.map((L, i) => {
+        // Green (low) → amber → red (high), spread evenly over the 20 zones.
+        const t = N > 1 ? i / (N - 1) : 0;
+        const r = Math.round(220 * Math.min(1, t * 2));
+        const g = Math.round(160 * Math.min(1, (1 - t) * 2));
+        return `rgb(${r},${g},0)`;
+      });
+
+      // --- Segments per level: coarse OUTSIDE the body boxes, fine INSIDE them ---
+      const inBox = (mx, my) => {
+        for (let b = 0; b < centers.length; b++) {
+          if (Math.abs(mx - centers[b].x) < RBOX && Math.abs(my - centers[b].y) < RBOX) return true;
+        }
+        return false;
+      };
+      const segsByLevel = levels.map(() => []);
+      const tmp = [];
+      for (let li = 0; li < levels.length; li++) {
+        tmp.length = 0;
+        marchingSquares(field, GRID, GRID, x0, y0, dx, dy, levels[li], tmp);
+        const segs = segsByLevel[li];
+        for (let k = 0; k < tmp.length; k += 4) {
+          const mx = (tmp[k] + tmp[k + 2]) * 0.5, my = (tmp[k + 1] + tmp[k + 3]) * 0.5;
+          if (!inBox(mx, my)) segs.push(tmp[k], tmp[k + 1], tmp[k + 2], tmp[k + 3]);
+        }
+      }
+      // Fine refinement: a high-res box around each body (all selected bodies
+      // still contribute to the field, so the seam at the box edge matches).
+      const fine = this._fineField;
+      const dxf = (2 * RBOX) / (GRIDF - 1), dyf = dxf;
+      for (let b = 0; b < centers.length; b++) {
+        const fx0 = centers[b].x - RBOX, fy0 = centers[b].y - RBOX;
+        sampleThrustField(fine, GRIDF, GRIDF, fx0, fy0, dxf, dyf, posSel, gmSel);
+        for (let li = 0; li < levels.length; li++) {
+          marchingSquares(fine, GRIDF, GRIDF, fx0, fy0, dxf, dyf, levels[li], segsByLevel[li]);
+        }
+      }
+      c.segs = segsByLevel;
+
+      // --- Labels: one value label per contour, ≥150px apart GLOBALLY (across all
+      // levels) so tight near-body rings don't stack into an unreadable mush.
+      // Outer (low) levels are placed first; positions stored in AU. ---
+      const minGap2 = (150 / scale) * (150 / scale);
+      const placed = [], labels = [];
+      for (let li = 0; li < levels.length; li++) {
+        const segs = segsByLevel[li];
+        if (!segs.length) continue;
+        const text = formatAccel(levels[li]);
+        const color = c.colors[li];
+        for (let k = 0; k < segs.length; k += 4) {
+          const mx = (segs[k] + segs[k + 2]) * 0.5, my = (segs[k + 1] + segs[k + 3]) * 0.5;
+          let ok = true;
+          for (let p = 0; p < placed.length; p++) {
+            const ex = placed[p].x - mx, ey = placed[p].y - my;
+            if (ex * ex + ey * ey < minGap2) { ok = false; break; }
+          }
+          if (ok) { placed.push({ x: mx, y: my }); labels.push({ x: mx, y: my, text, color }); }
+        }
+      }
+      c.labels = labels;
+      c.sig = sig;
+      c.ms = now;
+    }
+
+    // --- Stroke contour lines ---
+    this.ctx.save();
+    this.ctx.globalAlpha = 0.7;
+    this.ctx.lineWidth = 1.2;
+    for (let li = 0; li < c.segs.length; li++) {
+      const segs = c.segs[li];
+      if (!segs.length) continue;
+      this.ctx.strokeStyle = c.colors[li];
+      this.ctx.beginPath();
+      for (let k = 0; k < segs.length; k += 4) {
+        this.ctx.moveTo(centerX - segs[k] * scale, centerY + segs[k + 1] * scale);
+        this.ctx.lineTo(centerX - segs[k + 2] * scale, centerY + segs[k + 3] * scale);
+      }
+      this.ctx.stroke();
+    }
+    this.ctx.restore();
+
+    // --- Value labels (number + unit) dropped into the gaps between lines ---
+    this.ctx.save();
+    this.ctx.font = "12.1px sans-serif"; // 11px + 10%
+    this.ctx.textAlign = "center";
+    this.ctx.textBaseline = "middle";
+    const W = this.canvas.width, H = this.canvas.height;
+    for (let p = 0; p < c.labels.length; p++) {
+      const lab = c.labels[p];
+      const sx = centerX - lab.x * scale;
+      const sy = centerY + lab.y * scale;
+      if (sx < 36 || sx > W - 36 || sy < 10 || sy > H - 10) continue; // keep clear of edges
+      const tw = this.ctx.measureText(lab.text).width;
+      this.ctx.globalAlpha = 0.82;
+      this.ctx.fillStyle = "#FFFFFF"; // pill clears the line so the number reads
+      this.ctx.fillRect(sx - tw / 2 - 3, sy - 8, tw + 6, 16);
+      this.ctx.globalAlpha = 1;
+      this.ctx.fillStyle = lab.color;
+      this.ctx.fillText(lab.text, sx, sy);
+    }
+    this.ctx.restore();
+  }
+
+  /**
    * Draw the solar system (sun, planets, satellites, links) in 2D,
    * top-down view, applying the current pan & zoom transforms.
    */
@@ -413,10 +687,39 @@ export class SimDisplay {
     this.ctx.fillRect(0, 0, width, height);
     this.ctx.restore();
 
+    // === Draw iso-thrust zones (contours of the selected bodies' gravity field) ===
+    if (this.thrustBodies && this.thrustBodies.length > 0) this.drawThrustZones(centerX, centerY, scaleAUtoPX);
+
+    // === Draw planet orbits (true ellipses sampled from the orbital elements) ===
+    if (this.showPlanetOrbits) {
+      this.ctx.save();
+      this.ctx.strokeStyle = "rgba(120,120,120,0.5)";
+      this.ctx.lineWidth = 1;
+      const SEG = 180;
+      for (let planetData of this.solarSystemData.planets) {
+        if (planetData.shape !== "sphere" || !(planetData.a > 0)) continue;
+        const aPx = planetData.a * scaleAUtoPX;
+        if (aPx < 4 || aPx > 1e5) continue; // skip degenerate / off-canvas orbits
+        this.ctx.beginPath();
+        for (let k = 0; k <= SEG; k++) {
+          // Sweep the true ecliptic longitude → real (eccentric) heliocentric position.
+          const p = positionFromSolarAngle(planetData, (k / SEG) * 360);
+          const px = centerX - auTo3D(p.x) * scaleAUtoPX; // same projection as the planet meshes
+          const py = centerY + auTo3D(p.y) * scaleAUtoPX;
+          if (k === 0) this.ctx.moveTo(px, py);
+          else this.ctx.lineTo(px, py);
+        }
+        this.ctx.stroke();
+      }
+      this.ctx.restore();
+    }
+
     // === Draw Sun ===
     const sunData = this.solarSystemData.sun;
     const sunRadiusAU = kmTo3D(sunData.diameterKm / 2) * sunScaleFactor;
-    const sunDisplayRadius = sunRadiusAU * 0.1 * this.zoom;
+    // Use the same AU->px scale as positions (the old *0.1 made it sub-pixel/invisible).
+    // The size slider (sunScaleFactor) is baked into sunRadiusAU, so it now actually scales.
+    const sunDisplayRadius = Math.max(sunRadiusAU * scaleAUtoPX, 0.5);
     this.ctx.save();
     this.ctx.fillStyle = "#DDDD00";
     this.ctx.beginPath();
@@ -425,42 +728,103 @@ export class SimDisplay {
     this.ctx.restore();
 
     // === Draw Planets ===
+    const planetColors = { Earth: "#2a6fdb", Mars: "#c0392b", Tesla: "#8e44ad" };
     for (let planetData of this.solarSystemData.planets) {
-      if (planetData.name === "Tesla") continue;
       const pos = this.planetPositions[planetData.name];
       if (!pos) continue;
+      const isTesla = planetData.name === "Tesla";
 
       // Convert from AU to canvas coords
       const planetX = centerX - auTo3D(pos.x) * scaleAUtoPX;
       const planetY = centerY + auTo3D(pos.y) * scaleAUtoPX;
 
-      // Planet radius
+      // Use the same AU->px scale as positions; the size slider (planetScaleFactor) is
+      // baked into planetRadiusAU so it now actually resizes the planets.
       const planetRadiusAU = kmTo3D(planetData.diameterKm / 2) * planetScaleFactor;
-      const planetDisplayRadius = planetRadiusAU * 0.1 * this.zoom;
+      const planetDisplayRadius = isTesla ? 2.5 : Math.max(planetRadiusAU * scaleAUtoPX, 0.5);
 
-      // Draw
+      // Draw (Tesla/Roadster shown as a small distinct marker, not skipped)
       this.ctx.save();
-      this.ctx.fillStyle = "#000000";
+      this.ctx.fillStyle = planetColors[planetData.name] || "#000000";
       this.ctx.beginPath();
       this.ctx.arc(planetX, planetY, planetDisplayRadius, 0, 2 * Math.PI);
       this.ctx.fill();
       this.ctx.restore();
     }
 
+    // === Draw geostationary / areostationary orbit circles (true scale, around the planet) ===
+    if (this.geoOrbits && this.geoOrbits.length) {
+      const GEO_AU = { Earth: 2.8185e-4, Mars: 1.3656e-4 }; // geo/areostationary radius ÷ 1 AU
+      this.ctx.save();
+      this.ctx.strokeStyle = "rgba(0,170,210,0.9)";
+      this.ctx.lineWidth = 1;
+      for (const name of this.geoOrbits) {
+        const r = GEO_AU[name], pos = this.planetPositions[name];
+        if (!r || !pos) continue;
+        const px = centerX - auTo3D(pos.x) * scaleAUtoPX;
+        const py = centerY + auTo3D(pos.y) * scaleAUtoPX;
+        this.ctx.beginPath();
+        this.ctx.arc(px, py, r * scaleAUtoPX, 0, 2 * Math.PI);
+        this.ctx.stroke();
+      }
+      this.ctx.restore();
+    }
+
     // === Draw Satellites (example) ===
     if (this.satelliteColorMode !== "None") {
-      const satSize = 4 * satelliteScaleFactor;
+      // Small fixed-pixel marker (0 hides). 0.5 px per size-factor unit keeps the
+      // default (factor 4 → 2 px dot) visually close to the 3D satellites, which the
+      // earlier 4×factor = 16 px made far too large in the top-down view.
+      const satSize = Math.max(0, satelliteScaleFactor * 0.5);
+      const thrustScheme = isThrustScheme(this.satelliteColorMode);
+      const labelsOn = this.satLabelMode && this.satelliteColorMode !== "Neutral";
+      let labelsLeft = 600; // cap to protect perf / avoid clutter when zoomed out
+      if (labelsOn) {
+        this.ctx.font = "9px sans-serif";
+        this.ctx.textAlign = "center";
+        this.ctx.textBaseline = "bottom";
+        this.ctx.fillStyle = "#222";
+      }
       for (let satellite of this.satellites) {
         const pos = this.satellitePositions[satellite.name];
         if (!pos) continue;
 
         const satX = centerX - auTo3D(pos.x) * scaleAUtoPX;
         const satY = centerY + auTo3D(pos.y) * scaleAUtoPX;
-        // small square
+        let fill = "gray"; // Neutral / unknown
+        const cmode = this.satelliteColorMode;
+        if (cmode === "Quad") {
+          // Solar-angle quadrant — same palette as the 3D quadrantEmissives.
+          const sa = ((((satellite.position && satellite.position.solarAngle) || 0) % 360) + 360) % 360;
+          fill = ["#dd2222", "#22dd22", "#2222dd", "#666666"][Math.floor(sa / 90)] || "gray";
+        } else if (cmode === "Zone") {
+          // Orbital zone — same palette as the 3D orbitalZoneEmissives.
+          fill = { INSIDE_EARTH: "#dd2222", BETWEEN_EARTH_AND_MARS: "#22dd22", OUTSIDE_MARS: "#2222dd", EARTH_RING: "#0066ff", MARS_RING: "#ff6600" }[satellite.orbitalZone] || "#333333";
+        } else if (cmode === "Suit") {
+          const s = satellite.suitable;
+          fill = !s ? "#333333"
+            : (s.includes("Earth") && s.includes("Mars")) ? "#22dd22"
+            : s.includes("Mars") ? "#dd2222"
+            : s.includes("Earth") ? "#2222dd" : "#333333";
+        } else if (thrustScheme) {
+          const ring = this.satPhysics && this.satPhysics[satellite.ringName];
+          if (ring) {
+            const a = stationKeepingAccel(pos, this.planetPositions);
+            const isPlanetary = satellite.ringName === "ring_earth" || satellite.ringName === "ring_mars";
+            const { N, skProp, m } = satStationKeeping(a, ring.dryMass, ring, isPlanetary, this.skCfg);
+            const { t, over } = satSchemeT(this.satelliteColorMode, { a, m, skProp, favail: N * this.skCfg.F, isp: this.skCfg.isp, n: N, nMax: this.satThrusterMax, ports: ring.ports, lasersMax: this.satLaserMax, capacity: this.skCfg.capacity, nonSkFuel: ring.nonSkFuel, totProp: satTotalProp(ring, skProp, isPlanetary) });
+            fill = over ? OVER_BUDGET_RGB : rampRGB(t);
+          }
+        }
         this.ctx.save();
-        this.ctx.fillStyle = "gray";
+        this.ctx.fillStyle = fill;
         this.ctx.fillRect(satX - satSize / 2, satY - satSize / 2, satSize, satSize);
         this.ctx.restore();
+
+        if (labelsOn && labelsLeft > 0 && satX >= 0 && satX <= width && satY >= 0 && satY <= height) {
+          const txt = this.satLabelText(satellite, pos);
+          if (txt) { this.ctx.fillText(txt, satX, satY - satSize / 2 - 1); labelsLeft--; }
+        }
       }
     }
 
@@ -478,6 +842,7 @@ export class SimDisplay {
       else if (this.linksColorsType === "Capacity") flows = allLinks.map((link) => link.gbpsCapacity);
       const maxFlow = flows.length > 0 ? Math.max(...flows) : 1;
       const minFlow = flows.length > 0 ? Math.min(...flows) : 0;
+      this.lastLinkRange = { type: this.linksColorsType, min: minFlow, max: maxFlow };
 
       const interpolateColor = (t) => {
         const colMin = {
