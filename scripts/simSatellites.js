@@ -87,6 +87,7 @@ export class SimSatellites {
     satellitesConfig.push(...this._buildCircularRings(uiConfig));
     satellitesConfig.push(...this._buildAdaptedRings(uiConfig));
     satellitesConfig.push(...this._buildEccentricRings(uiConfig));
+    satellitesConfig.push(...this._buildAdaptedEccentricRings(uiConfig));
     if (uiConfig["ring_mars.side-extension-degrees-slider"]) satellitesConfig.push(...this._buildPlanetRing(uiConfig, "ring_mars"));
     if (uiConfig["ring_earth.side-extension-degrees-slider"]) satellitesConfig.push(...this._buildPlanetRing(uiConfig, "ring_earth"));
     return satellitesConfig;
@@ -158,10 +159,59 @@ export class SimSatellites {
     return satellitesConfig;
   }
 
+  // Adapted Eccentric rings: like Eccentric, but each ring's apsides are fitted
+  // to the planets' TRUE orbits instead of shared sliders. The line of apsides
+  // points at ecliptic longitude argPeri; the perihelion (longitude argPeri) is
+  // pinned to EARTH's orbit and the aphelion (argPeri+180°, exactly opposite —
+  // which is precisely how apsides sit) to MARS's orbit. So a=(rPeri+rApo)/2 and
+  // e=(rApo−rPeri)/(rApo+rPeri) ⇒ a(1−e)=rPeri and a(1+e)=rApo by construction:
+  // every ring is tangent to both planet orbits at its apsides and "breathes"
+  // with Mars's eccentricity as the apsidal line sweeps around. Emits ringType
+  // "Eccentric" (identical element math downstream) with a distinct ring_adecc_
+  // name so it groups, sizes and links as its own section.
+  _buildAdaptedEccentricRings(uiConfig) {
+    const ringCount = uiConfig["adapted_eccentric_rings.ringcount"];
+    const mbpsBetweenSats = uiConfig["adapted_eccentric_rings.requiredmbpsbetweensats"];
+    if (ringCount == 0 || mbpsBetweenSats == 0) return [];
+    const argPeriStart = uiConfig["adapted_eccentric_rings.argument-of-perihelion"];
+    const earthMarsInclinationPct = uiConfig["adapted_eccentric_rings.earth-mars-orbit-inclination-pct"];
+    const distanceKmBetweenSats = this.simLinkBudget.calculateKm(mbpsBetweenSats / 1000);
+    const distanceAuBetweenSats = distanceKmBetweenSats / SIM_CONSTANTS.AU_IN_KM;
+    const satellitesConfig = [];
+    for (let ringId = 0; ringId < ringCount; ringId++) {
+      const argPeri = (argPeriStart + (ringId * 360) / ringCount) % 360;
+      const rPeri = positionFromSolarAngle(this.Earth, argPeri).r;
+      const rApo = positionFromSolarAngle(this.Mars, (argPeri + 180) % 360).r;
+      const ringA = (rPeri + rApo) / 2;
+      const ringE = (rApo - rPeri) / (rApo + rPeri);
+      const satCount = Math.ceil(Math.PI / this.safeAsin(distanceAuBetweenSats / (2 * ringA)));
+      satellitesConfig.push({
+        satCount: satCount,
+        satDistanceSun: ringA,
+        ringName: "ring_adecc_" + ringId,
+        ringType: "Eccentric",
+        sideExtensionDeg: null,
+        eccentricity: ringE,
+        raan: 0,
+        argPeri,
+        earthMarsInclinationPct,
+      });
+    }
+    return satellitesConfig;
+  }
+
   _buildAdaptedRings(uiConfig) {
     const userRingCount = uiConfig["adapted_rings.ringcount"];
     if (userRingCount == 0) return [];
     let ringCount = userRingCount + 2;
+
+    // Endpoint rings: ringId 0 sits at Earth's orbit (R_in) and ringId
+    // ringCount-1 at Mars's orbit (R_out). They coincide with the planet rings,
+    // so they're dropped by default. The two checkmarks gate that removal —
+    // checked (the default) drops the endpoint, unchecking it enables the ring.
+    const trimRings = String(uiConfig["adapted_rings.trim-rings"] || "");
+    const removeFirstRing = trimRings.includes("Remove first ring");
+    const removeLastRing = trimRings.includes("Remove last ring");
 
     let routeCount;
     if (uiConfig["adapted_rings.auto_route_count"] === "yes") {
@@ -204,28 +254,18 @@ export class SimSatellites {
     const R_in = planetRadius(this.getEarth(), earthAnchor) * (1 + earthOffset / 100);
     const R_out = planetRadius(this.getMars(), marsAnchor) * (1 + marsOffset / 100);
 
-    // Distribution equalizer: NB band weights shape a smooth ring-density curve
-    // across the Earth→Mars span (band 0 = Earth side, band NB-1 = Mars side). The
-    // weights are relative (auto-normalized); flat weights ⇒ uniform spacing.
-    const NB = 10;
-    const bandWeights = [];
-    for (let i = 0; i < NB; i++)
-      bandWeights.push(Math.max(0, num(uiConfig[`adapted_rings.band-${i}-pct`], 50)));
-    if (bandWeights.reduce((a, b) => a + b, 0) <= 0) bandWeights.fill(1);
-
-    // Density ρ(u) = Σ wᵢ·φ((u−cᵢ)/Δ) with overlapping raised-cosine (Hann) bumps —
-    // a partition of unity, so flat weights ⇒ flat ρ. Ghost end-bands (clamped
-    // index, j = -1 and NB) hold ρ flat at u=0,1 so the end spacing stays coherent.
-    const dU = 1 / NB;
-    const density = (u) => {
-      let s = 0;
-      for (let j = -1; j <= NB; j++) {
-        const x = (u - (j + 0.5) * dU) / dU;
-        if (x > -1 && x < 1)
-          s += bandWeights[Math.min(NB - 1, Math.max(0, j))] * 0.5 * (1 + Math.cos(Math.PI * x));
-      }
-      return s;
-    };
+    // Distribution equalizer: the ring-density curve across the Earth→Mars span is
+    // defined by control anchors {x∈[0,1], y≥0}, linearly interpolated (held flat
+    // outside the end anchors). The chart editor produces them; a flat 2-anchor
+    // default (uniform spacing) is used when absent. Rings are placed by this
+    // density's inverse-CDF below, so the curve shape sets where rings cluster.
+    let anchors = uiConfig["adapted_rings.density-anchors"];
+    if (!Array.isArray(anchors) || anchors.length < 2) anchors = [{ x: 0, y: 50 }, { x: 1, y: 50 }];
+    anchors = anchors
+      .map((a) => ({ x: Math.min(1, Math.max(0, +a.x || 0)), y: Math.max(0, +a.y || 0) }))
+      .sort((a, b) => a.x - b.x);
+    if (anchors.reduce((s, a) => s + a.y, 0) <= 0) anchors = [{ x: 0, y: 1 }, { x: 1, y: 1 }];
+    const density = (u) => this.densityFromAnchors(anchors, u);
 
     // Cumulative-density table → inverse-CDF: maps an even mass fraction t∈(0,1) to
     // the radial coordinate u, so ring spacing comes out ∝ 1/ρ (dense where boosted,
@@ -264,7 +304,9 @@ export class SimSatellites {
 
     const satellitesConfig = [];
 
-    for (let ringId = 1; ringId < ringCount - 1; ringId++) {
+    const startId = removeFirstRing ? 1 : 0;
+    const endId = removeLastRing ? ringCount - 2 : ringCount - 1;
+    for (let ringId = startId; ringId <= endId; ringId++) {
       const ringType = "Adapted";
       const satDistanceSunAu = solveA(warpR(ringId / (ringCount - 1)));
       let satCount = Math.ceil(routeCount * (1 + (linearSatCountIncrease * ringId) / ringCount));
@@ -1265,6 +1307,28 @@ export class SimSatellites {
     }
 
     return biasedInterpolatedElement;
+  }
+
+  /**
+   * Ring-density value at u∈[0,1] from control anchors {x∈[0,1], y≥0}, assumed sorted
+   * by x. Piecewise-linear between anchors, held flat before the first / after the
+   * last. Shared by the ring placement, the chart editor and the distribution card so
+   * all three draw the exact same curve.
+   */
+  densityFromAnchors(anchors, u) {
+    const n = anchors ? anchors.length : 0;
+    if (!n) return 1;
+    if (n === 1) return anchors[0].y;
+    if (u <= anchors[0].x) return anchors[0].y;
+    if (u >= anchors[n - 1].x) return anchors[n - 1].y;
+    for (let i = 0; i < n - 1; i++) {
+      const a = anchors[i], b = anchors[i + 1];
+      if (u >= a.x && u <= b.x) {
+        const span = b.x - a.x;
+        return span <= 0 ? a.y : a.y + (b.y - a.y) * ((u - a.x) / span);
+      }
+    }
+    return anchors[n - 1].y;
   }
 
   calculateApsides(a, e) {
