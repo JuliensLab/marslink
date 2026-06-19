@@ -522,6 +522,35 @@ export class TopologyBuilder {
       linkMap.get(link.fromId).push(link);
     });
 
+    // Undirected link lookup by endpoint pair, plus a helper that returns the
+    // planet-ring endpoint hop for a relay sat: the ring_earth→first-relay-sat link
+    // (a relay sat's inward neighbour) and the last-relay-sat→ring_mars link (its
+    // outward neighbour). These cross-ring-type links bound the real Earth↔Mars
+    // throughput but sit outside the adapted-ring chain the route walks, so they
+    // must be folded into the route bottleneck explicitly.
+    const linkByPair = new Map();
+    finalLinks.forEach((link) => {
+      linkByPair.set(link.fromId + "|" + link.toId, link);
+      linkByPair.set(link.toId + "|" + link.fromId, link);
+    });
+    const walkToPlanetRing = (sat, port, planetRingPrefix) => {
+      // Walk inward/outward along the radial ports until the planet ring is reached,
+      // taking the min link capacity (Mbps) over every hop including the final
+      // planet-ring hop. A route's start sat can sit several rings out from the Earth
+      // ring (it's merely Earth-suitable), so a single-hop lookup would miss the real
+      // ring_earth->relay bottleneck. Returns Infinity if the ring is never reached.
+      let cur = sat, minMbps = Infinity, guard = 0;
+      while (cur && guard++ < 2000) {
+        const nextName = cur[port];
+        if (!nextName) break;
+        const link = linkByPair.get(cur.name + "|" + nextName);
+        if (link) minMbps = Math.min(minMbps, link.gbpsCapacity * 1000);
+        if (String(nextName).startsWith(planetRingPrefix)) return minMbps;
+        cur = satMap.get(nextName);
+      }
+      return Infinity;
+    };
+
     // Start from satellites suitable for Earth with outward ports used
     const earthSuitableSats = [];
     Object.values(rings).forEach((ringSats) => {
@@ -573,7 +602,23 @@ export class TopologyBuilder {
         }
 
         if (route.destination) {
-          routes.push(route);
+          // Fold in the planet-ring endpoint hops. The relay chain above ignored
+          // the ring_earth→first-sat link (startSat's inward neighbour) and the
+          // last-sat→ring_mars link (the destination's outward neighbour), which are
+          // typically the throughput bottleneck — without them the capacity is
+          // wildly overstated (Gbps relay vs Mbps end-to-end).
+          const endSat = satMap.get(route.destination);
+          const earthCap = walkToPlanetRing(startSat, "inwards", "ring_earth");
+          const marsCap = endSat ? walkToPlanetRing(endSat, "outwards", "ring_mars") : Infinity;
+          // A route only carries Earth↔Mars traffic if its chain actually reaches BOTH
+          // planet rings — the graph links Earth/Mars only to their own ring sats, so a
+          // chain that never touches ring_earth (or ring_mars) has no real source/sink
+          // and the max-flow sees 0 through it. Such "Earth-suitable but not Earth-
+          // connected" chains were silently inflating the displayed capacity.
+          if (isFinite(earthCap) && isFinite(marsCap)) {
+            route.throughputMbps = Math.min(route.throughputMbps, earthCap, marsCap);
+            routes.push(route);
+          }
         }
       }
     });
@@ -608,7 +653,9 @@ export class TopologyBuilder {
   // UNUSED — not called from buildTopology
   interEccentricRings(rings, positions, linkCounts, finalLinks) {
     // Step 1: Identify valid rings (eccentric and circular rings)
-    const eccentricRingNames = Object.keys(rings).filter((ringName) => ringName.startsWith("ring_ecce"));
+    const eccentricRingNames = Object.keys(rings).filter(
+      (ringName) => ringName.startsWith("ring_ecce") || ringName.startsWith("ring_adecc")
+    );
     const circularRingNames = Object.keys(rings).filter(
       (ringName) => ringName.startsWith("ring_circ") || ringName.startsWith("ring_adapt")
     );
@@ -893,7 +940,9 @@ export class TopologyBuilder {
   // UNUSED — not called from buildTopology
   connectEccentricAndCircularRings(rings, positions, linkCounts, finalLinks) {
     // Step 1: Identify eccentric rings and circular rings
-    const eccentricRingNames = Object.keys(rings).filter((ringName) => ringName.startsWith("ring_ecce"));
+    const eccentricRingNames = Object.keys(rings).filter(
+      (ringName) => ringName.startsWith("ring_ecce") || ringName.startsWith("ring_adecc")
+    );
     const circularRingNames = Object.keys(rings).filter(
       (ringName) => ringName.startsWith("ring_circ") || ringName.startsWith("ring_adapt")
     );
