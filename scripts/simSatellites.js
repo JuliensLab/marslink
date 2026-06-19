@@ -418,10 +418,38 @@ export class SimSatellites {
       if (orbitalElement) {
         // Precompute positions along the orbit at solar angle steps
         orbitalElement.precomputedPositions = this.precomputeOrbitPositions(orbitalElement);
+        // Radial coefficients for analytic zone crossings: 1/ρ(θ) ≈ A + B·cosθ + C·sinθ
+        orbitalElement.radialCoeffs = this.computeRadialCoeffs(orbitalElement);
         newOrbitalElements.push(orbitalElement);
       }
     }
     this.orbitalElements = newOrbitalElements;
+
+    // Diagnostic (main thread only): how far the i=0 "elements" model is from a
+    // best-fit conic to the actual projected positions — i.e. the impact of the
+    // low-inclination / drop-z assumption. Lets us judge elements vs fit.
+    if (typeof window !== "undefined") {
+      let maxRelA = 0, maxDe = 0, maxDvarpi = 0, worst = null;
+      for (const el of this.orbitalElements) {
+        const rc = el.radialCoeffs;
+        if (!rc || !rc.fit) continue;
+        const eE = Math.hypot(rc.B, rc.C) / (rc.A || 1);
+        const eF = Math.hypot(rc.fit.B, rc.fit.C) / (rc.fit.A || 1);
+        const vE = (Math.atan2(rc.C, rc.B) * 180) / Math.PI;
+        const vF = (Math.atan2(rc.fit.C, rc.fit.B) * 180) / Math.PI;
+        const dV = Math.abs(((vE - vF + 540) % 360) - 180);
+        const relA = Math.abs(rc.A - rc.fit.A) / (Math.abs(rc.fit.A) || 1);
+        if (relA > maxRelA) { maxRelA = relA; worst = el.ringName; }
+        maxDe = Math.max(maxDe, Math.abs(eE - eF));
+        maxDvarpi = Math.max(maxDvarpi, dV);
+      }
+      // Silent unless the i=0 elements model drifts notably from the projected
+      // fit — a sign of a convention/projection problem (this is what caught the
+      // earlier ϖ = o+p vs ϖ = p bug). Normal low-inclination drift is well under these.
+      if (worst && (maxRelA > 0.005 || maxDe > 1e-3 || maxDvarpi > 1)) {
+        console.warn(`[Zones] elements-vs-fit drift: Δ(1/p)=${(maxRelA * 100).toFixed(3)}%, Δe=${maxDe.toFixed(5)}, Δϖ=${maxDvarpi.toFixed(3)}° (worst ${worst})`);
+      }
+    }
 
     // Precompute ring crossings
     this.ringCrossings = new Map();
@@ -653,89 +681,99 @@ export class SimSatellites {
     return unique;
   }
 
-  // Find all radial crossing solar angle angles (on source orbit) with target orbit
+  // Projected polar coefficients so that 1/ρ(θ) = A + B·cosθ + C·sinθ, where
+  // ρ = ecliptic-plane radius √(x²+y²) and θ = solar angle. For a focus-centred
+  // conic this is exact (i=0); `fit` is a least-squares fit to the actual
+  // projected positions, so elem-vs-fit reveals the low-inclination error.
+  computeRadialCoeffs(orbitalElement) {
+    const a = orbitalElement.a, e = orbitalElement.e;
+    const denom = a * (1 - e * e);
+    // In this element set `p` IS the longitude of perihelion ϖ (= Ω+ω already),
+    // and `o` is the RAAN — so ϖ = p (the node only tilts the plane, it doesn't
+    // shift the perihelion's ecliptic longitude in the 2D radial profile).
+    const varpi = ((orbitalElement.p || 0) * Math.PI) / 180;
+    const elem = denom ? { A: 1 / denom, B: (e * Math.cos(varpi)) / denom, C: (e * Math.sin(varpi)) / denom } : { A: 0, B: 0, C: 0 };
+
+    // Least-squares fit of 1/ρ = A + B cosθ + C sinθ over the precomputed positions.
+    let fit = null;
+    const pts = orbitalElement.precomputedPositions;
+    if (pts && pts.length >= 3) {
+      let n = 0, sC = 0, sS = 0, sCC = 0, sSS = 0, sCS = 0, sR = 0, sRC = 0, sRS = 0;
+      for (const p of pts) {
+        const rho = Math.hypot(p.x, p.y);
+        if (!(rho > 0)) continue;
+        const th = (p.solarAngle * Math.PI) / 180;
+        const c = Math.cos(th), s = Math.sin(th), inv = 1 / rho;
+        n++; sC += c; sS += s; sCC += c * c; sSS += s * s; sCS += c * s; sR += inv; sRC += inv * c; sRS += inv * s;
+      }
+      fit = this.solve3x3([[n, sC, sS], [sC, sCC, sCS], [sS, sCS, sSS]], [sR, sRC, sRS]);
+    }
+    return { ...elem, fit };
+  }
+
+  solve3x3(M, b) {
+    const det = (m) =>
+      m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) -
+      m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) +
+      m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+    const D = det(M);
+    if (Math.abs(D) < 1e-15) return null;
+    const col = (i) => M.map((row, r) => row.map((v, c) => (c === i ? b[r] : v)));
+    return { A: det(col(0)) / D, B: det(col(1)) / D, C: det(col(2)) / D };
+  }
+
+  // Build an angular range [start, end] (end may exceed 360 for wrap-around,
+  // which isAngleInRange handles) centred on centerDeg with the given half-width.
+  arcRange(centerDeg, halfWidthDeg) {
+    const start = (((centerDeg - halfWidthDeg) % 360) + 360) % 360;
+    return [start, start + 2 * halfWidthDeg];
+  }
+
+  // Crossing solar angles + inside/outside arcs of the source orbit relative to a
+  // target orbit (Earth or Mars), computed ANALYTICALLY. Both share the sun's
+  // focus, so f(θ) = 1/ρ_source − 1/ρ_target = ΔA + ΔB·cosθ + ΔC·sinθ — a single
+  // sinusoid with at most two roots. f>0 ⇔ source is INSIDE target at θ.
   findAllRadialCrossings(sourceEle, targetEle) {
-    // Handle case where source or target orbit doesn't exist (no Earth/Mars rings)
     if (!sourceEle || !targetEle) {
       if (!sourceEle) console.warn("Source orbit is missing, no crossings.");
       if (!targetEle) console.warn("Target orbit is missing, no crossings.");
       return { crossings: [], inside: null, outside: null };
     }
+    const sc = sourceEle.radialCoeffs, tc = targetEle.radialCoeffs;
+    if (!sc || !tc) return { crossings: [], inside: null, outside: null };
 
-    const crossings = [];
-    const sourcePositions = sourceEle.precomputedPositions;
-    const targetPositions = targetEle.precomputedPositions;
+    const dA = sc.A - tc.A, dB = sc.B - tc.B, dC = sc.C - tc.C;
+    const M = Math.hypot(dB, dC);
+    const TANGENT_ARC_DEG = 1.0; // arcs narrower than this are treated as grazing (no split)
+    const FLAT_TOL = 1e-9 * Math.max(Math.abs(sc.A), Math.abs(tc.A), 1e-12);
 
-    if (!sourcePositions || !targetPositions || sourcePositions.length < 2 || targetPositions.length < 2) {
-      console.warn("Insufficient precomputed positions for crossing calculation.");
-      return { crossings: [], inside: null, outside: null };
+    // Same shape & orientation → f ≈ constant = dA (the two orbits never cross).
+    if (M <= FLAT_TOL) {
+      if (dA > FLAT_TOL) return { crossings: [], inside: [0, 360], outside: null };
+      if (dA < -FLAT_TOL) return { crossings: [], inside: null, outside: [0, 360] };
+      return { crossings: [], inside: null, outside: null }; // coincident → between
     }
 
-    // Find crossings between line segments of the two orbits
-    for (let i = 0; i < sourcePositions.length; i++) {
-      const source1 = sourcePositions[i];
-      const source2 = sourcePositions[(i + 1) % sourcePositions.length];
-
-      for (let j = 0; j < targetPositions.length; j++) {
-        const target1 = targetPositions[j];
-        const target2 = targetPositions[(j + 1) % targetPositions.length];
-
-        // Check if line segments intersect (using XY coordinates only)
-        const intersection = this.lineSegmentIntersection(
-          { x: source1.x, y: source1.y },
-          { x: source2.x, y: source2.y },
-          { x: target1.x, y: target1.y },
-          { x: target2.x, y: target2.y }
-        );
-
-        if (intersection) {
-          // Calculate solar angle at intersection point
-          // Interpolate between the two solar angles based on position along the line
-          const solarAngle = this.interpolateSolarAngle(source1, source2, intersection);
-          crossings.push(solarAngle % 360);
-        }
-      }
+    const k = -dA / M; // cos(θ − φ) = k at the crossings
+    const alpha = Math.abs(k) < 1 ? Math.acos(k) : 0; // radians, half-arc
+    const insideWidthDeg = 2 * alpha * (180 / Math.PI);
+    // No real crossing (entirely one side), or a graze thinner than the tangent
+    // width → assign the whole ring to the dominant (sign(dA)) side.
+    if (Math.abs(k) >= 1 || Math.min(insideWidthDeg, 360 - insideWidthDeg) < TANGENT_ARC_DEG) {
+      if (dA > 0) return { crossings: [], inside: [0, 360], outside: null };
+      return { crossings: [], inside: null, outside: [0, 360] };
     }
 
-    // Remove duplicates and sort
-    const unique = [];
-    for (const c of crossings) {
-      if (!unique.some((u) => Math.abs(u - c) < 0.01)) unique.push(c);
-    }
-    unique.sort((a, b) => a - b);
-
-    // Determine inside and outside ranges (simplified version)
-    let inside = null;
-    let outside = null;
-
-    if (unique.length === 0) {
-      // No crossings - determine based on distance at solar angle 0
-      const sourceDist = sourcePositions[0].distanceToSun;
-      const targetDist = targetPositions[0].distanceToSun;
-      if (sourceDist > targetDist) {
-        outside = [0, 360];
-      } else {
-        inside = [0, 360];
-      }
-    } else if (unique.length >= 2) {
-      // Determine which range is inside by checking distance at midpoint
-      const midAngle = (unique[0] + unique[1]) / 2;
-      const sourcePos = this.getOrbitPositionAtAngle(sourceEle, midAngle);
-      const sourceDist = Math.sqrt(sourcePos.x ** 2 + sourcePos.y ** 2 + sourcePos.z ** 2);
-      const targetPos = this.getOrbitPositionAtAngle(targetEle, midAngle);
-      const targetDist = Math.sqrt(targetPos.x ** 2 + targetPos.y ** 2 + targetPos.z ** 2);
-      if (sourceDist < targetDist) {
-        // Source is closer to sun, so inside
-        inside = [unique[0], unique[1]];
-        outside = [unique[1], unique[0] + 360];
-      } else {
-        // Source is farther, so outside
-        inside = [unique[1], unique[0] + 360];
-        outside = [unique[0], unique[1]];
-      }
-    }
-
-    return { crossings: unique, inside, outside };
+    // Two crossings at φ ± α. Inside (f>0) = arc centred on φ, half-width α.
+    const phiDeg = ((Math.atan2(dC, dB) * 180) / Math.PI + 360) % 360;
+    const alphaDeg = (alpha * 180) / Math.PI;
+    const c1 = (((phiDeg - alphaDeg) % 360) + 360) % 360;
+    const c2 = (((phiDeg + alphaDeg) % 360) + 360) % 360;
+    return {
+      crossings: [c1, c2].sort((a, b) => a - b),
+      inside: this.arcRange(phiDeg, alphaDeg),
+      outside: this.arcRange(phiDeg + 180, 180 - alphaDeg),
+    };
   }
 
   // Line segment intersection using XY coordinates
