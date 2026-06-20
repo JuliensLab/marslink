@@ -159,16 +159,27 @@ export class SimSatellites {
     return satellitesConfig;
   }
 
-  // Adapted Eccentric rings: like Eccentric, but each ring's apsides are fitted
-  // to the planets' TRUE orbits instead of shared sliders. The line of apsides
-  // points at ecliptic longitude argPeri; the perihelion (longitude argPeri) is
-  // pinned to EARTH's orbit and the aphelion (argPeri+180°, exactly opposite —
-  // which is precisely how apsides sit) to MARS's orbit. So a=(rPeri+rApo)/2 and
-  // e=(rApo−rPeri)/(rApo+rPeri) ⇒ a(1−e)=rPeri and a(1+e)=rApo by construction:
-  // every ring is tangent to both planet orbits at its apsides and "breathes"
-  // with Mars's eccentricity as the apsidal line sweeps around. Emits ringType
-  // "Eccentric" (identical element math downstream) with a distinct ring_adecc_
-  // name so it groups, sizes and links as its own section.
+  // Adapted Eccentric rings: each ring is an ellipse that is TANGENT to both planet
+  // orbits — it kisses Earth's orbit once (from outside) and Mars's orbit once (from
+  // inside), so a ring never crosses either orbit (no satellites inside Earth / beyond
+  // Mars). The earlier "pin perihelion to Earth, aphelion to Mars" rule touched at the
+  // apsides but, because a fixed-shape Keplerian ellipse meets Mars's eccentric orbit
+  // with a slope mismatch, it crossed Mars TWICE just off the aphelion. Tangency
+  // removes that second crossing.
+  //
+  // The construction is closed-form in u = 1/r, where every confocal orbit is a pure
+  // sinusoid u(θ) = A + V·(cosθ, sinθ), with A = 1/p (p = a(1−e²)) and V = (e/p) at the
+  // perihelion longitude ϖ. Ring and planet meet where u_ring = u_planet, i.e. a single
+  // sinusoid = const → generically TWO roots; it collapses to ONE tangency exactly when
+  // amplitude = offset: |A_r − A_p| = |V_r − V_p|. Requiring tangency to Mars (inside)
+  // and Earth (outside) and adding the two equations eliminates A_r:
+  //     |V_r − V_M| + |V_r − V_E| = (A_E − A_M) − c          (= S, a constant)
+  // so V_r lies on an ELLIPSE in eccentricity-vector space with foci V_E, V_M. Each ring
+  // is one point on it: pick the apsis direction ϖ_r (spread evenly from the start
+  // angle), intersect that ray with the locus for |V_r|, then recover a_r, e_r. Clearance
+  // c shrinks the locus so the ring sits strictly inside Mars / outside Earth by a margin
+  // instead of touching. Emits ringType "Eccentric" with a distinct ring_adecc_ name.
+  // (Worked in the 2-D ecliptic projection — inclination only tilts out of plane.)
   _buildAdaptedEccentricRings(uiConfig) {
     const ringCount = uiConfig["adapted_eccentric_rings.ringcount"];
     const mbpsBetweenSats = uiConfig["adapted_eccentric_rings.requiredmbpsbetweensats"];
@@ -177,13 +188,61 @@ export class SimSatellites {
     const earthMarsInclinationPct = uiConfig["adapted_eccentric_rings.earth-mars-orbit-inclination-pct"];
     const distanceKmBetweenSats = this.simLinkBudget.calculateKm(mbpsBetweenSats / 1000);
     const distanceAuBetweenSats = distanceKmBetweenSats / SIM_CONSTANTS.AU_IN_KM;
+
+    // Reciprocal-radius (u = 1/r) parameters of a planet's orbit: A = 1/p and the
+    // eccentricity vector V = (e/p)·(cos ϖ, sin ϖ), ϖ = perihelion longitude (= .p here).
+    const uParams = (planet) => {
+      const e = planet.e, a = planet.a, w = ((planet.p || 0) * Math.PI) / 180;
+      const p = a * (1 - e * e) || 1e-9;
+      const ev = e / p;
+      return { A: 1 / p, Vx: ev * Math.cos(w), Vy: ev * Math.sin(w) };
+    };
+    const M = uParams(this.Mars), E = uParams(this.Earth);
+
+    // Clearance (× inter-satellite spacing) is a RADIAL gap (AU). It maps to a u-space
+    // margin by du ≈ dr·A², but A (=1/r) at the planet's MEAN radius is only a seed —
+    // each ring touches at a different radius. So we Newton-refine each ring's margin
+    // (closed form, no sampling) until the realized radial gap equals the slider value.
+    const num = (v, d) => (typeof v === "number" && !Number.isNaN(v) ? v : d);
+    const marsMargin = num(uiConfig["adapted_eccentric_rings.mars-side-clearance-x"], 0) * distanceAuBetweenSats;
+    const earthMargin = num(uiConfig["adapted_eccentric_rings.earth-side-clearance-x"], 0) * distanceAuBetweenSats;
+    const fociDist = Math.hypot(M.Vx - E.Vx, M.Vy - E.Vy);
+    // Exact u-margin c giving a radial gap g at a contact with reciprocal-radius u*:
+    //   Mars (ring inside):   g = 1/u* − 1/(u*+c) ⇒ c = g·u*² / (1 − g·u*)
+    //   Earth (ring outside): g = 1/(u*−c) − 1/u* ⇒ c = g·u*² / (1 + g·u*)
+    const marginForGap = (g, uStar, inside) =>
+      g <= 0 ? 0 : (g * uStar * uStar) / (inside ? Math.max(1e-6, 1 - g * uStar) : 1 + g * uStar);
+
     const satellitesConfig = [];
     for (let ringId = 0; ringId < ringCount; ringId++) {
-      const argPeri = (argPeriStart + (ringId * 360) / ringCount) % 360;
-      const rPeri = positionFromSolarAngle(this.Earth, argPeri).r;
-      const rApo = positionFromSolarAngle(this.Mars, (argPeri + 180) % 360).r;
-      const ringA = (rPeri + rApo) / 2;
-      const ringE = (rApo - rPeri) / (rApo + rPeri);
+      const argPeri = (((argPeriStart + (ringId * 360) / ringCount) % 360) + 360) % 360;
+      const wr = (argPeri * Math.PI) / 180, dx = Math.cos(wr), dy = Math.sin(wr);
+      // Seed the margins from the mean-radius linearization, then refine. A tangent ring
+      // (both margins 0) needs no refinement and stays exact in a single pass.
+      let cM = marsMargin * M.A * M.A, cE = earthMargin * E.A * E.A, v = 0, Ar = M.A;
+      const passes = marsMargin > 0 || earthMargin > 0 ? 4 : 1;
+      for (let it = 0; it < passes; it++) {
+        // Along the apsis ray V_r = v·(dx,dy), solve |V_r−V_M| + |V_r−V_E| = S. The summed
+        // distance grows monotonically with v past the origin, so bisect.
+        const S = Math.max(fociDist + 1e-6, E.A - M.A - cM - cE);
+        const f = (vv) => Math.hypot(vv * dx - M.Vx, vv * dy - M.Vy) + Math.hypot(vv * dx - E.Vx, vv * dy - E.Vy) - S;
+        let lo = 0, hi = 1;
+        while (f(hi) < 0 && hi < 16) hi *= 2;
+        for (let k = 0; k < 50; k++) { const mid = (lo + hi) / 2; if (f(mid) < 0) lo = mid; else hi = mid; }
+        v = (lo + hi) / 2;
+        Ar = M.A + Math.hypot(v * dx - M.Vx, v * dy - M.Vy) + cM; // A_r = A_M + |V_r−V_M| + c_M
+        if (it === passes - 1) break;
+        // Closed-form contact longitudes (where ring & planet are closest) → planet u
+        // there → exact margins for the next pass.
+        const tM = Math.atan2(M.Vy - v * dy, M.Vx - v * dx);
+        const tE = Math.atan2(v * dy - E.Vy, v * dx - E.Vx);
+        const uM = M.A + M.Vx * Math.cos(tM) + M.Vy * Math.sin(tM);
+        const uE = E.A + E.Vx * Math.cos(tE) + E.Vy * Math.sin(tE);
+        cM = marginForGap(marsMargin, uM, true);
+        cE = marginForGap(earthMargin, uE, false);
+      }
+      const ringE = Math.min(0.97, Math.max(0, v / Ar)); // e = |V_r|/A_r = v/Ar
+      const ringA = 1 / Ar / (1 - ringE * ringE); // a = p/(1−e²)
       const satCount = Math.ceil(Math.PI / this.safeAsin(distanceAuBetweenSats / (2 * ringA)));
       satellitesConfig.push({
         satCount: satCount,
@@ -910,6 +969,54 @@ export class SimSatellites {
     if (!orbitalElement) return null;
     const pos = positionFromSolarAngle(orbitalElement, targetAngle);
     return { x: pos.x, y: pos.y, z: pos.z };
+  }
+
+  // Per adapted-eccentric ring: how it sits against the planet orbits, for the
+  // right-panel "closeness" charts. Each ring is built so its perihelion touches
+  // Earth's orbit at ecliptic longitude argPeri (el.p) and its aphelion touches Mars's
+  // orbit at argPeri+180 — optionally pulled back by the clearance margins.
+  //
+  // We report two things per ring:
+  //  • apsis values (peri/apo): the ring's distance and the planet's distance at the
+  //    apsidal longitude — these draw the two "breathing" curves. NOTE the gap here is
+  //    flat (= the clearance margin), because the apsis is pinned to the planet orbit.
+  //  • worst clearance (worstEarth/worstMars): the MINIMUM signed gap sampled over the
+  //    ring's whole orbit. The real overshoot happens OFF the apsis (the ellipse bulges
+  //    past the eccentric planet orbit just to one side of the tangent point), so this
+  //    is what reveals satellites straying inside Earth / beyond Mars: gap < 0 = stray.
+  getAdaptedEccentricApsides() {
+    const rAt = (orbit, angleDeg) => positionFromSolarAngle(orbit, ((angleDeg % 360) + 360) % 360).r;
+    // Planet radius on a shared angular grid (sampled once, reused for every ring).
+    const STEP = 3, N = Math.round(360 / STEP);
+    const earthRGrid = new Float64Array(N), marsRGrid = new Float64Array(N);
+    for (let i = 0; i < N; i++) { const a = i * STEP; earthRGrid[i] = rAt(this.Earth, a); marsRGrid[i] = rAt(this.Mars, a); }
+    const rows = [];
+    for (const el of this.orbitalElements) {
+      if (!el.ringName || !el.ringName.startsWith("ring_adecc")) continue;
+      const argPeri = typeof el.p === "number" ? el.p : 0; // ecliptic longitude of perihelion
+      const periAngle = ((argPeri % 360) + 360) % 360;
+      const apoAngle = ((argPeri + 180) % 360 + 360) % 360;
+      const rPeri = el.apsides ? el.apsides.periapsis : el.a * (1 - el.e);
+      const rApo = el.apsides ? el.apsides.apoapsis : el.a * (1 + el.e);
+      // Sweep the ring's orbit; track where it comes closest to crossing each planet
+      // orbit (+ = clearance, − = the ring's satellites are inside Earth / beyond Mars).
+      let wEarth = Infinity, wEarthAng = periAngle, wMars = Infinity, wMarsAng = apoAngle;
+      for (let i = 0; i < N; i++) {
+        const rr = rAt(el, i * STEP);
+        const eg = rr - earthRGrid[i]; // Earth side: + = outside Earth (good)
+        const mg = marsRGrid[i] - rr;  // Mars side:  + = inside Mars  (good)
+        if (eg < wEarth) { wEarth = eg; wEarthAng = i * STEP; }
+        if (mg < wMars) { wMars = mg; wMarsAng = i * STEP; }
+      }
+      rows.push({
+        ringName: el.ringName,
+        peri: { angle: periAngle, ringR: rPeri, planetR: rAt(this.Earth, periAngle), gap: rPeri - rAt(this.Earth, periAngle) },
+        apo: { angle: apoAngle, ringR: rApo, planetR: rAt(this.Mars, apoAngle), gap: rAt(this.Mars, apoAngle) - rApo },
+        worstEarth: { gap: wEarth, angle: wEarthAng },
+        worstMars: { gap: wMars, angle: wMarsAng },
+      });
+    }
+    return rows;
   }
 
   // Get radial zone for a satellite
