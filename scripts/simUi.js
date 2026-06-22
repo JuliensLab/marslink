@@ -755,15 +755,20 @@ export class SimUi {
     // delivers, set the ring-count row's editability for the active family, then size
     // both ends from that throughput. The inversion round-trips to the same ring count
     // (concentric) / in-ring rate (eccentric), so nothing jumps on load.
-    {
+    const R0 = parseFloat(this.sliders.relay_type?.ringcount?.value ?? ringData.value);
+    try {
       const selKey0 = SimUi.RELAY_TYPE_SECTIONS[this.getSelectedRelayType()] || "adapted_rings";
       const ecc0 = this._isEccentricSection(selKey0);
       ringRow.slider.disabled = !ecc0;
       ringRow.valInput.disabled = !ecc0;
       ringRow.wrap.style.opacity = ecc0 ? "1" : "0.6";
-      const R0 = parseFloat(this.sliders.relay_type?.ringcount?.value ?? ringData.value);
       const t0Gbps = this._relayThroughputMbps(R0, selKey0) / 1000;
       this.applySliderValues({ "relay_type.requiredgbps": this.mapUserFacingToSliderValue(gbpsData, t0Gbps) });
+    } catch (err) {
+      // Never let throughput-driven init block app load — fall back to the known-good
+      // ring-count seed so the page always finishes loading.
+      console.error("[Marslink] throughput-driven init failed, falling back:", err);
+      this.applySimpleDefaults(R0);
     }
   }
 
