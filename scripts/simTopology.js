@@ -260,69 +260,72 @@ export class TopologyBuilder {
       const radialGap = Math.abs(rOuter - rInner) || 1e-9; // diagnostic baseline
       let pairLinks = 0, pairLong = 0, pairMaxStretch = 1, pairMaxOffDeg = 0;
 
-      const candidates = [];
+      // --- Monotonic (order-preserving) matcher --------------------------------
+      // Both rings are sorted by true longitude. Walk inner sats in angular order and
+      // advance an outer pointer that only moves FORWARD (mod M, at most one lap), so
+      // an inner sat can never grab an outer sat belonging to a route already passed —
+      // that is what produced the long cross-route links. A purely-radial link is
+      // sun-aligned (solar-blinded), so we allow a SMALL forward skip (SKIP sats) to the
+      // nearest non-blinded outer — the ~1-sat diagonal, never a ±20 fallback.
+      const N = innerSats.length;
+      const M = outerSats.length;
+      const SKIP = 3; // max forward skip to clear blinding / a taken sat
+      // Departure-angle offset (same geometry as before; 0 for a radial backbone).
+      const angularOffsetDeg = (Math.atan2((rOuter - rInner) * Math.tan(departureRad), rOuter) * 180) / Math.PI;
+      // |angular distance| (deg, 0..180) from outer sat oi to a target angle.
+      const angDist = (oi, target) => {
+        const d = (((outerAngles[oi] - target) % 360) + 360) % 360;
+        return d > 180 ? 360 - d : d;
+      };
+      // Align the pointer to the first inner sat's target angle.
+      let op = 0;
+      {
+        const a0 = normalizeAngle((positions[innerSats[0].name]?.solarAngle ?? 0) + angularOffsetDeg);
+        let k = 0;
+        while (k < M && outerAngles[k] < a0) k++;
+        op = k % M;
+      }
+      let consumed = 0; // outer sats passed; cap at M so we never wrap past the start
 
-      for (let idx = 0; idx < innerSats.length; idx++) {
-        const innerSat = innerSats[idx];
-        // Port & link budget checks
-        const canConnectOut = isFirstRing && innerMaxLinks === 3 ? idx % 2 === 1 : linkCounts[innerSat.name] < innerMaxLinks;
-
+      for (let ii = 0; ii < N && consumed < M; ii++) {
+        const innerSat = innerSats[ii];
+        const canConnectOut = isFirstRing && innerMaxLinks === 3 ? ii % 2 === 1 : linkCounts[innerSat.name] < innerMaxLinks;
         if (!canConnectOut || innerSat.outwards !== null) continue;
 
-        // Cache inner sat position once
         const innerPos = positions[innerSat.name];
         if (!innerPos) continue;
+        const target = normalizeAngle(innerPos.solarAngle + angularOffsetDeg);
 
-        // Approximate ideal target solar angle using geometry
-        const distEst = rOuter - rInner;
-        const tanOffset = distEst * Math.tan(departureRad);
-        const angularOffsetRad = Math.atan2(tanOffset, rOuter);
-        const idealTargetSolarAngle = normalizeAngle(innerPos.solarAngle + (angularOffsetRad * 180) / Math.PI);
+        // Advance the pointer forward to the outer sat nearest `target` (forward only).
+        while (consumed + 1 < M && angDist((op + 1) % M, target) < angDist(op, target)) {
+          op = (op + 1) % M;
+          consumed++;
+        }
 
-        // Binary search to the radially-nearest outer sat, then scan a small angular
-        // window around it. A purely-radial concentric link is sun-aligned — the inner
-        // sat sits between the outer sat and the Sun — so it gets solar-blinded; for
-        // plain circular rings the nearest (radial) outer sat is almost always unusable.
-        // Scanning a window lets the greedy pick the nearest NON-blinded outer sat: a
-        // slightly angularly-offset (diagonal) link that still advances one ring outward
-        // and clears the Sun. Adapted rings, whose consecutive rings are phase-shifted by
-        // their Earth↔Mars element blend, already find their nearest sat unblinded, so
-        // they keep matching it (the window only adds farther fallbacks they don't use).
-        let oIdx = 0;
-        while (oIdx < outerAngles.length && outerAngles[oIdx] < idealTargetSolarAngle) oIdx++;
-        const OUTER_WINDOW = 20;
-        const oLen = outerSats.length;
-        for (let w = -OUTER_WINDOW; w <= OUTER_WINDOW; w++) {
-          const outerSat = outerSats[(((oIdx + w) % oLen) + oLen) % oLen];
+        // From the nearest forward sat, scan a small window for the closest valid,
+        // non-blinded, in-budget outer sat.
+        let assigned = -1, bestDist = Infinity, bestStep = 0;
+        for (let s = 0; s <= SKIP && consumed + s < M; s++) {
+          const oi = (op + s) % M;
+          const outerSat = outerSats[oi];
           if (outerSat.inwards !== null) continue;
           if (linkCounts[outerSat.name] >= outerMaxLinks) continue;
-
           const outerPos = positions[outerSat.name];
           if (!outerPos) continue;
-
-          const distanceAU = this.calculateDistanceAU(innerPos, outerPos);
-          if (distanceAU > maxDistanceAU) continue;
+          const dAU = this.calculateDistanceAU(innerPos, outerPos);
+          if (dAU > maxDistanceAU) continue;
           if (this.isSolarBlinded(innerPos, outerPos)) continue;
-
-          const distanceKm = distanceAU * AU_IN_KM;
-          const gbps = this.calculateGbps(distanceKm);
-
-          candidates.push({ from: innerSat, to: outerSat, distanceAU, distanceKm, gbps });
+          if (dAU < bestDist) { bestDist = dAU; assigned = oi; bestStep = s; }
         }
-      }
+        if (assigned < 0) continue;
 
-      // Sort by distance (shortest = best)
-      candidates.sort((a, b) => a.distanceAU - b.distanceAU);
-
-      // Greedily assign non-conflicting links
-      const used = new Set();
-      let linksAdded = 0;
-
-      for (const { from, to, distanceAU, distanceKm, gbps } of candidates) {
-        if (used.has(from.name) || used.has(to.name)) continue;
-        if (linkCounts[from.name] >= innerMaxLinks) continue;
-        if (linkCounts[to.name] >= outerMaxLinks) continue;
-        if (from.outwards !== null || to.inwards !== null) continue;
+        const from = innerSat, to = outerSats[assigned];
+        const distanceAU = bestDist;
+        const distanceKm = distanceAU * AU_IN_KM;
+        const gbps = this.calculateGbps(distanceKm);
+        // Advance the pointer past the matched sat (keeps the assignment monotonic).
+        op = (assigned + 1) % M;
+        consumed += bestStep + 1;
 
         const [fId, tId] = from.name < to.name ? [from.name, to.name] : [to.name, from.name];
         const key = `${fId}-${tId}`;
@@ -336,19 +339,14 @@ export class TopologyBuilder {
           latencySeconds: this.calculateLatency(distanceKm),
           gbpsCapacity: gbps,
         });
-
         linkCounts[from.name]++;
         linkCounts[to.name]++;
         existingLinks.add(key);
         from.outwards = to.name;
         to.inwards = from.name;
-        used.add(from.name);
-        used.add(to.name);
-        linksAdded++;
 
         // DIAGNOSTIC: record this link's stretch + azimuthal offset.
-        const fA = positions[from.name].solarAngle, tA = positions[to.name].solarAngle;
-        const offDeg = Math.abs((((tA - fA) % 360 + 540) % 360) - 180);
+        const offDeg = Math.abs((((positions[to.name].solarAngle - innerPos.solarAngle) % 360 + 540) % 360) - 180);
         const stretch = distanceAU / radialGap;
         diagStretch.push(stretch);
         pairLinks++;
