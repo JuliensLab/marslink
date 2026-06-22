@@ -151,9 +151,16 @@ export class SimSatellites {
     const distanceKmBetweenSats = this.simLinkBudget.calculateKm(mbpsBetweenSats / 1000);
     const distanceAuBetweenSats = distanceKmBetweenSats / SIM_CONSTANTS.AU_IN_KM;
     const satellitesConfig = [];
+    // Worst-case (perihelion) sizing: sats are evenly spaced in mean longitude, so
+    // their physical spacing is widest at perihelion (the ring sweeps fastest there),
+    // exceeding the average by √((1+e)/(1−e)). Size the count so even that widest link
+    // meets the target, guaranteeing the rate everywhere on the orbit (mirrors the
+    // planet-ring worst-case branch).
+    const periapsisFactor = Math.sqrt((1 + eccentricity) / (1 - eccentricity));
     for (let ringId = 0; ringId < ringCount; ringId++) {
       const ringType = "Eccentric";
-      const satCount = Math.ceil(Math.PI / this.safeAsin(distanceAuBetweenSats / (2 * distAverageAu)));
+      const circumferenceAu = 2 * Math.PI * distAverageAu * periapsisFactor;
+      const satCount = Math.ceil(circumferenceAu / distanceAuBetweenSats);
       const argPeri = (argPeriStart + (ringId * 360) / ringCount) % 360;
       satellitesConfig.push({
         satCount: satCount,
@@ -255,7 +262,11 @@ export class SimSatellites {
       }
       const ringE = Math.min(0.97, Math.max(0, v / Ar)); // e = |V_r|/A_r = v/Ar
       const ringA = 1 / Ar / (1 - ringE * ringE); // a = p/(1−e²)
-      const satCount = Math.ceil(Math.PI / this.safeAsin(distanceAuBetweenSats / (2 * ringA)));
+      // Worst-case (perihelion) sizing: in-ring spacing is widest at perihelion,
+      // exceeding the average by √((1+e)/(1−e)), so size the count to that link.
+      const periapsisFactor = Math.sqrt((1 + ringE) / (1 - ringE));
+      const circumferenceAu = 2 * Math.PI * ringA * periapsisFactor;
+      const satCount = Math.ceil(circumferenceAu / distanceAuBetweenSats);
       satellitesConfig.push({
         satCount: satCount,
         satDistanceSun: ringA,

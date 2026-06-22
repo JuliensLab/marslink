@@ -609,6 +609,19 @@ export class SimUi {
       return Math.sign(v) * (Math.round(Math.log2(Math.abs(v))) + 1);
     };
 
+    // Required-throughput master (pow10 Gbps) — the general-design driver. It sizes
+    // the Earth/Mars rings (worst case = half) and, per relay type, either the ring
+    // count (concentric) or the in-ring rate (eccentric). Drives via the advanced
+    // relay_type.requiredgbps slider so a single switch case does the sizing.
+    const gbpsData = this.slidersData.relay_type.requiredgbps;
+    const throughputRow = makeSliderRow("Required throughput",
+      { min: gbpsData.min, max: gbpsData.max, step: gbpsData.step, unit: gbpsData.unit, value: gbpsData.value },
+      "simple-throughput",
+      (internal) => { this.applySliderValues({ "relay_type.requiredgbps": internal }); },
+      { toDisplay: (v) => Math.round(Math.pow(10, v) * 100) / 100, toInternal: (v) => Math.log10(v) }
+    );
+    const currentReqGbps = () => Math.pow(10, parseFloat(throughputRow.slider.value));
+
     // Time acceleration slider — signedPow2 scale (continuous, step 0.1)
     const timeData = this.slidersData.simulation["time-acceleration-slider"];
     const timeRow = makeSliderRow("Time acceleration",
@@ -628,10 +641,9 @@ export class SimUi {
       "simple-techfactor",
       (val) => {
         this.applySliderValues({ "laser_technology.improvement-factor": val });
-        const ringCount = parseFloat(
-          this.sliders.relay_type?.ringcount?.value ?? ringData.value
-        );
-        this.applySimpleDefaults(ringCount, { startFeedback: true });
+        // Tech change rescales the link budget → re-size for the same throughput
+        // (concentric ring count or eccentric in-ring rate shifts accordingly).
+        this.applyDesignFromThroughput(currentReqGbps());
       },
       { toDisplay: (v) => Math.pow(2, v), toInternal: (v) => Math.round(Math.log2(v)) }
     );
@@ -642,8 +654,12 @@ export class SimUi {
     // delivers a fresh capacityInfo. The feedback only fires on slider moves,
     // not on the initial applySimpleDefaults call at the bottom of this
     // method (line 638), so the direct formula alone seeds the defaults.
+    // For eccentric families this is the coverage/latency knob (held while the in-ring
+    // rate carries throughput); for concentric it is derived from throughput and shown
+    // read-only (disabled below, so this handler only fires for eccentric).
     const ringRow = makeSliderRow("Relay ring count", ringData, "simple-ringcount", (val) => {
-      this.applySimpleDefaults(val, { startFeedback: true });
+      this.applySliderValues({ "relay_type.ringcount": val });
+      this.applyDesignFromThroughput(currentReqGbps());
     });
 
     // Relay-type selector (position 3, above the ring-count row). Switching family
@@ -671,9 +687,14 @@ export class SimUi {
       });
       sel.addEventListener("change", () => {
         this.applySliderValues({ "relay_type.selected": sel.value });
-        // The relay ring count is shared across families; re-seed the Earth/Mars sizing
-        // for the newly-active family using that same count.
-        this.applySimpleDefaults(parseFloat(ringRow.slider.value), { startFeedback: true });
+        // Ring count is an input for eccentric families (coverage) and derived for
+        // concentric ones — toggle the row, then re-size for the new family at the
+        // current required throughput.
+        const ecc = this._isEccentricSection(SimUi.RELAY_TYPE_SECTIONS[sel.value]);
+        ringRow.slider.disabled = !ecc;
+        ringRow.valInput.disabled = !ecc;
+        ringRow.wrap.style.opacity = ecc ? "1" : "0.6";
+        this.applyDesignFromThroughput(currentReqGbps());
       });
       header.appendChild(lbl);
       header.appendChild(sel);
@@ -705,6 +726,15 @@ export class SimUi {
         ringRow.valInput.value = advRing.value;
       });
     }
+    // Keep the simple throughput row synced when relay_type.requiredgbps changes
+    // elsewhere (advanced panel, or our own applyDesignFromThroughput writes).
+    const advGbps = this.sliders.relay_type?.requiredgbps;
+    if (advGbps) {
+      advGbps.addEventListener("input", () => {
+        throughputRow.slider.value = advGbps.value;
+        throughputRow.valInput.value = Math.round(Math.pow(10, parseFloat(advGbps.value)) * 100) / 100;
+      });
+    }
 
     // Keep the simple selector in sync when the relay type changes in the advanced panel.
     const advRelay = this.sliders.relay_type?.selected;
@@ -718,10 +748,23 @@ export class SimUi {
     container.appendChild(timeRow.wrap);
     container.appendChild(techRow.wrap);
     container.appendChild(relayRow.wrap);
+    container.appendChild(throughputRow.wrap);
     container.appendChild(ringRow.wrap);
 
-    // Apply defaults on initial load
-    this.applySimpleDefaults(ringData.value);
+    // Initialize from the current config: show the throughput the current ring setup
+    // delivers, set the ring-count row's editability for the active family, then size
+    // both ends from that throughput. The inversion round-trips to the same ring count
+    // (concentric) / in-ring rate (eccentric), so nothing jumps on load.
+    {
+      const selKey0 = SimUi.RELAY_TYPE_SECTIONS[this.getSelectedRelayType()] || "adapted_rings";
+      const ecc0 = this._isEccentricSection(selKey0);
+      ringRow.slider.disabled = !ecc0;
+      ringRow.valInput.disabled = !ecc0;
+      ringRow.wrap.style.opacity = ecc0 ? "1" : "0.6";
+      const R0 = parseFloat(this.sliders.relay_type?.ringcount?.value ?? ringData.value);
+      const t0Gbps = this._relayThroughputMbps(R0, selKey0) / 1000;
+      this.applySliderValues({ "relay_type.requiredgbps": this.mapUserFacingToSliderValue(gbpsData, t0Gbps) });
+    }
   }
 
   /**
@@ -789,30 +832,55 @@ export class SimUi {
     return Math.max(1, Math.round(gbps * 1000));
   }
 
-  applySimpleDefaults(ringCount, options = {}) {
+  /** True when the given relay-section key is one of the eccentric families. */
+  _isEccentricSection(selKey) {
+    return selKey === "eccentric_rings" || selKey === "adapted_eccentric_rings";
+  }
+
+  /**
+   * Aggregate Earth↔Mars relay throughput (Mbps) the active family delivers at a
+   * given ring count, from its own routing model:
+   *   • concentric (adapted / circular): radial spokes — routeCount parallel routes,
+   *     each ≈ one inter-ring link → routeCount · perRouteMbps  (∝ ringCount³)
+   *   • eccentric (adapted-eccentric / eccentric): each ring is one azimuthal loop
+   *     carrying both arcs → 2 · ringCount · (worst-case in-ring rate)
+   * This is the forward law; applyDesignFromThroughput inverts it.
+   */
+  _relayThroughputMbps(ringCount, selKey) {
+    if (ringCount <= 0) return 0;
+    if (this._isEccentricSection(selKey)) {
+      const reqMbps = this.getGroupsConfig([selKey])[`${selKey}.requiredmbpsbetweensats`] || 50;
+      return 2 * ringCount * reqMbps;
+    }
     const lb = this.simMain.simLinkBudget;
     const rM = this.simMain.simSatellites.getMars().a;
     const rE = this.simMain.simSatellites.getEarth().a;
     const Dem = rM - rE;
+    const routeCount = Math.round((ringCount * Math.sqrt(3) * Math.PI * rM) / Dem);
+    const interRingAu = Dem / (ringCount + 1);
+    const perRouteMbps = lb.calculateGbps(lb.convertAUtoKM(interRingAu)) * 1000;
+    return routeCount * perRouteMbps;
+  }
+
+  /**
+   * Smallest concentric ring count whose forward throughput meets targetMbps.
+   * Monotonic in ring count, so a scan up to the slider max is exact (and cheap).
+   */
+  _ringCountForThroughput(targetMbps, selKey) {
+    const maxR = this.slidersData.relay_type.ringcount.max || 100;
+    for (let R = 1; R <= maxR; R++) {
+      if (this._relayThroughputMbps(R, selKey) >= targetMbps) return R;
+    }
+    return maxR;
+  }
+
+  applySimpleDefaults(ringCount, options = {}) {
     const selKey = SimUi.RELAY_TYPE_SECTIONS[this.getSelectedRelayType()] || "adapted_rings";
-    const isEccentric = selKey === "eccentric_rings" || selKey === "adapted_eccentric_rings";
 
     // Seed the relay aggregate throughput from the SELECTED family's own routing model so
     // the Earth/Mars rings start near the right size; the feedback loop then refines
-    // against the live routeSummary (exact for whichever family is active):
-    //   • concentric (adapted / circular): radial spokes — each route ≈ one inter-ring link
-    //   • eccentric (adapted-eccentric / eccentric): each ring is one azimuthal loop →
-    //     2 routes (its two arcs), each ≈ the ring's inter-satellite link mbps
-    let targetMbps;
-    if (isEccentric) {
-      const reqMbps = this.getGroupsConfig([selKey])[`${selKey}.requiredmbpsbetweensats`] || 50;
-      targetMbps = 2 * ringCount * reqMbps;
-    } else {
-      const routeCount = Math.round((ringCount * Math.sqrt(3) * Math.PI * rM) / Dem);
-      const interRingAu = Dem / (ringCount + 1);
-      const perRouteMbps = lb.calculateGbps(lb.convertAUtoKM(interRingAu)) * 1000;
-      targetMbps = routeCount * perRouteMbps;
-    }
+    // against the live routeSummary (exact for whichever family is active).
+    const targetMbps = this._relayThroughputMbps(ringCount, selKey);
 
     // Direct formula: find requiredmbpsbetweensats that yields min capacity = targetMbps
     const earthMbps = this._mbpsBetweenSatsForTargetCapacity(targetMbps, "Earth");
@@ -846,6 +914,66 @@ export class SimUi {
     } else {
       this._simpleFeedbackState = null;
     }
+  }
+
+  /**
+   * Throughput-driven design — the inverse of applySimpleDefaults. The designer sets
+   * the required Earth↔Mars throughput (Gbps); this sizes the constellation to deliver
+   * it, both ends from the same number, so no goal-seek loop:
+   *   • Earth/Mars rings: worst-case in-ring rate = half the throughput (the busiest
+   *     planet-ring link carries half, the gateway splitting the ring two ways).
+   *   • Concentric (adapted / circular): ring count is DERIVED from throughput
+   *     (throughput ∝ ring count³); the per-ring sat density follows from the lattice.
+   *   • Eccentric (adapted-eccentric / eccentric): ring count is the user's coverage/
+   *     latency knob (held); the worst-case in-ring rate is derived = throughput/(2·R).
+   */
+  applyDesignFromThroughput(reqGbps) {
+    const selKey = SimUi.RELAY_TYPE_SECTIONS[this.getSelectedRelayType()] || "adapted_rings";
+    const isEccentric = this._isEccentricSection(selKey);
+    const T_mbps = Math.max(0, reqGbps * 1000);
+    const values = {};
+
+    if (isEccentric) {
+      // Ring count is the coverage input; derive the worst-case in-ring rate from it.
+      const R = Math.max(1, Math.round(parseFloat(
+        this.sliders.relay_type?.ringcount?.value ?? this.slidersData.relay_type.ringcount.value
+      )));
+      const sd = this.slidersData[selKey].requiredmbpsbetweensats;
+      // Clamp at the per-terminal line rate (the slider max ≈ the terminal ceiling):
+      // past it, densifying one ring saturates and more throughput needs more rings.
+      const cTermMbps = (this.simMain.simLinkBudget.cTermGbps || Infinity) * 1000;
+      const m = Math.max(sd.min, Math.min(sd.max, cTermMbps, T_mbps / (2 * R)));
+      values[`${selKey}.requiredmbpsbetweensats`] = this.mapUserFacingToSliderValue(sd, m);
+    } else {
+      // Concentric: ring count is derived from throughput.
+      values["relay_type.ringcount"] = this._ringCountForThroughput(T_mbps, selKey);
+      values["adapted_rings.auto_route_count"] = "yes";
+      values["adapted_rings.laser-ports-per-satellite"] = 2;
+      values["adapted_rings.linear_satcount_increase"] = 0.18;
+    }
+
+    // Earth/Mars planet rings: worst-case in-ring rate = half the total throughput.
+    // The planet injects at one point and the ring splits two ways, so the busiest
+    // in-ring link carries T/2 — set that directly as each planet ring's worst-case
+    // rate (requiredmbpsbetweensats is exactly that target). Both planet rings are
+    // sized to deliver the full throughput, so neither becomes the bottleneck.
+    const planetMbps = T_mbps / 2;
+    const eSd = this.slidersData.ring_earth.requiredmbpsbetweensats;
+    const mSd = this.slidersData.ring_mars.requiredmbpsbetweensats;
+    Object.assign(values, {
+      "ring_earth.laser-ports-per-satellite": 3,
+      "ring_earth.side-extension-degrees-slider": 180,
+      "ring_earth.match-circular-rings": "no",
+      "ring_earth.requiredmbpsbetweensats": this.mapUserFacingToSliderValue(eSd, planetMbps),
+      "ring_mars.laser-ports-per-satellite": 3,
+      "ring_mars.side-extension-degrees-slider": 180,
+      "ring_mars.match-circular-rings": "no",
+      "ring_mars.requiredmbpsbetweensats": this.mapUserFacingToSliderValue(mSd, planetMbps),
+    });
+
+    this.applySliderValues(values);
+    // Both ends sized analytically from the same throughput — no feedback loop.
+    this._simpleFeedbackState = null;
   }
 
   /**
@@ -1873,6 +2001,7 @@ export class SimUi {
     // — localStorage, optimizer DOM ids, getGroupsConfig lists — but show the
     // disambiguating "Concentric" name now that "Adapted Eccentric" exists.)
     const SECTION_TITLES = {
+      relay_type: "Constellation sizing",
       adapted_rings: "Adapted Concentric rings",
       adapted_eccentric_rings: "Adapted Eccentric rings",
     };
@@ -2862,6 +2991,12 @@ export class SimUi {
         case "simulation.flowAlgorithm":
         case "simulation.linkUpdateIntervalHours":
         case "simulation.failed-satellites-slider":
+        case "relay_type.requiredgbps":
+          // Throughput-driven design: size Earth/Mars rings + (concentric) the ring
+          // count or (eccentric) the in-ring rate. Those sub-slider writes each trigger
+          // the rebuild, so this case does not fall through.
+          this.applyDesignFromThroughput(newValue);
+          break;
         case "relay_type.ringcount":
         case "relay_type.selected":
           // Show only the selected relay family's config section, then rebuild (the

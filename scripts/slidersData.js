@@ -496,16 +496,28 @@ export const slidersData = {
     },
   },
   relay_type: {
+    requiredgbps: {
+      label: "Required throughput",
+      description:
+        "Total Earth↔Mars capacity the constellation is sized for. Drives the Earth/Mars in-ring worst-case rate (= half this), and — per relay type — either the ring count (concentric: throughput ∝ ring count³) or the in-ring rate (eccentric: rate = throughput / (2 × ring count), with ring count set separately for coverage/latency).",
+      min: 0,
+      max: 5,
+      value: 2,
+      step: 0.05,
+      unit: " Gbps",
+      scale: "pow10",
+      updateLongTermScore: true,
+    },
     selected: {
       label: "Relay ring type",
       type: "radio",
       options: ["Adapted concentric", "Adapted eccentric", "Circular", "Eccentric"],
       value: "Adapted concentric",
       optionDescriptions: {
-        "Adapted concentric": "Nested rings between Earth and Mars; relay traffic crosses radially ring-to-ring.",
-        "Adapted eccentric": "Ellipses tangent to both planet orbits; each ring relays Earth→Mars along its azimuthal loop.",
-        "Circular": "Plain concentric circular rings; relay traffic crosses radially ring-to-ring.",
-        "Eccentric": "Plain eccentric ellipses; relay traffic runs along each ring's azimuthal loop.",
+        "Adapted concentric": "Nested rings between Earth and Mars; relay traffic crosses radially ring-to-ring. Ring count is derived from the required throughput.",
+        "Adapted eccentric": "Ellipses tangent to both planet orbits; each ring relays Earth→Mars along its azimuthal loop. Ring count is a coverage/latency knob; the in-ring rate carries the throughput.",
+        "Circular": "Plain concentric circular rings; relay traffic crosses radially ring-to-ring. Ring count is derived from the required throughput.",
+        "Eccentric": "Plain eccentric ellipses; relay traffic runs along each ring's azimuthal loop. Ring count is a coverage/latency knob; the in-ring rate carries the throughput.",
       },
       updateLongTermScore: true,
     },
@@ -614,7 +626,9 @@ export const slidersData = {
       updateLongTermScore: true,
     },
     requiredmbpsbetweensats: {
-      label: "Average throughput in ring",
+      label: "Throughput in ring (worst case)",
+      description:
+        "Target throughput for each in-ring laser link, sized for the worst case. Sats are evenly spaced in mean longitude, so they sit widest apart at perihelion (the ring sweeps fastest there); the sat count is chosen so even that widest perihelion link meets this rate, guaranteeing it everywhere on the orbit.",
       min: 1,
       max: 999,
       value: 50,
@@ -954,7 +968,9 @@ export const slidersData = {
       updateLongTermScore: true,
     },
     requiredmbpsbetweensats: {
-      label: "Average throughput in ring",
+      label: "Throughput in ring (worst case)",
+      description:
+        "Target throughput for each in-ring laser link, sized for the worst case (the perihelion gap, where evenly-spaced-in-mean-longitude sats sit widest apart). With the required throughput set, this is derived as throughput / (2 × ring count); set the ring count for coverage/latency and this rate carries the per-ring throughput.",
       min: 1,
       max: 999,
       value: 50,

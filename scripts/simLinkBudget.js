@@ -9,6 +9,12 @@ export class SimLinkBudget {
     this.techImprovementFactor = 1;
     this.AU_IN_KM = SIM_CONSTANTS.AU_IN_KM;
     this.SPEED_OF_LIGHT_KM_S = SIM_CONSTANTS.SPEED_OF_LIGHT_KM_S;
+    // Per-terminal line-rate ceiling (Gbps). The physical link is power-limited
+    // (capacity ∝ 1/d²) until the terminal saturates at its electronics line rate;
+    // past that, shortening the link no longer buys throughput. Default Infinity =
+    // non-binding (pure 1/d², unchanged behaviour); lower it to model the ceiling
+    // that makes densification saturate and forces extra rings at scale.
+    this.cTermGbps = SIM_CONSTANTS.TERMINAL_LINE_RATE_GBPS ?? Infinity;
   }
 
   setTechnologyConfig(technologyConfig) {
@@ -59,7 +65,8 @@ export class SimLinkBudget {
     const bucket = (distanceKm / 100) | 0; // 100km buckets
     const cached = this._gbpsCache.get(bucket);
     if (cached !== undefined) return cached;
-    const result = this._gbpsFactor / (distanceKm * distanceKm);
+    // Power-limited capacity (∝ 1/d²), clamped at the terminal line rate.
+    const result = Math.min(this.cTermGbps, this._gbpsFactor / (distanceKm * distanceKm));
     this._gbpsCache.set(bucket, result);
     return result;
   }
