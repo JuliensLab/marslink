@@ -120,7 +120,7 @@ export class SimDisplay {
     this.satPhysics = null; // ringName -> { dryMass, nRing, skPropRing, aThreshold, ports }
     this.skCfg = { F: 0.17, tm: 15, maxN: 64, n: 5, isp: 2500, capacity: 1500 };
     this.showPlanetOrbits = false;
-    this.geoOrbits = []; // planets whose geostationary orbit circle is drawn (true scale)
+    this.geoOrbits = []; // bodies whose planet-centric orbit circle is drawn — geo/areostationary + Moon (true scale)
     this.satLabelMode = false; // per-satellite value labels (S key)
     this.satThrusterMax = 1;   // fleet max thruster count (Thrusters colour scale)
     this.satLaserMax = 1;      // fleet max laser terminals (Lasers colour scale)
@@ -355,6 +355,12 @@ export class SimDisplay {
 
   setPlanetOrbits(value) {
     this.showPlanetOrbits = Array.isArray(value) ? value.length > 0 : !!(value && String(value).length);
+    this.drawSolarSystem();
+  }
+
+  setPlaneNodes(value, n1, n2) {
+    this.showPlaneNodes = Array.isArray(value) ? value.length > 0 : !!(value && String(value).length);
+    this.planeNodeAngles = [n1, n2];
     this.drawSolarSystem();
   }
 
@@ -714,6 +720,32 @@ export class SimDisplay {
       this.ctx.restore();
     }
 
+    // === Draw Earth↔Mars line of nodes (through the Sun, ending on Mars's orbit) ===
+    if (this.showPlaneNodes && this.planeNodeAngles) {
+      const mars = this.solarSystemData.planets.find((p) => p.name === "Mars");
+      if (mars) {
+        const [n1, n2] = this.planeNodeAngles;
+        const proj = (ang) => {
+          const p = positionFromSolarAngle(mars, ang);
+          return [centerX - auTo3D(p.x) * scaleAUtoPX, centerY + auTo3D(p.y) * scaleAUtoPX];
+        };
+        const [x1, y1] = proj(n1), [x2, y2] = proj(n2);
+        this.ctx.save();
+        this.ctx.strokeStyle = "#d8b85a";
+        this.ctx.lineWidth = 1.5;
+        this.ctx.beginPath();
+        this.ctx.moveTo(x1, y1);
+        this.ctx.lineTo(x2, y2);
+        this.ctx.stroke();
+        this.ctx.fillStyle = "#d8b85a";
+        this.ctx.font = "11px ui-monospace, monospace";
+        this.ctx.textAlign = "center";
+        this.ctx.fillText(`${Math.round(n1)}°`, x1, y1 - 5);
+        this.ctx.fillText(`${Math.round(n2)}°`, x2, y2 - 5);
+        this.ctx.restore();
+      }
+    }
+
     // === Draw Sun ===
     const sunData = this.solarSystemData.sun;
     const sunRadiusAU = kmTo3D(sunData.diameterKm / 2) * sunScaleFactor;
@@ -752,19 +784,28 @@ export class SimDisplay {
       this.ctx.restore();
     }
 
-    // === Draw geostationary / areostationary orbit circles (true scale, around the planet) ===
+    // === Draw planet-centric orbit circles (true scale, around the centre body) ===
     if (this.geoOrbits && this.geoOrbits.length) {
-      const GEO_AU = { Earth: 2.8185e-4, Mars: 1.3656e-4 }; // geo/areostationary radius ÷ 1 AU
+      // radius ÷ 1 AU, the body the circle is centred on, and stroke colour. Geo/areo-
+      // stationary orbits ring their own planet; the Moon's orbit is centred on Earth.
+      const REF = {
+        Earth: { r: 2.8185e-4, center: "Earth", color: "rgba(0,170,210,0.9)" }, // geostationary
+        Mars: { r: 1.3656e-4, center: "Mars", color: "rgba(0,170,210,0.9)" }, // areostationary
+        Moon: { r: 2.5696e-3, center: "Earth", color: "rgba(80,85,100,0.9)" }, // Moon (a≈384,400 km, around Earth)
+        Phobos: { r: 6.2675e-5, center: "Mars", color: "rgba(80,85,100,0.9)" }, // Phobos (a≈9,376 km, around Mars)
+        Deimos: { r: 1.5684e-4, center: "Mars", color: "rgba(80,85,100,0.9)" }, // Deimos (a≈23,463 km, around Mars)
+      };
       this.ctx.save();
-      this.ctx.strokeStyle = "rgba(0,170,210,0.9)";
       this.ctx.lineWidth = 1;
       for (const name of this.geoOrbits) {
-        const r = GEO_AU[name], pos = this.planetPositions[name];
-        if (!r || !pos) continue;
+        const ref = REF[name];
+        const pos = ref && this.planetPositions[ref.center];
+        if (!ref || !pos) continue;
         const px = centerX - auTo3D(pos.x) * scaleAUtoPX;
         const py = centerY + auTo3D(pos.y) * scaleAUtoPX;
+        this.ctx.strokeStyle = ref.color;
         this.ctx.beginPath();
-        this.ctx.arc(px, py, r * scaleAUtoPX, 0, 2 * Math.PI);
+        this.ctx.arc(px, py, ref.r * scaleAUtoPX, 0, 2 * Math.PI);
         this.ctx.stroke();
       }
       this.ctx.restore();

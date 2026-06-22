@@ -31,6 +31,7 @@ export class SimMissionValidator {
       if (ringName === "ring_earth") return portsPerRing.ring_earth || 2;
       if (ringName === "ring_mars") return portsPerRing.ring_mars || 2;
       if (ringName.startsWith("ring_circ")) return portsPerRing.circular_rings || 2;
+      if (ringName.startsWith("ring_adecc")) return portsPerRing.adapted_eccentric_rings || 2;
       if (ringName.startsWith("ring_ecce")) return portsPerRing.eccentric_rings || 2;
       if (ringName.startsWith("ring_adapt")) return portsPerRing.adapted_rings || 2;
       return 2;

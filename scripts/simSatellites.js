@@ -24,6 +24,10 @@ export class SimSatellites {
     this.satellitesTruncated = false; // true when the cap clipped the constellation
     this.solarAngleStep = 1.0; // Degrees for precomputing positions along orbit
     this.ringCrossings = new Map(); // ringName -> { earth: [...], mars: [...] }
+    // Eccentric ring↔ring crossings, precomputed once per constellation definition.
+    // Each entry: { ringA, ringB, solarAngle } — the solar angle is the time-invariant
+    // key the topology builder binary-searches to find the nearest sat on each ring.
+    this.eccentricRingCrossings = [];
   }
 
   calculateGbps = (distanceKm) => {
@@ -84,17 +88,24 @@ export class SimSatellites {
    */
   buildConfigFromUi(uiConfig) {
     const satellitesConfig = [];
-    satellitesConfig.push(...this._buildCircularRings(uiConfig));
-    satellitesConfig.push(...this._buildAdaptedRings(uiConfig));
-    satellitesConfig.push(...this._buildEccentricRings(uiConfig));
-    satellitesConfig.push(...this._buildAdaptedEccentricRings(uiConfig));
+    // Exactly one relay family is active, chosen by the relay_type selector. Build only
+    // that one (falling back to adapted concentric for legacy configs without the key).
+    const relayType = uiConfig["relay_type.selected"] || "Adapted concentric";
+    const relayBuilders = {
+      "Circular": () => this._buildCircularRings(uiConfig),
+      "Eccentric": () => this._buildEccentricRings(uiConfig),
+      "Adapted concentric": () => this._buildAdaptedRings(uiConfig),
+      "Adapted eccentric": () => this._buildAdaptedEccentricRings(uiConfig),
+    };
+    const build = relayBuilders[relayType] || relayBuilders["Adapted concentric"];
+    satellitesConfig.push(...build());
     if (uiConfig["ring_mars.side-extension-degrees-slider"]) satellitesConfig.push(...this._buildPlanetRing(uiConfig, "ring_mars"));
     if (uiConfig["ring_earth.side-extension-degrees-slider"]) satellitesConfig.push(...this._buildPlanetRing(uiConfig, "ring_earth"));
     return satellitesConfig;
   }
 
   _buildCircularRings(uiConfig) {
-    let ringCount = uiConfig["circular_rings.ringcount"];
+    let ringCount = uiConfig["relay_type.ringcount"];
     if (ringCount == 0) return [];
     ringCount += 2;
     const mbpsBetweenSats = uiConfig["circular_rings.requiredmbpsbetweensats"];
@@ -129,7 +140,7 @@ export class SimSatellites {
   }
 
   _buildEccentricRings(uiConfig) {
-    const ringCount = uiConfig["eccentric_rings.ringcount"];
+    const ringCount = uiConfig["relay_type.ringcount"];
     const mbpsBetweenSats = uiConfig["eccentric_rings.requiredmbpsbetweensats"];
     if (ringCount == 0 || mbpsBetweenSats == 0) return [];
     const distAverageAu = uiConfig["eccentric_rings.distance-sun-average-au"];
@@ -181,7 +192,7 @@ export class SimSatellites {
   // instead of touching. Emits ringType "Eccentric" with a distinct ring_adecc_ name.
   // (Worked in the 2-D ecliptic projection — inclination only tilts out of plane.)
   _buildAdaptedEccentricRings(uiConfig) {
-    const ringCount = uiConfig["adapted_eccentric_rings.ringcount"];
+    const ringCount = uiConfig["relay_type.ringcount"];
     const mbpsBetweenSats = uiConfig["adapted_eccentric_rings.requiredmbpsbetweensats"];
     if (ringCount == 0 || mbpsBetweenSats == 0) return [];
     const argPeriStart = uiConfig["adapted_eccentric_rings.argument-of-perihelion"];
@@ -199,13 +210,14 @@ export class SimSatellites {
     };
     const M = uParams(this.Mars), E = uParams(this.Earth);
 
-    // Clearance (× inter-satellite spacing) is a RADIAL gap (AU). It maps to a u-space
-    // margin by du ≈ dr·A², but A (=1/r) at the planet's MEAN radius is only a seed —
-    // each ring touches at a different radius. So we Newton-refine each ring's margin
-    // (closed form, no sampling) until the realized radial gap equals the slider value.
+    // Clearance is a RADIAL gap in AU — a fixed absolute distance set directly by the
+    // slider, NOT a multiple of the (varying) in-ring spacing. It maps to a u-space margin
+    // by du ≈ dr·A², but A (=1/r) at the planet's MEAN radius is only a seed — each ring
+    // touches at a different radius. So we Newton-refine each ring's margin (closed form,
+    // no sampling) until the realized radial gap equals the slider value.
     const num = (v, d) => (typeof v === "number" && !Number.isNaN(v) ? v : d);
-    const marsMargin = num(uiConfig["adapted_eccentric_rings.mars-side-clearance-x"], 0) * distanceAuBetweenSats;
-    const earthMargin = num(uiConfig["adapted_eccentric_rings.earth-side-clearance-x"], 0) * distanceAuBetweenSats;
+    const marsMargin = num(uiConfig["adapted_eccentric_rings.mars-side-clearance-x"], 0); // AU
+    const earthMargin = num(uiConfig["adapted_eccentric_rings.earth-side-clearance-x"], 0); // AU
     const fociDist = Math.hypot(M.Vx - E.Vx, M.Vy - E.Vy);
     // Exact u-margin c giving a radial gap g at a contact with reciprocal-radius u*:
     //   Mars (ring inside):   g = 1/u* − 1/(u*+c) ⇒ c = g·u*² / (1 − g·u*)
@@ -260,7 +272,7 @@ export class SimSatellites {
   }
 
   _buildAdaptedRings(uiConfig) {
-    const userRingCount = uiConfig["adapted_rings.ringcount"];
+    const userRingCount = uiConfig["relay_type.ringcount"];
     if (userRingCount == 0) return [];
     let ringCount = userRingCount + 2;
 
@@ -406,10 +418,15 @@ export class SimSatellites {
 
     let ringType = ringName == "ring_mars" ? "Mars" : "Earth";
 
+    // The planet ring can "match" the circular relay rings' radial spacing — only
+    // meaningful when Circular is the active relay family. The relay ring count now
+    // lives on the shared relay_type.ringcount; treat it as 0 (match disabled) otherwise.
+    const circularRingCount = uiConfig["relay_type.selected"] === "Circular" ? uiConfig["relay_type.ringcount"] : 0;
+
     let satCount = 0;
     let gradientOneSideStartMbps = null;
     if (matchCircularRings == "gradient") {
-      let ringCount = uiConfig["circular_rings.ringcount"];
+      let ringCount = circularRingCount;
       if (ringCount == 0) {
         matchCircularRings = "no";
       } else {
@@ -444,9 +461,9 @@ export class SimSatellites {
     if (
       matchCircularRings != "no" &&
       uiConfig["circular_rings.requiredmbpsbetweensats"] > 0 &&
-      uiConfig["circular_rings.ringcount"] > 0
+      circularRingCount > 0
     ) {
-      let ringCount = uiConfig["circular_rings.ringcount"];
+      let ringCount = circularRingCount;
       ringCount += 2;
       const mbpsBetweenSats = uiConfig["circular_rings.requiredmbpsbetweensats"];
       const distOuterAu = uiConfig["circular_rings.distance-sun-slider-outer-au"];
@@ -461,10 +478,21 @@ export class SimSatellites {
       satCount = Math.ceil(((Math.PI / this.safeAsin(distanceAuBetweenSats / (2 * satDistanceSunAuBias))) * sideExtensionDeg) / 180);
     } else {
       const { a, n } = this.getParams_a_n(ringType);
+      // Worst-case sizing. The planet ring follows the planet's eccentric orbit and
+      // its sats are evenly spaced in mean longitude, so their physical spacing is not
+      // uniform: it is widest at periapsis, where the planet sweeps fastest (the arc
+      // per unit mean anomaly scales as a²·√(1−e²)/r, maximal at r = a(1−e)). Sizing
+      // the count so the AVERAGE link meets the target would under-serve the periapsis
+      // links. Instead size so the widest (periapsis) link meets it, which guarantees
+      // the throughput everywhere on the orbit. The periapsis spacing exceeds the
+      // average by exactly √((1+e)/(1−e)), so we inflate the effective circumference by
+      // that factor.
+      const e = ringType === "Mars" ? this.Mars.e : this.Earth.e;
+      const periapsisFactor = Math.sqrt((1 + e) / (1 - e));
       const distAverageAu = a;
       const distanceKmBetweenSats = this.simLinkBudget.calculateKm(mbpsBetweenSats / 1000);
       const distanceAuBetweenSats = distanceKmBetweenSats / SIM_CONSTANTS.AU_IN_KM;
-      const circumferenceAu = 2 * Math.PI * distAverageAu;
+      const circumferenceAu = 2 * Math.PI * distAverageAu * periapsisFactor;
       const actualCircumferenceAu = (circumferenceAu * sideExtensionDeg * 2) / 360;
       satCount = Math.ceil(actualCircumferenceAu / distanceAuBetweenSats);
     }
@@ -631,6 +659,74 @@ export class SimSatellites {
     this.computeSuitableRanges("earth");
     this.computeSuitableRanges("mars");
 
+    // Precompute eccentric ring↔ring crossings (static geometry → done once here, at
+    // constellation definition, and reused on every topology build).
+    this.eccentricRingCrossings = this.computeEccentricRingCrossings();
+  }
+
+  /**
+   * Crossing points between every pair of eccentric relay rings (ring_ecce_,
+   * ring_adecc_), in the ecliptic (xy) projection. Two such rings are confocal conics,
+   * so they intersect at the (≤2) solar angles where 1/ρ_i(θ) = 1/ρ_j(θ) — the same
+   * single-sinusoid root solved by findAllRadialCrossings from each ring's radialCoeffs.
+   *
+   * A crossing is a fixed point in inertial space (the orbits don't change shape), so it
+   * is stored as { ringA, ringB, solarAngle, requiredMbps, requiredLinks }. The solar
+   * angle is the time-invariant key: satellites orbit, but the one nearest a crossing is
+   * always the one whose current solar angle is closest to it — an O(log n) binary search
+   * per ring at link time.
+   *
+   * requiredMbps is the junction's design throughput: the SUM of the two rings' in-ring
+   * link capacities at the crossing, so the junction never bottlenecks either ring where
+   * they meet. Satellites are evenly spaced in mean anomaly, so a ring's in-ring chord at
+   * solar angle θ is |v|·Δt = a·(2π/N)·√(1+2e·cosν+e²)/√(1−e²) with ν = θ − ϖ (ϖ = ring.p).
+   *
+   * requiredLinks is how many cross-ring laser links it takes to carry requiredMbps —
+   * precomputed here so the topology builder just places that many (no per-build capacity
+   * accounting). A single laser link can't span 0 distance, so a representative nearest
+   * cross-link has each ring's closest sat ~half a spacing off the crossing, giving
+   * length d ≈ ½·√(chordA²+chordB²); requiredLinks = ceil(requiredMbps / capacity(d)).
+   * All three quantities are static geometry, so they're computed once at definition time.
+   */
+  computeEccentricRingCrossings() {
+    const eccRings = this.orbitalElements.filter(
+      (el) => el.ringName && (el.ringName.startsWith("ring_ecce") || el.ringName.startsWith("ring_adecc"))
+    );
+
+    const AU_IN_KM = SIM_CONSTANTS.AU_IN_KM;
+    const DEG_TO_RAD = SIM_CONSTANTS.DEG_TO_RAD;
+    const MAX_CROSS_LINKS = 6; // safety cap; keep ≤ the topology builder's window (WIN)
+    const mbpsFromAU = (au) => this.calculateGbps(au * AU_IN_KM) * 1000;
+    // In-ring chord (AU) of `ring` between two mean-anomaly-adjacent sats at solar angle θ.
+    const inRingChordAU = (ring, thetaDeg) => {
+      const N = ring.satCount, e = ring.e || 0;
+      if (!N || N < 2 || ring.a == null || e >= 1) return Infinity;
+      const nu = (thetaDeg - (ring.p || 0)) * DEG_TO_RAD;
+      return ring.a * ((2 * Math.PI) / N) * Math.sqrt(1 + 2 * e * Math.cos(nu) + e * e) / Math.sqrt(1 - e * e);
+    };
+
+    const crossings = [];
+    for (let i = 0; i < eccRings.length; i++) {
+      for (let j = i + 1; j < eccRings.length; j++) {
+        const { crossings: angles } = this.findAllRadialCrossings(eccRings[i], eccRings[j]);
+        for (const solarAngle of angles) {
+          const chA = inRingChordAU(eccRings[i], solarAngle);
+          const chB = inRingChordAU(eccRings[j], solarAngle);
+          const requiredMbps = mbpsFromAU(chA) + mbpsFromAU(chB);
+          // Capacity of one representative nearest cross-link (each ring's closest sat
+          // ~half a spacing off the crossing), then how many such links carry requiredMbps.
+          const linkMbps = mbpsFromAU(0.5 * Math.sqrt(chA * chA + chB * chB));
+          const requiredLinks =
+            linkMbps > 0 ? Math.min(MAX_CROSS_LINKS, Math.max(1, Math.ceil(requiredMbps / linkMbps))) : 1;
+          crossings.push({ ringA: eccRings[i].ringName, ringB: eccRings[j].ringName, solarAngle, requiredMbps, requiredLinks });
+        }
+      }
+    }
+    return crossings;
+  }
+
+  getEccentricRingCrossings() {
+    return this.eccentricRingCrossings || [];
   }
 
   computeSuitableRanges(target) {

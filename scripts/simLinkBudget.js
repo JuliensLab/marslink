@@ -22,6 +22,7 @@ export class SimLinkBudget {
       circular_rings: technologyConfig["circular_rings.laser-ports-per-satellite"],
       eccentric_rings: technologyConfig["eccentric_rings.laser-ports-per-satellite"],
       adapted_rings: technologyConfig["adapted_rings.laser-ports-per-satellite"],
+      adapted_eccentric_rings: technologyConfig["adapted_eccentric_rings.laser-ports-per-satellite"],
     };
 
     // Global cap = max of all per-ring values (used as fallback and topology cap)
@@ -35,6 +36,11 @@ export class SimLinkBudget {
 
     // Max-flow algorithm selection (one of the keys in FLOW_ALGORITHMS)
     this.flowAlgorithm = technologyConfig["simulation.flowAlgorithm"] || undefined;
+
+    // Adapted-eccentric "cross-ring links" toggle: link the nearest sat on each of
+    // two rings where their tracks cross in the xy plane, using the spare radial
+    // laser. Default on (only affects topologies that actually use eccentric rings).
+    this.eccentricCrossRingLinks = technologyConfig["adapted_eccentric_rings.cross-ring-links"] !== "no";
 
     // Invalidate Gbps cache when tech config changes
     this._gbpsCache = new Map();
@@ -83,6 +89,7 @@ export class SimLinkBudget {
     if (ringName === "ring_earth") return this.maxLinksPerRing.ring_earth;
     if (ringName === "ring_mars") return this.maxLinksPerRing.ring_mars;
     if (ringName.startsWith("ring_circ")) return this.maxLinksPerRing.circular_rings;
+    if (ringName.startsWith("ring_adecc")) return this.maxLinksPerRing.adapted_eccentric_rings || this.maxLinksPerSatellite;
     if (ringName.startsWith("ring_ecce")) return this.maxLinksPerRing.eccentric_rings;
     if (ringName.startsWith("ring_adapt")) return this.maxLinksPerRing.adapted_rings || this.maxLinksPerSatellite;
     return this.maxLinksPerSatellite; // fallback

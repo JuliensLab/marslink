@@ -7,6 +7,8 @@ import { RenderPass } from "three/addons/postprocessing/RenderPass.js?v=4.6";
 import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js?v=4.6";
 import { SimSolarSystem } from "./simSolarSystem.js?v=4.6";
 import { createCarModel } from "./modelCar.js?v=4.6";
+import { positionFromSolarAngle } from "./simOrbits.js?v=4.6";
+import { stationKeepingAccel, THRUST_BINS, satSchemeT, rampHex, OVER_BUDGET_HEX, isThrustScheme, satStationKeeping, satTotalProp } from "./simStationKeeping.js?v=4.6";
 
 /**
  * Converts astronomical units (AU) to 3D units using a scale factor.
@@ -58,6 +60,14 @@ export class SimDisplay {
     this.satelliteSizeFactor = 1;
     this.currentSatelliteScale = 100; // Default scale to make satellites visible initially
     this.satelliteColorMode = "Zone"; // Default color mode
+    this.satPhysics = null; // ringName -> { dryMass, nRing, skPropRing, aThreshold, ports }
+    this.skCfg = { F: 0.17, tm: 15, maxN: 64, n: 5, isp: 2500, capacity: 1500 };
+    this.satLabelMode = false; // per-satellite labels (3D rendering deferred; 2D implemented)
+    this.planetOrbitsGroup = null;
+    this.planeNodesGroup = null;
+    this.satThrusterMax = 1;   // fleet max thruster count (Thrusters colour scale)
+    this.satLaserMax = 1;      // fleet max laser terminals (Lasers colour scale)
+    this.satLaserValues = [1];
     // === Styles ===
     this.styles = {
       links: {
@@ -108,6 +118,15 @@ export class SimDisplay {
     this.controls.enablePan = true;
     this.controls.minDistance = 0.05; // Minimum zoom distance
     this.controls.maxDistance = 50; // Maximum zoom distance
+
+    // Replace OrbitControls' wheel dolly-zoom with a "fly forward" translation.
+    // The wheel now moves the camera (and the orbit target) along the view
+    // direction, so it flies through the scene instead of zooming toward a fixed
+    // point. Moving camera and target by the same vector preserves the spherical
+    // offset OrbitControls tracks, so rotation keeps working normally afterward.
+    this.controls.enableZoom = false;
+    this._onWheel = this.onWheel.bind(this);
+    this.renderer.domElement.addEventListener("wheel", this._onWheel, { passive: false });
 
     // === Texture Loader ===
     this.textureLoader = new THREE.TextureLoader();
@@ -263,6 +282,70 @@ export class SimDisplay {
     this.satelliteColorMode = mode;
   }
 
+  setSatellitePhysics(map, cfg) {
+    this.satPhysics = map;
+    if (cfg) this.skCfg = cfg;
+  }
+
+  buildPlanetOrbits() {
+    if (this.planetOrbitsGroup) return;
+    const group = new THREE.Group();
+    group.visible = false;
+    const mat = new THREE.LineBasicMaterial({ color: 0x888888, transparent: true, opacity: 0.5 });
+    const SEG = 256;
+    for (const planetData of this.solarSystemData.planets) {
+      if (planetData.shape !== "sphere" || !(planetData.a > 0)) continue;
+      const pts = [];
+      for (let i = 0; i <= SEG; i++) {
+        // Sweep the true ecliptic longitude → real (eccentric, inclined) heliocentric
+        // position, then map ecliptic (x,y,z)→world (x, z, -y) like the planet meshes.
+        const p = positionFromSolarAngle(planetData, (i / SEG) * 360);
+        pts.push(new THREE.Vector3(auTo3D(p.x), auTo3D(p.z), -auTo3D(p.y)));
+      }
+      group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), mat));
+    }
+    this.planetOrbitsGroup = group;
+    this.scene.add(group);
+  }
+
+  setPlanetOrbits(value) {
+    const on = Array.isArray(value) ? value.length > 0 : !!(value && String(value).length);
+    this.buildPlanetOrbits();
+    this.planetOrbitsGroup.visible = on;
+  }
+
+  // Earth↔Mars line of nodes: a line through the Sun from Mars's orbit at one node
+  // longitude to Mars's orbit at the other (180° away). Same ecliptic→world mapping
+  // (x, z, −y) as the planet meshes/orbits.
+  buildPlaneNodes(n1, n2) {
+    if (this.planeNodesGroup) {
+      this.scene.remove(this.planeNodesGroup);
+      this.planeNodesGroup.traverse((o) => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
+      this.planeNodesGroup = null;
+    }
+    const group = new THREE.Group();
+    group.visible = false;
+    const mars = this.solarSystemData.planets.find((p) => p.name === "Mars");
+    if (mars) {
+      const toWorld = (ang) => { const p = positionFromSolarAngle(mars, ang); return new THREE.Vector3(auTo3D(p.x), auTo3D(p.z), -auTo3D(p.y)); };
+      const mat = new THREE.LineBasicMaterial({ color: 0xd8b85a, transparent: true, opacity: 0.85 });
+      const pts = [toWorld(n1), new THREE.Vector3(0, 0, 0), toWorld(n2)];
+      group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), mat));
+    }
+    this.planeNodesGroup = group;
+    this.scene.add(group);
+  }
+
+  setPlaneNodes(value, n1, n2) {
+    const on = Array.isArray(value) ? value.length > 0 : !!(value && String(value).length);
+    this.buildPlaneNodes(n1, n2);
+    this.planeNodesGroup.visible = on;
+  }
+
+  setSatLabelMode(on) {
+    this.satLabelMode = !!on; // 3D per-satellite label rendering is deferred (2D implemented)
+  }
+
   getSatelliteColorIndex(satellite) {
     if (this.satelliteColorMode === "Quad") {
       const solarAngle = ((satellite.position.solarAngle % 360) + 360) % 360;
@@ -280,6 +363,15 @@ export class SimDisplay {
       else if (satellite.suitable.includes("Mars")) return 0; // Red for Mars
       else if (satellite.suitable.includes("Earth")) return 2; // Blue for Earth
       else return 3; // Grey for unsuitable
+    } else if (isThrustScheme(this.satelliteColorMode)) {
+      const ring = this.satPhysics && this.satPhysics[satellite.ringName];
+      if (!ring) return 0;
+      const a = stationKeepingAccel(satellite.position, this.planetPositionsAU || {});
+      const isPlanetary = satellite.ringName === "ring_earth" || satellite.ringName === "ring_mars";
+      const { N, skProp, m } = satStationKeeping(a, ring.dryMass, ring, isPlanetary, this.skCfg);
+      const { t, over } = satSchemeT(this.satelliteColorMode, { a, m, skProp, favail: N * this.skCfg.F, isp: this.skCfg.isp, n: N, nMax: this.satThrusterMax, ports: ring.ports, lasersMax: this.satLaserMax, capacity: this.skCfg.capacity, nonSkFuel: ring.nonSkFuel, totProp: satTotalProp(ring, skProp, isPlanetary) });
+      if (over) return THRUST_BINS; // over-budget bin (Thrust% only)
+      return Math.max(0, Math.min(THRUST_BINS - 1, Math.floor(t * THRUST_BINS)));
     } else {
       // Grey or other
       return 0; // all same
@@ -291,6 +383,10 @@ export class SimDisplay {
       return this.quadrantEmissives;
     } else if (this.satelliteColorMode === "Zone" || this.satelliteColorMode === "Suit") {
       return this.orbitalZoneEmissives;
+    } else if (isThrustScheme(this.satelliteColorMode)) {
+      const arr = Array.from({ length: THRUST_BINS }, (_, i) => new THREE.Color(rampHex(THRUST_BINS === 1 ? 0 : i / (THRUST_BINS - 1))));
+      arr.push(new THREE.Color(OVER_BUDGET_HEX)); // over-budget bin (Thrust% >100%)
+      return arr;
     } else {
       return [this.normalEmissive];
     }
@@ -448,7 +544,7 @@ export class SimDisplay {
 
     // Group satellites by color index
     const numGroups =
-      this.satelliteColorMode === "Quad" ? 4 : this.satelliteColorMode === "Zone" || this.satelliteColorMode === "Suit" ? 6 : 1;
+      this.satelliteColorMode === "Quad" ? 4 : this.satelliteColorMode === "Zone" || this.satelliteColorMode === "Suit" ? 6 : isThrustScheme(this.satelliteColorMode) ? THRUST_BINS + 1 : 1;
     const colorGroups = Array.from({ length: numGroups }, () => []);
     satellites.forEach((satellite, index) => {
       const colorIndex = this.getSatelliteColorIndex(satellite);
@@ -502,9 +598,11 @@ export class SimDisplay {
   updatePositions(planets, satellites) {
     // === Update Planet Positions ===
     this.planetPositions = {};
+    this.planetPositionsAU = {};
     for (let planet of Object.values(planets)) {
       const position = planet.position;
       const name = planet.name;
+      this.planetPositionsAU[name] = { x: position.x, y: position.y, z: position.z };
       const mesh = this.planets[name];
       if (mesh) {
         mesh.position.set(
@@ -657,6 +755,7 @@ export class SimDisplay {
         if (c < minVal) minVal = c;
       }
     }
+    if (isColorMode) this.lastLinkRange = { type: this.linksColorsType, min: minVal, max: maxVal };
 
     // Pre-extract color stop RGB (avoid .set() per frame — only update when styles change)
     if (!this._colorsCached) {
@@ -858,6 +957,31 @@ export class SimDisplay {
   }
 
   /**
+   * Handles mouse-wheel events as a forward/backward translation ("fly")
+   * instead of OrbitControls' dolly-zoom. Scrolling up moves the camera toward
+   * what it is looking at; scrolling down pulls it back. Both the camera and the
+   * orbit target move by the same vector, so the orbit pivot travels with the
+   * camera and rotation continues to behave normally.
+   *
+   * @param {WheelEvent} event - The wheel event.
+   */
+  onWheel(event) {
+    event.preventDefault();
+
+    // Direction the camera is looking (from the camera toward the orbit target).
+    const forward = new THREE.Vector3().subVectors(this.controls.target, this.camera.position).normalize();
+
+    // Step scales with distance from the Sun so motion feels consistent across
+    // scene scales; floored so we never stall near the center.
+    const dist = Math.max(this.camera.position.length(), 0.5);
+    const step = -event.deltaY * 0.0005 * dist; // scroll up (deltaY < 0) => forward
+
+    forward.multiplyScalar(step);
+    this.camera.position.add(forward);
+    this.controls.target.add(forward);
+  }
+
+  /**
    * Sets the link-label mode (null | "latency" | "mbps") and notifies listeners
    * via a window-level CustomEvent so the UI can reflect the active state.
    */
@@ -895,6 +1019,11 @@ export class SimDisplay {
 
   dispose() {
     this.stopAnimation = true; // Prevent further animation frames
+
+    // Remove the custom wheel ("fly forward") listener
+    if (this._onWheel && this.renderer) {
+      this.renderer.domElement.removeEventListener("wheel", this._onWheel);
+    }
 
     // Dispose of OrbitControls
     if (this.controls) {

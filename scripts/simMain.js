@@ -31,6 +31,9 @@ export class SimMain {
     // simNetwork kept on main thread ONLY for the longTermRun batch path
     this.simNetwork = new SimNetwork(this.simLinkBudget, this.simSatellites);
 
+    // Debug handle: lets the console / preview inspect live sim state.
+    if (typeof window !== "undefined") window.simMain = this;
+
     // --- Worker + triple-buffered window cache (-1/0/+1) ---
     this.simWorker = new Worker(new URL("./simWorker.js?v=4.6", import.meta.url), { type: "module" });
     this.simWorker.onmessage = (event) => this.handleWorkerMessage(event);
@@ -62,6 +65,13 @@ export class SimMain {
     this.simDisplay = null;
     this.linksColors = null;
     this.satelliteColorMode = "Quad";
+    this.thrustBodies = ""; // iso-thrust contour bodies (2D), comma list; "" = off
+    this.planetOrbits = ""; // planet orbit toggle ("Show" = on) — true ellipses from elements
+    this.planeNodes = ""; // Earth↔Mars plane-of-nodes line toggle ("Show" = on)
+    this.geostationaryOrbits = ""; // geostationary orbit circles (Earth/Mars comma list)
+    this.satLabelMode = false; // per-satellite value labels (S key)
+    // Station-keeping model config { F (N), tm (kg), maxN, n (yr), isp (s), capacity (kg) }
+    this.skCfg = { F: 0.17, tm: 15, maxN: 64, n: 5, isp: 2500, capacity: 1500 };
     this.sunSizeFactor = 1;
     this.planetsSizeFactor = 1;
     this.satelliteSizeFactor = 1;
@@ -104,8 +114,17 @@ export class SimMain {
     }
     this.simDisplay.simSatellites = this.simSatellites;
     this.simDisplay.setLinksColors(this.linksColors);
-    this.simDisplay.setSizeFactors(this.sunSizeFactor, this.planetsSizeFactor);
+    this.simDisplay.setSizeFactors(this.sunSizeFactor, this.planetsSizeFactor, this.satelliteSizeFactor);
     this.simDisplay.setSatelliteColorMode(this.satelliteColorMode);
+    if (typeof this.simDisplay.setThrustBodies === "function") this.simDisplay.setThrustBodies(this.thrustBodies);
+    this.pushSatellitePhysics();
+    if (typeof this.simDisplay.setPlanetOrbits === "function") this.simDisplay.setPlanetOrbits(this.planetOrbits);
+    if (typeof this.simDisplay.setPlaneNodes === "function") {
+      const { n1, n2 } = this._earthMarsPlaneNodes();
+      this.simDisplay.setPlaneNodes(this.planeNodes, n1, n2);
+    }
+    if (typeof this.simDisplay.setGeostationaryOrbits === "function") this.simDisplay.setGeostationaryOrbits(this.geostationaryOrbits);
+    if (typeof this.simDisplay.setSatLabelMode === "function") this.simDisplay.setSatLabelMode(this.satLabelMode);
 
     this.pendingUpdates.add('links');
   }
@@ -126,6 +145,107 @@ export class SimMain {
     this.pendingUpdates.add('display');
     this.pendingUpdates.add('satellites_display');
     if (this.simDisplay && this.planets) this.simDisplay.updatePositions(this.planets, this.satellites);
+  }
+
+  setThrustBodies(value) {
+    this.thrustBodies = value;
+    if (this.simDisplay && typeof this.simDisplay.setThrustBodies === "function") {
+      this.simDisplay.setThrustBodies(value);
+    }
+  }
+
+  setPlanetOrbits(value) {
+    this.planetOrbits = value;
+    if (this.simDisplay && typeof this.simDisplay.setPlanetOrbits === "function") {
+      this.simDisplay.setPlanetOrbits(value);
+    }
+  }
+
+  setPlaneNodes(value) {
+    this.planeNodes = value;
+    if (this.simDisplay && typeof this.simDisplay.setPlaneNodes === "function") {
+      const { n1, n2 } = this._earthMarsPlaneNodes();
+      this.simDisplay.setPlaneNodes(value, n1, n2);
+    }
+  }
+
+  setGeostationaryOrbits(value) {
+    this.geostationaryOrbits = value;
+    if (this.simDisplay && typeof this.simDisplay.setGeostationaryOrbits === "function") {
+      this.simDisplay.setGeostationaryOrbits(value);
+    }
+  }
+
+  setSatLabelMode(on) {
+    this.satLabelMode = !!on;
+    if (this.simDisplay && typeof this.simDisplay.setSatLabelMode === "function") {
+      this.simDisplay.setSatLabelMode(this.satLabelMode);
+    }
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("marslink:sat-label-mode", { detail: { on: this.satLabelMode } }));
+    }
+  }
+
+  /**
+   * Build a per-ring { dryMass, skProp } map (dry mass + station-keeping argon
+   * budget, kg) and push it to the display with the satellite Isp & thrust, for
+   * the mass/thrust satellite colour schemes (Accel / Thrust / Thrust% / Time).
+   */
+  pushSatellitePhysics() {
+    if (!this.simDisplay || typeof this.simDisplay.setSatellitePhysics !== "function") return;
+    if (!this.simDeployment || !this.simDeployment.dryMasses) return;
+    // Read the per-ring station-keeping baselines computed by computeStationKeeping
+    // (must run first, in the configJustApplied block), add laser-port counts.
+    const ringData = (this.simDeployment && this.simDeployment.ringStationKeeping) || {};
+    // Per-ring non-SK propellant (transfer + deorbit) from the latest deployment
+    // profile = loaded − station-keeping; used by the 'Total prop' colour scheme.
+    const nonSkByRing = {};
+    const mp = this.missionProfiles;
+    if (mp && mp.byOrbit) for (const o of mp.byOrbit) {
+      const v = o.vehicles && o.vehicles.Satellites;
+      if (v) nonSkByRing[o.ringName] = Math.max(0, (v.propellantLoaded_kg || 0) - (v.stationKeepingArgon_kg || 0));
+    }
+    const map = {};
+    let maxPorts = 1;
+    const portsSet = new Set();
+    for (const rn in ringData) {
+      const ports = (this.simLinkBudget && this.simLinkBudget.getMaxLinksPerRing(rn)) || 0;
+      const nonSk = nonSkByRing[rn] || 0;
+      const rd = ringData[rn];
+      // SK propellant available = capacity − other prop. Other ≈ (dry+SK)·k where k is
+      // the transfer+deorbit factor; solving total ≤ capacity → cap = (C − dry·k)/(1+k).
+      const k = nonSk / Math.max(1, rd.dryMass + (rd.skPropRing || 0));
+      const capAvailable = Math.max(0, ((this.skCfg.capacity || 1500) - rd.dryMass * k) / (1 + k));
+      map[rn] = { ...rd, ports, nonSkFuel: nonSk, capAvailable }; // dryMass, aAvg, nRing, skPropRing, aThreshold, ports, nonSkFuel, capAvailable
+      if (ports > maxPorts) maxPorts = ports;
+      if (ports > 0) portsSet.add(ports);
+    }
+    this.simDisplay.setSatellitePhysics(map, this.skCfg);
+    this.simDisplay.satLaserMax = maxPorts; // fleet max laser terminals (Lasers scale/legend)
+    this.simDisplay.satLaserValues = [...portsSet].sort((a, b) => a - b);
+    this.simDisplay.satThrusterMax = (this.simDeployment && this.simDeployment.maxThrusterCount) || 1;
+  }
+
+  /**
+   * Refresh the per-ring non-SK propellant (transfer + deorbit = loaded − SK) on the
+   * display's satPhysics from the latest mission profile, for the 'Total prop' scheme.
+   * Called when the worker delivers new mission profiles (which arrive after the
+   * initial pushSatellitePhysics, so nonSkFuel would otherwise stay 0).
+   */
+  updateSatelliteFuel() {
+    const phys = this.simDisplay && this.simDisplay.satPhysics;
+    const mp = this.missionProfiles;
+    if (!phys || !mp || !mp.byOrbit) return;
+    const cap = (this.skCfg && this.skCfg.capacity) || 1500;
+    for (const o of mp.byOrbit) {
+      const v = o.vehicles && o.vehicles.Satellites;
+      const r = phys[o.ringName];
+      if (!v || !r) continue;
+      const nonSk = Math.max(0, (v.propellantLoaded_kg || 0) - (v.stationKeepingArgon_kg || 0));
+      r.nonSkFuel = nonSk;
+      const k = nonSk / Math.max(1, r.dryMass + (r.skPropRing || 0)); // transfer+deorbit prop factor
+      r.capAvailable = Math.max(0, (cap - r.dryMass * k) / (1 + k)); // SK prop the tank leaves
+    }
   }
 
   /**
@@ -204,9 +324,17 @@ export class SimMain {
       this.previousCalctimeMs = this.simLinkBudget.calctimeMs;
     }
     this.simDeployment.setVehicleConfig(uiConfig);
-    this.satellitePowerKw = uiConfig["launch_vehicle.satellite-power-kw"]; // for solar cost
+    this.satellitePowerKw = uiConfig["satellite.satellite-power-kw"]; // for solar cost
+    this.skCfg = {
+      F: (uiConfig["satellite.satellite-thrust"] || 170) / 1000, // mN → N
+      tm: uiConfig["satellite.thruster-system-mass"] >= 0 ? uiConfig["satellite.thruster-system-mass"] : 15,
+      maxN: uiConfig["satellite.max-thrusters"] >= 1 ? uiConfig["satellite.max-thrusters"] : 64,
+      n: uiConfig["satellite.sk-years"] >= 1 ? uiConfig["satellite.sk-years"] : 5,
+      isp: uiConfig["satellite.satellite-isp"] || 2500,
+      capacity: uiConfig["satellite.satellite-propellant-capacity"] || 1500,
+    };
     this.simDeployment.setSatelliteMassConfig(
-      uiConfig["economics.satellite-empty-mass"],
+      uiConfig["satellite.satellite-empty-mass"],
       uiConfig["laser_technology.laser-terminal-mass"],
       {
         ring_earth: uiConfig["ring_earth.laser-ports-per-satellite"],
@@ -214,6 +342,7 @@ export class SimMain {
         circular_rings: uiConfig["circular_rings.laser-ports-per-satellite"],
         eccentric_rings: uiConfig["eccentric_rings.laser-ports-per-satellite"],
         adapted_rings: uiConfig["adapted_rings.laser-ports-per-satellite"],
+        adapted_eccentric_rings: uiConfig["adapted_eccentric_rings.laser-ports-per-satellite"],
       }
     );
 
@@ -420,6 +549,130 @@ export class SimMain {
     };
   }
 
+  /**
+   * Vertical Earth→relay→Mars capacity data-path as SVG (the expanded Capacity diagram).
+   * Single bars = junctions; double bars = an eccentric ring's two routes; thick single
+   * bars = a concentric ring's route. Planets are colour-coded. Self-contained (explicit
+   * colours), so it renders identically in the panel and anywhere the markup is reused.
+   */
+  _capacityPathSvg(d) {
+    const { rs, earthInring, marsInring, earthCap, marsCap, earthCapTotal, marsCapTotal,
+            earthRingRange, marsRingRange, relayRingCount, bottleneckLine,
+            fmtMbps, fmtRange, fmtNum, minOf, maxOf } = d;
+
+    const W = 365, barL = 12, barR = 150, labelX = 158, H = 208;
+    const EARTH = "#4d97e0", MARS = "#e07a52", RELAY = "#8893a0",
+          EARTH_LN = "#3f6d92", MARS_LN = "#8a5a48", // muted planet-tinted ring lines
+          TXT = "#c9ced6", MUT = "#868d97", WARN = "#e0b352", BG = "#181b21";
+    const isEccentric = !!(rs && rs.ringDetail);
+
+    // ring↔relay junction aggregates (eccentric: from ringDetail; null otherwise).
+    // Each eccentric ring has ONE junction (tangent point) per planet, made of k links.
+    // eJuncRings = junctions (rings that connect), eJuncN = total links across them.
+    let eJuncN = null, eJuncCap = 0, eJuncRings = 0, mJuncN = null, mJuncCap = 0, mJuncRings = 0;
+    if (rs && rs.ringDetail) {
+      eJuncN = 0; mJuncN = 0;
+      for (const r of rs.ringDetail) {
+        eJuncN += r.earth.count; eJuncCap += r.earth.mbps; if (r.earth.count > 0) eJuncRings++;
+        mJuncN += r.mars.count; mJuncCap += r.mars.mbps; if (r.mars.count > 0) mJuncRings++;
+      }
+    }
+    const stat = (arr) => (arr && arr.length ? { lo: minOf(arr), hi: maxOf(arr), avg: arr.reduce((a, b) => a + b, 0) / arr.length } : null);
+    const eS = stat(earthInring), mS = stat(marsInring);
+
+    const Y = { eg: 16, er: 34, ej: 51, r0: 70, r1: 88, r2: 106, r3: 124, mj: 143, mr: 160, mg: 178, bn: 196 };
+    const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;");
+    const txt = (x, y, t, fill = TXT, size = 11, anchor = "start") =>
+      `<text x="${x}" y="${(y + 3.5).toFixed(1)}" fill="${fill}" font-size="${size}"${anchor !== "start" ? ` text-anchor="${anchor}"` : ""}>${esc(t)}</text>`;
+
+    let s = `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Earth to Mars relay capacity path" style="width:100%;height:auto;font-family:ui-monospace,Menlo,Consolas,monospace;">`;
+    s += `<rect x="0" y="0" width="${W}" height="${H}" rx="7" fill="${BG}"/>`;
+    s += `<line x1="${barL}" y1="${Y.er}" x2="${barR}" y2="${Y.er}" stroke="${EARTH_LN}" stroke-width="1"/>`;
+    s += `<line x1="${barL}" y1="${Y.mr}" x2="${barR}" y2="${Y.mr}" stroke="${MARS_LN}" stroke-width="1"/>`;
+
+    // No relay family active (0 relay rings): the planet rings exist but nothing bridges
+    // them, so there is no Earth↔Mars path. Draw both rings + planets and a broken, dashed
+    // connector with an ✕ where the relay should be, and flag the missing relay below.
+    if (!relayRingCount) {
+      const pcx = barL + (barR - barL) / 2;
+      const slot0 = (barR - barL) / 9;
+      const eX = +(pcx - slot0).toFixed(1), mX = +(pcx + slot0).toFixed(1);
+      const midY = (Y.er + Y.mr) / 2;
+      s += `<line x1="${pcx}" y1="${Y.er + 9}" x2="${pcx}" y2="${(midY - 11).toFixed(1)}" stroke="${WARN}" stroke-width="1.4" stroke-dasharray="3 3" opacity="0.75"/>`;
+      s += `<line x1="${pcx}" y1="${(midY + 11).toFixed(1)}" x2="${pcx}" y2="${Y.mr - 9}" stroke="${WARN}" stroke-width="1.4" stroke-dasharray="3 3" opacity="0.75"/>`;
+      s += `<line x1="${pcx - 5}" y1="${midY - 5}" x2="${pcx + 5}" y2="${midY + 5}" stroke="${WARN}" stroke-width="1.6"/>`;
+      s += `<line x1="${pcx - 5}" y1="${midY + 5}" x2="${pcx + 5}" y2="${midY - 5}" stroke="${WARN}" stroke-width="1.6"/>`;
+      s += `<circle cx="${eX}" cy="${Y.er}" r="5.5" fill="${EARTH}"/>`;
+      s += `<circle cx="${mX}" cy="${Y.mr}" r="4" fill="${MARS}"/>`;
+      s += txt(eX, Y.eg, `Earth ${fmtMbps(earthCapTotal)}`, EARTH, 12, "middle");
+      if (eS) s += txt(labelX, Y.er, `ring Earth ${fmtRange(eS.lo, eS.avg, eS.hi)}`, EARTH);
+      s += txt(labelX, midY - 6, `no relay rings`, WARN, 12);
+      s += txt(labelX, midY + 11, `no Earth↔Mars path`, MUT, 11);
+      if (mS) s += txt(labelX, Y.mr, `ring Mars ${fmtRange(mS.lo, mS.avg, mS.hi)}`, MARS);
+      s += txt(mX, Y.mg, `Mars ${fmtMbps(marsCapTotal)}`, MARS, 12, "middle");
+      if (bottleneckLine) s += txt(barL, Y.bn, bottleneckLine, WARN);
+      s += `</svg>`;
+      return s;
+    }
+
+    // One column per relay ring, capped at 9 (1 ring → 1 junction · 1 double route · 1 junction).
+    const C = Math.max(1, Math.min(relayRingCount || 1, 9));
+    const colW = (barR - barL) / C;
+    const slot = (barR - barL) / 9; // fixed planet offset (~one 9-col slot), independent of C
+    for (let i = 0; i < C; i++) {
+      const cx = barL + (i + 0.5) * colW;
+      s += `<line x1="${cx.toFixed(1)}" y1="${Y.er + 9}" x2="${cx.toFixed(1)}" y2="${Y.r0 - 9}" stroke="${EARTH}" stroke-width="1.6" stroke-linecap="round"/>`;
+      if (isEccentric) {
+        s += `<line x1="${(cx - 1.8).toFixed(1)}" y1="${Y.r0 - 8}" x2="${(cx - 1.8).toFixed(1)}" y2="${Y.r3 + 8}" stroke="${RELAY}" stroke-width="1.5"/>`;
+        s += `<line x1="${(cx + 1.8).toFixed(1)}" y1="${Y.r0 - 8}" x2="${(cx + 1.8).toFixed(1)}" y2="${Y.r3 + 8}" stroke="${RELAY}" stroke-width="1.5"/>`;
+      } else {
+        s += `<line x1="${cx.toFixed(1)}" y1="${Y.r0 - 8}" x2="${cx.toFixed(1)}" y2="${Y.r3 + 8}" stroke="${RELAY}" stroke-width="3.2"/>`;
+      }
+      s += `<line x1="${cx.toFixed(1)}" y1="${Y.r3 + 9}" x2="${cx.toFixed(1)}" y2="${Y.mr - 9}" stroke="${MARS}" stroke-width="1.6" stroke-linecap="round"/>`;
+    }
+    const pcx = barL + (barR - barL) / 2;
+    const eX = +(pcx - slot).toFixed(1), mX = +(pcx + slot).toFixed(1); // planets offset: Earth one slot left, Mars one slot right
+    s += `<circle cx="${eX.toFixed(1)}" cy="${Y.er}" r="5.5" fill="${EARTH}"/>`;
+    s += txt(eX - 10, Y.er, fmtNum(earthCap.side1 || 0), EARTH_LN, 11, "end");
+    s += txt(eX + 10, Y.er, fmtNum(earthCap.side2 || 0), EARTH_LN, 11);
+    s += `<circle cx="${mX.toFixed(1)}" cy="${Y.mr}" r="4" fill="${MARS}"/>`;
+    s += txt(mX - 9, Y.mr, fmtNum(marsCap.side1 || 0), MARS_LN, 11, "end");
+    s += txt(mX + 9, Y.mr, fmtNum(marsCap.side2 || 0), MARS_LN, 11);
+    // Earth/Mars totals sit centred over/under their planet; per-segment values run down
+    // the right column, each coloured to match its diagram element (Earth, relay, Mars).
+    s += txt(eX, Y.eg, `Earth ${fmtMbps(earthCapTotal)}`, EARTH, 12, "middle");
+    if (eS) s += txt(labelX, Y.er, `ring Earth ${fmtRange(eS.lo, eS.avg, eS.hi)}`, EARTH);
+    s += txt(labelX, Y.ej, eJuncN != null ? `${eJuncRings} junctions · ${eJuncN} links · ${fmtMbps(eJuncCap)}` : `ring → relay`, EARTH);
+    if (rs) {
+      s += txt(labelX, Y.r0, fmtMbps(rs.totalThroughput), RELAY, 12);
+      s += txt(labelX, Y.r1, `${relayRingCount} rings, ${rs.routeCount} routes`, RELAY);
+      s += txt(labelX, Y.r2, fmtRange(rs.minThroughput, rs.avgThroughput, rs.maxThroughput), RELAY);
+      s += txt(labelX, Y.r3, `${(rs.minLatency / 60).toFixed(1)}|${(rs.avgLatency / 60).toFixed(1)}|${(rs.maxLatency / 60).toFixed(1)} min`, RELAY);
+    }
+    s += txt(labelX, Y.mj, mJuncN != null ? `${mJuncRings} junctions · ${mJuncN} links · ${fmtMbps(mJuncCap)}` : `relay → ring`, MARS);
+    if (mS) s += txt(labelX, Y.mr, `ring Mars ${fmtRange(mS.lo, mS.avg, mS.hi)}`, MARS);
+    s += txt(mX, Y.mg, `Mars ${fmtMbps(marsCapTotal)}`, MARS, 12, "middle");
+    if (bottleneckLine) s += txt(barL, Y.bn, bottleneckLine, WARN);
+    s += `</svg>`;
+    return s;
+  }
+
+  /** The two ecliptic longitudes (degrees) where Earth's and Mars's orbital planes
+   *  intersect — the line of nodes. Intersection direction = nEarth × nMars. */
+  _earthMarsPlaneNodes() {
+    const planeNormal = (i, o) => {
+      const r = Math.PI / 180, si = Math.sin(i * r), ci = Math.cos(i * r);
+      return [si * Math.sin(o * r), -si * Math.cos(o * r), ci];
+    };
+    const E = this.simSatellites.getEarth(), Mp = this.simSatellites.getMars();
+    const nE = planeNormal(E.i || 0, E.o || 0), nM = planeNormal(Mp.i || 0, Mp.o || 0);
+    const lx = nE[1] * nM[2] - nE[2] * nM[1];
+    const ly = nE[2] * nM[0] - nE[0] * nM[2];
+    let n1 = ((Math.atan2(ly, lx) * 180) / Math.PI) % 360;
+    if (n1 < 0) n1 += 360;
+    return { n1, n2: (n1 + 180) % 360 };
+  }
+
   getCostsHtml(costs, networkData, latencyData) {
     let html = "";
 
@@ -510,6 +763,21 @@ export class SimMain {
     // ── 3. CAPACITY (always shows, capacity-only) ──
     if (this.capacityInfo) {
       const { ringCapacities } = this.capacityInfo;
+
+      // Active relay family (only one is enabled at a time). Drives the ring-count line
+      // and the bottleneck label so the card reads correctly for every relay type — for
+      // adapted concentric these resolve to the same "adapted rings" / count as before.
+      const relayRingKeys = Object.keys(ringCapacities).filter((r) => r !== "ring_earth" && r !== "ring_mars");
+      const relayRingCount = relayRingKeys.length;
+      const relayLabel = relayRingKeys.some((r) => r.startsWith("ring_adapt"))
+        ? "adapted concentric rings"
+        : relayRingKeys.some((r) => r.startsWith("ring_adecc"))
+        ? "adapted eccentric rings"
+        : relayRingKeys.some((r) => r.startsWith("ring_circ"))
+        ? "circular rings"
+        : relayRingKeys.some((r) => r.startsWith("ring_ecce"))
+        ? "eccentric rings"
+        : "relay rings";
       const fmtNum = (v) => v >= 1000 ? `${(v / 1000).toFixed(1)}` : `${Math.round(v)}`;
       const pct = (flow, cap) => cap > 0 ? `${Math.round(flow / cap * 100)}%` : "";
       const fmtRange = (...vals) => {
@@ -553,11 +821,16 @@ export class SimMain {
 
       const segments = [];
       if (earthCapTotal > 0) segments.push({ name: "earth ring", cap: earthCapTotal });
-      if (rs) segments.push({ name: "adapted rings", cap: rs.totalThroughput });
+      if (rs) segments.push({ name: relayLabel, cap: rs.totalThroughput });
       if (marsCapTotal > 0) segments.push({ name: "mars ring", cap: marsCapTotal });
       let bottleneckLine = "";
       this._bottleneckInfo = null; // surfaced to the bottom-bar warnings
-      if (segments.length > 1) {
+      if (relayRingCount === 0) {
+        // No relay family active → nothing bridges Earth and Mars, so the end-to-end
+        // capacity is zero. The missing relay IS the bottleneck (not either planet ring).
+        bottleneckLine = `Bottleneck: no relay rings`;
+        this._bottleneckInfo = { name: "no relay rings", cap: 0, relayCap: 0 };
+      } else if (segments.length > 1) {
         const minCap = minOf(segments.map((s) => s.cap));
         const maxCap = maxOf(segments.map((s) => s.cap));
         if (maxCap > 0 && (maxCap - minCap) / maxCap > 0.05) {
@@ -570,7 +843,9 @@ export class SimMain {
       }
 
       const techFactor = this.simLinkBudget.techImprovementFactor || 1;
-      const capHeaderValue = rs ? fmtMbps(rs.totalThroughput) : fmtMbps(earthCapTotal);
+      // No relay rings ⇒ no Earth↔Mars path ⇒ zero end-to-end capacity (a planet ring's
+      // own internal capacity is not a usable Earth-to-Mars figure here).
+      const capHeaderValue = relayRingCount === 0 ? fmtMbps(0) : rs ? fmtMbps(rs.totalThroughput) : fmtMbps(earthCapTotal);
 
       html += `<div class="metric-card">`;
       html += `<div class="metric-header">`;
@@ -606,45 +881,245 @@ export class SimMain {
       html += `<pre class="capacity-diagram" id="capacity-compact" style="display: none;">`;
       html += planetLine(earthCap.side1, "\u25CF", earthCap.side2, earthRingRange || fmtMbps(earthCapTotal), -2);
       if (rs) html += `${pipes}  ${fmtMbps(rs.totalThroughput)}\n`;
+      else html += `        ✗          no relay rings\n`;
       html += planetLine(marsCap.side1, "\u2022", marsCap.side2, marsRingRange || fmtMbps(marsCapTotal), 2);
       html += `</pre>`;
 
-      // Expanded capacity diagram
+      // Expanded capacity diagram \u2014 vertical Earth\u2192relay\u2192Mars data path as SVG. Reads
+      // top\u2192bottom: Earth ground \u00B7 Earth ring (planet \u25CF, ground link caps) \u00B7 ring\u2192relay
+      // junctions \u00B7 relay routes \u00B7 relay\u2192Mars junctions \u00B7 Mars ring (\u2022) \u00B7 Mars ground.
+      // Bars: single = junction; double = the 2 routes of an eccentric ring; thick single
+      // = a concentric ring's route. Planets are colour-coded (Earth blue, Mars red).
       html += `<div id="capacity-content" style="display: none;">`;
-      html += `<pre class="capacity-diagram">`;
+      html += this._capacityPathSvg({
+        rs, earthInring, marsInring, earthCap, marsCap, earthCapTotal, marsCapTotal,
+        earthRingRange, marsRingRange, relayRingCount, bottleneckLine,
+        fmtMbps, fmtRange, fmtNum, minOf, maxOf,
+      });
 
-      if (earthCapTotal > 0 || earthInring.length > 0) {
-        if (earthInring.length > 0) {
-          const eMin = minOf(earthInring), eMax = maxOf(earthInring);
-          const eAvg = earthInring.reduce((a, b) => a + b, 0) / earthInring.length;
-          html += `ring Earth ${fmtRange(eMin, eAvg, eMax)}\n`;
+      // Per-ring junction/route detail (adapted-eccentric / eccentric families). A toggle
+      // reveals: the planet-ring in-ring capacity (header lines) plus a table of each
+      // ring's Earth junction / relay routes / Mars junction (count + Mbps). A ring whose
+      // route capacity exceeds either junction (the junction under-serves it) is highlighted.
+      const ringDetail = rs && rs.ringDetail;
+      if (ringDetail && ringDetail.length) {
+        const ringMbpsRange = (inring) => {
+          if (!inring || !inring.length) return "—";
+          const lo = Math.round(minOf(inring)), hi = Math.round(maxOf(inring));
+          const av = Math.round(inring.reduce((s, v) => s + v, 0) / inring.length);
+          return `${lo}|${av}|${hi}`;
+        };
+        const { n1: nodeEarthMars, n2: node2 } = this._earthMarsPlaneNodes();
+
+        html += `<div class="metric-toggle" id="ringdetail-toggle"><span class="arrow" id="ringdetail-arrow">&#9656;</span><span>Ring detail</span></div>`;
+        html += `<div id="ringdetail-content" style="display:none;">`;
+        html += `<pre class="capacity-diagram" style="margin:4px 0;">`;
+        html += `ring Earth ${ringMbpsRange(earthInring)} Mbps\n`;
+        html += `ring Mars ${ringMbpsRange(marsInring)} Mbps\n`;
+        html += `Earth↔Mars plane nodes ${Math.round(nodeEarthMars)}° | ${Math.round(node2)}°`;
+        html += `</pre>`;
+        // Each of Earth / Relay / Mars is split into a count + mbps sub-column; a faint
+        // left border marks each group. Earth/Mars columns are junction links, Relay is
+        // the ring's two routes.
+        const grp = "border-left:1px solid rgba(128,128,128,0.25);";
+        html += `<table style="width:100%; border-collapse:collapse; font-family:ui-monospace,Menlo,Consolas,monospace; font-size:11px; line-height:1.45;">`;
+        html += `<thead>`;
+        html += `<tr style="opacity:0.6;"><td style="text-align:left;">Ring</td>`;
+        html += `<td colspan="2" style="text-align:center; ${grp}">Earth</td>`;
+        html += `<td colspan="2" style="text-align:center; ${grp}">Relay</td>`;
+        html += `<td colspan="2" style="text-align:center; ${grp}">Mars</td></tr>`;
+        html += `<tr style="opacity:0.45; font-size:9px;"><td style="text-align:left;">ArgP</td>`;
+        html += `<td style="text-align:right; ${grp}">count</td><td style="text-align:right;">mbps</td>`;
+        html += `<td style="text-align:right; ${grp}">count</td><td style="text-align:right;">mbps</td>`;
+        html += `<td style="text-align:right; ${grp}">count</td><td style="text-align:right;">mbps</td></tr>`;
+        html += `</thead><tbody>`;
+        for (const r of ringDetail) {
+          const eM = Math.round(r.earth.mbps), mM = Math.round(r.mars.mbps), rM = Math.round(r.routesMbps);
+          const over = rM > eM || rM > mM;
+          const ang = String(Math.round(r.argP)).padStart(3, "0");
+          const rowStyle = over ? ` style="color: var(--accent-hot, #dd2222);"` : "";
+          html += `<tr${rowStyle}>`;
+          html += `<td style="text-align:left;">${ang}°</td>`;
+          html += `<td style="text-align:right; ${grp}">${r.earth.count}</td><td style="text-align:right;">${eM}</td>`;
+          html += `<td style="text-align:right; ${grp}">${r.routesCount}</td><td style="text-align:right;">${rM}</td>`;
+          html += `<td style="text-align:right; ${grp}">${r.mars.count}</td><td style="text-align:right;">${mM}</td>`;
+          html += `</tr>`;
         }
-        html += planetLine(earthCap.side1, "\u25CF", earthCap.side2, `Earth ${earthRingRange || fmtMbps(earthCapTotal)}`, -2);
+        html += `</tbody></table>`;
+        html += `</div>`;
       }
 
-      if (rs) {
-        const adaptedRingCount = Object.keys(ringCapacities).filter((r) => r.startsWith("ring_adapt")).length;
-        html += `${pipes}  ${fmtMbps(rs.totalThroughput)}\n`;
-        html += `${pipes}  ${adaptedRingCount} rings\n`;
-        html += `${pipes}  ${rs.routeCount} routes\n`;
-        html += `${pipes}  ${fmtRange(rs.minThroughput, rs.avgThroughput, rs.maxThroughput)}\n`;
-        html += `${pipes}  ${(rs.minLatency / 60).toFixed(1)}|${(rs.avgLatency / 60).toFixed(1)}|${(rs.maxLatency / 60).toFixed(1)} min\n`;
-      }
-
-      if (marsCapTotal > 0 || marsInring.length > 0) {
-        html += planetLine(marsCap.side1, "\u2022", marsCap.side2, `Mars ${marsRingRange || fmtMbps(marsCapTotal)}`, 2);
-        if (marsInring.length > 0) {
-          const mMin = minOf(marsInring), mMax = maxOf(marsInring);
-          const mAvg = marsInring.reduce((a, b) => a + b, 0) / marsInring.length;
-          html += `ring Mars ${fmtRange(mMin, mAvg, mMax)}\n`;
-        }
-      }
-
-      if (bottleneckLine) html += bottleneckLine;
-
-      html += `</pre>`;
       html += `</div>`;
       html += `</div>`;
+
+      // ── 3a. RELAY DISTRIBUTION (the equalizer density + resulting ring positions) ──
+      // When adapted rings are active, plot the continuous equalizer density curve the
+      // rings are placed to follow, the 10 band weights as points on it, and each ring
+      // as a tick at its actual semi-major axis.
+      const adaptedEls = this.simSatellites.getOrbitalElements()
+        .filter((e) => e.ringName && e.ringName.startsWith("ring_adapt"));
+      if (adaptedEls.length > 0) {
+        const aByRing = new Map();
+        for (const e of adaptedEls) if (!aByRing.has(e.ringName)) aByRing.set(e.ringName, e.a);
+        const aVals = [...aByRing.values()].sort((x, y) => x - y);
+        const aEarth = this.simSatellites.getEarth().a;
+        const aMars = this.simSatellites.getMars().a;
+        const lo = Math.min(aEarth, aVals[0]);
+        const hi = Math.max(aMars, aVals[aVals.length - 1]);
+        const span = hi - lo || 1;
+        const aMin = aVals[0], aMax = aVals[aVals.length - 1], aSpan = (aMax - aMin) || 1;
+
+        // Equalizer density curve from the chart's anchors (piecewise-linear),
+        // shared via SimSatellites.densityFromAnchors so the card, the editor and the
+        // ring builder all draw the identical curve. Points = the anchors themselves.
+        const anchors = (this.ui && this.ui._getDensityAnchors) ? this.ui._getDensityAnchors() : [{ x: 0, y: 50 }, { x: 1, y: 50 }];
+        const density = (u) => this.simSatellites.densityFromAnchors(anchors, u);
+
+        const W = 300, H = 66, padX = 6, padTop = 7, trackY = 48, innerW = W - 2 * padX;
+        const xA = (a) => padX + ((a - lo) / span) * innerW;       // semi-major axis → px
+        const xU = (u) => xA(aMin + u * aSpan);                    // density coord → px (ring span)
+        let yMax = 1;
+        for (const a of anchors) yMax = Math.max(yMax, a.y);
+        const SAMPLES = 80;
+        const rho = [];
+        for (let k = 0; k <= SAMPLES; k++) { const r = density(k / SAMPLES); rho.push(r); yMax = Math.max(yMax, r); }
+        const yBase = trackY - 8;
+        const yOf = (v) => padTop + (1 - v / yMax) * (yBase - padTop);
+
+        let curve = `M ${xU(0).toFixed(1)} ${yOf(rho[0]).toFixed(1)}`;
+        for (let k = 1; k <= SAMPLES; k++) curve += ` L ${xU(k / SAMPLES).toFixed(1)} ${yOf(rho[k]).toFixed(1)}`;
+        const areaPath = curve + ` L ${xU(1).toFixed(1)} ${yBase.toFixed(1)} L ${xU(0).toFixed(1)} ${yBase.toFixed(1)} Z`;
+
+        const pts = anchors.map((a) =>
+          `<circle cx="${xU(a.x).toFixed(1)}" cy="${yOf(a.y).toFixed(1)}" r="2.3" fill="var(--accent-hot)"/>`
+        ).join("");
+        const ticks = aVals.map((a) =>
+          `<line x1="${xA(a).toFixed(1)}" y1="${trackY - 5}" x2="${xA(a).toFixed(1)}" y2="${trackY + 5}" stroke="var(--accent)" stroke-width="1" opacity="0.85"/>`
+        ).join("");
+
+        html += `<div class="metric-card">`;
+        html += `<div class="metric-header"><span class="metric-label">Relay distribution</span><span class="metric-value-sm">${aVals.length} rings</span></div>`;
+        html += `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block;margin-top:4px;">`;
+        html += `<path d="${areaPath}" fill="var(--accent-dim)" stroke="none"/>`;
+        html += `<path d="${curve}" fill="none" stroke="var(--accent)" stroke-width="1.5"/>`;
+        html += pts;
+        html += `<line x1="${padX}" y1="${trackY}" x2="${padX + innerW}" y2="${trackY}" stroke="var(--border-2)" stroke-width="1"/>`;
+        html += ticks;
+        html += `<text x="${padX}" y="${H - 2}" font-size="9" fill="var(--text-2)">Earth ${aEarth.toFixed(2)} AU</text>`;
+        html += `<text x="${padX + innerW}" y="${H - 2}" font-size="9" fill="var(--text-2)" text-anchor="end">Mars ${aMars.toFixed(2)} AU</text>`;
+        html += `</svg>`;
+        html += `</div>`;
+      }
+
+      // ── 3a-bis. ADAPTED-ECCENTRIC CLOSENESS (apsides vs planet orbits) ──
+      // For each adapted-eccentric ring, plot how its perihelion meets Earth's orbit
+      // and its aphelion meets Mars's orbit, per ecliptic longitude. Two distance
+      // lines (planet orbit + ring apsis) on the left axis trace the planets' eccentric
+      // breathing; the signed gap (+ clearance / − overshoot) rides a right axis with a
+      // zero line, so the Earth-/Mars-side clearance sliders are visible directly.
+      const eccApsides = this.simSatellites.getAdaptedEccentricApsides
+        ? this.simSatellites.getAdaptedEccentricApsides()
+        : [];
+      if (eccApsides.length > 0) {
+        const closenessChart = (key, planetLabel) => {
+          const rows = eccApsides.slice().sort((a, b) => a[key].angle - b[key].angle);
+          const apsisLabel = key === "apo" ? "aphelion" : "perihelion";
+          const W = 300, H = 122, padL = 30, padR = 30, padTop = 10, padBot = 26;
+          const plotW = W - padL - padR, plotH = H - padTop - padBot;
+          const x = (ang) => padL + (ang / 360) * plotW;
+          // Gap series = the ring's WORST clearance over its whole orbit (not the apsis
+          // gap, which is just the flat clearance margin). Negative ⇒ satellites stray
+          // inside Earth / beyond Mars. This auto-scales around 0 so it stays readable at
+          // any clearance and reveals exactly where rings cross the planet orbit.
+          const gapOf = (r) => (key === "apo" ? r.worstMars : r.worstEarth).gap;
+          // Left axis: planet + ring apsis distances (the two "breathing" curves).
+          let dMin = Infinity, dMax = -Infinity, gMin = 0, gMax = 0;
+          for (const r of rows) {
+            dMin = Math.min(dMin, r[key].planetR, r[key].ringR);
+            dMax = Math.max(dMax, r[key].planetR, r[key].ringR);
+            gMin = Math.min(gMin, gapOf(r));
+            gMax = Math.max(gMax, gapOf(r));
+          }
+          const dPad = (dMax - dMin) * 0.12 || 0.01;
+          dMin -= dPad; dMax += dPad;
+          const dSpan = dMax - dMin || 1;
+          const gPad = (gMax - gMin) * 0.15 || 1e-4;
+          gMin -= gPad; gMax += gPad;
+          const gSpan = gMax - gMin || 1;
+          const yL = (d) => padTop + (1 - (d - dMin) / dSpan) * plotH;
+          const yR = (g) => padTop + (1 - (g - gMin) / gSpan) * plotH;
+          const poly = (accessor, scale) =>
+            rows.map((r, i) => `${i ? "L" : "M"} ${x(r[key].angle).toFixed(1)} ${scale(accessor(r)).toFixed(1)}`).join(" ");
+          const planetPath = poly((r) => r[key].planetR, yL);
+          const ringPath = poly((r) => r[key].ringR, yL);
+          const gapPath = poly(gapOf, yR);
+          // When "Quad" satellite coloring is active, tint each ring's marker by the
+          // solar-angle quadrant of its apsis (same palette as the 2D/3D view), so the
+          // chart's per-ring dots match how the satellites are colored on screen.
+          const useQuad = this.satelliteColorMode === "Quad";
+          const QUAD = ["#dd2222", "#22dd22", "#2222dd", "#666666"];
+          const quadColor = (ang) => QUAD[Math.min(3, Math.floor((((ang % 360) + 360) % 360) / 90))];
+          const dot = (accessor, scale, color) =>
+            rows.map((r) => {
+              const v = accessor(r);
+              // Overshoot (gap < 0) is always flagged red, regardless of color mode.
+              const c = v < 0 ? "#dd2222" : useQuad ? quadColor(r[key].angle) : color;
+              return `<circle cx="${x(r[key].angle).toFixed(1)}" cy="${scale(v).toFixed(1)}" r="${v < 0 ? 2.8 : useQuad ? 2.4 : 1.6}" fill="${c}"/>`;
+            }).join("");
+          const zeroY = yR(0);
+          const worstGap = Math.min(...rows.map(gapOf));
+          // Mark this planet's own perihelion (P) and aphelion (A): vertical reference
+          // lines at their ecliptic longitudes (perihelion at arg-of-perihelion p,
+          // aphelion 180° opposite), with the apsis distance a(1∓e). Shows where the
+          // planet's orbit-distance curve troughs/peaks relative to each ring's apsis.
+          const planet = key === "apo" ? this.simSatellites.getMars() : this.simSatellites.getEarth();
+          const apsisMarks = [];
+          if (planet && isFinite(planet.a) && isFinite(planet.e)) {
+            const pLon = (((planet.p || 0) % 360) + 360) % 360;
+            apsisMarks.push({ lon: pLon, r: planet.a * (1 - planet.e), tag: "P" });
+            apsisMarks.push({ lon: ((pLon + 180) % 360 + 360) % 360, r: planet.a * (1 + planet.e), tag: "A" });
+          }
+          html += `<div class="metric-card">`;
+          html += `<div class="metric-header"><span class="metric-label">${planetLabel}-side closeness</span>`;
+          html += `<span class="metric-value-sm" style="color:${worstGap < 0 ? "var(--accent-hot)" : "var(--text-2)"}">min ${(worstGap >= 0 ? "+" : "−")}${Math.abs(worstGap).toFixed(4)} AU</span></div>`;
+          html += `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block;margin-top:4px;">`;
+          // Overshoot zone: gap < 0 (below the zero line) = satellites beyond the planet
+          // orbit. Shade it faint red so any dip into it is obvious. Gate on the true
+          // worst gap (not the padded axis min) so it only appears on real overshoot.
+          if (worstGap < 0) {
+            const oy = Math.min(padTop + plotH, zeroY);
+            html += `<rect x="${padL}" y="${oy.toFixed(1)}" width="${plotW}" height="${(padTop + plotH - oy).toFixed(1)}" fill="#dd2222" opacity="0.10"/>`;
+          }
+          // zero line for the gap (right axis)
+          html += `<line x1="${padL}" y1="${zeroY.toFixed(1)}" x2="${padL + plotW}" y2="${zeroY.toFixed(1)}" stroke="var(--border-2)" stroke-width="1" stroke-dasharray="2 2"/>`;
+          // planet perihelion / aphelion reference verticals (drawn behind the curves)
+          for (const mk of apsisMarks) {
+            const mx = x(mk.lon);
+            html += `<line x1="${mx.toFixed(1)}" y1="${padTop}" x2="${mx.toFixed(1)}" y2="${(padTop + plotH).toFixed(1)}" stroke="#c9a227" stroke-width="0.8" stroke-dasharray="1 2" opacity="0.7"/>`;
+            html += `<circle cx="${mx.toFixed(1)}" cy="${yL(mk.r).toFixed(1)}" r="2" fill="none" stroke="#c9a227" stroke-width="1"/>`;
+            html += `<text x="${mx.toFixed(1)}" y="${(padTop - 2).toFixed(1)}" font-size="7.5" fill="#c9a227" text-anchor="middle">${mk.tag} ${mk.r.toFixed(2)}</text>`;
+          }
+          html += `<path d="${planetPath}" fill="none" stroke="var(--text-2)" stroke-width="1.3"/>`;
+          html += `<path d="${ringPath}" fill="none" stroke="var(--accent)" stroke-width="1.3"/>`;
+          html += `<path d="${gapPath}" fill="none" stroke="var(--accent-hot)" stroke-width="1.5"/>`;
+          html += dot(gapOf, yR, "var(--accent-hot)");
+          // left/right axis end labels
+          html += `<text x="2" y="${(padTop + 4).toFixed(1)}" font-size="8" fill="var(--text-2)">${dMax.toFixed(2)}</text>`;
+          html += `<text x="2" y="${(padTop + plotH).toFixed(1)}" font-size="8" fill="var(--text-2)">${dMin.toFixed(2)} AU</text>`;
+          html += `<text x="${W - 2}" y="${(padTop + 4).toFixed(1)}" font-size="8" fill="var(--accent-hot)" text-anchor="end">${gMax >= 0 ? "+" : ""}${gMax.toFixed(3)}</text>`;
+          html += `<text x="${W - 2}" y="${(padTop + plotH).toFixed(1)}" font-size="8" fill="var(--accent-hot)" text-anchor="end">${gMin.toFixed(3)} Δ</text>`;
+          // x ticks
+          for (const a of [0, 90, 180, 270, 360]) {
+            html += `<text x="${x(a).toFixed(1)}" y="${H - 6}" font-size="8" fill="var(--text-2)" text-anchor="middle">${a}°</text>`;
+          }
+          // legend
+          html += `<text x="${padL}" y="${H - 14}" font-size="7.5" fill="var(--text-2)"><tspan fill="var(--text-2)">━ ${planetLabel}</tspan>  <tspan fill="var(--accent)">━ ring ${apsisLabel}</tspan>  <tspan fill="var(--accent-hot)">━ min gap</tspan>  <tspan fill="#c9a227">┊ P/A</tspan></text>`;
+          html += `</svg>`;
+          html += `</div>`;
+        };
+        closenessChart("peri", "Earth");
+        closenessChart("apo", "Mars");
+      }
 
       // ── 3b. FLOW ──
       const actualFlowMbps = networkData?.maxFlowGbps ? networkData.maxFlowGbps * 1000 : (this.maxFlowGbps ? this.maxFlowGbps * 1000 : 0);
@@ -994,6 +1469,7 @@ export class SimMain {
     this.routeSummary = result.routeSummary || null;
     this.missionProfiles = result.missionProfilesData || null;
     this.resultTrees = result.resultTreesData || [];
+    this.updateSatelliteFuel();
     this._maybeAutoRefreshReport();
     if (typeof result.satellitesCount === "number") this.satellitesCount = result.satellitesCount;
 
@@ -1060,6 +1536,7 @@ export class SimMain {
         this.routeSummary = msg.routeSummary || null;
         this.missionProfiles = msg.missionProfilesData || null;
         this.resultTrees = msg.resultTreesData || [];
+        this.updateSatelliteFuel();
         this._maybeAutoRefreshReport();
         // Simple-config ring count slider feedback loop: fires on the earlier
         // links-ready path so the user sees the correction without waiting
@@ -1258,7 +1735,9 @@ export class SimMain {
       // the relay, so it (not the relay) caps flow — typically the sat budget
       // limiting its size. Reuses the capacity card's computed bottleneck.
       const bn = this._bottleneckInfo;
-      if (bn && (bn.name === "earth ring" || bn.name === "mars ring") && bn.relayCap > 0 && bn.cap < bn.relayCap * 0.9) {
+      if (bn && bn.name === "no relay rings") {
+        warnings.push(`No relay rings — no Earth↔Mars path`);
+      } else if (bn && (bn.name === "earth ring" || bn.name === "mars ring") && bn.relayCap > 0 && bn.cap < bn.relayCap * 0.9) {
         const planet = bn.name === "mars ring" ? "Mars" : "Earth";
         const g = (mbps) => (mbps >= 1000 ? `${(mbps / 1000).toFixed(1)} Gbps` : `${Math.round(mbps)} Mbps`);
         warnings.push(`${planet} ring limits flow (${g(bn.cap)} < relay ${g(bn.relayCap)})`);
@@ -1288,6 +1767,7 @@ export class SimMain {
       if (rn === "ring_earth") key = "Earth ring throughput";
       else if (rn === "ring_mars") key = "Mars ring throughput";
       else if (rn.startsWith("ring_adapt") || rn.startsWith("ring_circ")) key = "Relay ring count / throughput";
+      else if (rn.startsWith("ring_adecc")) key = "Adapted Eccentric rings";
       else if (rn.startsWith("ring_ecce")) key = "Eccentric rings";
       else key = "the ring parameters";
       groups[key] = (groups[key] || 0) + (c.satCount || 0);
@@ -1455,6 +1935,12 @@ export class SimMain {
     // --- Phase 5: Per-frame display ---
     if (configJustApplied && this.simDisplay) {
       this.simDisplay.setSatellites(satellites);
+      // Run the station-keeping model (per-ring + per-sat) on the main-thread deployment
+      // FIRST — it feeds both the display (satPhysics) and the deployment-report cost.
+      const bodyPos = {};
+      for (const p of Object.values(planets)) if (p && p.position) bodyPos[p.name] = p.position;
+      this.simDeployment.computeStationKeeping(satellites, this.simSatellites.getOrbitalElements(), bodyPos, this.skCfg);
+      this.pushSatellitePhysics();
       this.pendingUpdates.delete("satellites_display");
     }
     if (this.simDisplay) this.simDisplay.updatePositions(planets, satellites);

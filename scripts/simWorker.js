@@ -186,6 +186,7 @@ function runPipeline({ requestId, windowIdx, configEpoch, uiConfig, satellitesCo
       avgLatency: routeSummary.avgLatency,
       maxLatency: routeSummary.maxLatency,
       routes: routeSummary.routes,
+      ringDetail: routeSummary.ringDetail, // per-ring junction/route detail (eccentric families)
     };
   }
 
@@ -426,6 +427,7 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
       minLatency: routeSummary.minLatency,
       avgLatency: routeSummary.avgLatency,
       maxLatency: routeSummary.maxLatency,
+      ringDetail: routeSummary.ringDetail, // per-ring junction/route detail (eccentric families)
     };
   }
 

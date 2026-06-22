@@ -1,6 +1,7 @@
 // simDeployment.js
 
 import { calculateHohmannDeltaV_km_s } from "./simDeltaV.js?v=4.6";
+import { stationKeepingAccel, ringBaseline, satStationKeeping } from "./simStationKeeping.js?v=4.6";
 
 // Default launch-to-LEO Δv (km/s). Configurable via the Launch Vehicle category
 // (see setVehicleConfig); this is the fallback before any config is applied.
@@ -52,6 +53,10 @@ export class SimDeployment {
       const v = uiConfig?.[`launch_vehicle.${key}`];
       return typeof v === "number" && !isNaN(v) ? v : dflt;
     };
+    const gs = (key, dflt) => {
+      const v = uiConfig?.[`satellite.${key}`];
+      return typeof v === "number" && !isNaN(v) ? v : dflt;
+    };
     const vp = this.vehicleProperties;
     vp.booster.dryMass_kg = g("booster-dry-mass", vp.booster.dryMass_kg);
     vp.booster.propellantCapacity_kg = g("booster-propellant-capacity", vp.booster.propellantCapacity_kg);
@@ -68,11 +73,11 @@ export class SimDeployment {
     vp.tanker.deorbitLandingPropellant_kg = g("tanker-deorbit-propellant", vp.tanker.deorbitLandingPropellant_kg);
     vp.tanker.isp_s = g("tanker-isp", vp.tanker.isp_s);
     // satellite.dryMass_kg is derived (setSatelliteMassConfig); only its propulsion specs are exposed.
-    vp.satellite.propellantCapacity_kg = g("satellite-propellant-capacity", vp.satellite.propellantCapacity_kg);
-    vp.satellite.isp_s = g("satellite-isp", vp.satellite.isp_s);
+    vp.satellite.propellantCapacity_kg = gs("satellite-propellant-capacity", vp.satellite.propellantCapacity_kg);
+    vp.satellite.isp_s = gs("satellite-isp", vp.satellite.isp_s);
     // Solar panel mass at Earth orbit = power (kW) × specific mass (kg/kW); the
     // deployment later scales it by distance² for outer rings.
-    vp.satellite.solarPanelMass_EarthOrbit_kg = g("satellite-power-kw", 5) * g("solar-mass-per-kw", 10);
+    vp.satellite.solarPanelMass_EarthOrbit_kg = gs("satellite-power-kw", 5) * gs("solar-mass-per-kw", 10);
     this.launchToLEO_deltaVKmS = g("launch-to-leo-dv", this.launchToLEO_deltaVKmS);
     this.escapeBurnDvKmS = g("escape-burn-dv", this.escapeBurnDvKmS);
   }
@@ -86,15 +91,36 @@ export class SimDeployment {
       circular_rings: emptyMass + ringPorts.circular_rings * laserTerminalMass,
       eccentric_rings: emptyMass + ringPorts.eccentric_rings * laserTerminalMass,
       adapted_rings: emptyMass + (ringPorts.adapted_rings || 0) * laserTerminalMass,
+      adapted_eccentric_rings: emptyMass + (ringPorts.adapted_eccentric_rings || 0) * laserTerminalMass,
     };
     // Update the vehicle properties to the maximum dry mass for compatibility
     this.vehicleProperties.satellite.dryMass_kg = Math.max(...Object.values(this.dryMasses));
+  }
+
+  /**
+   * Solar-array mass (kg) for a satellite on a ring. The array is sized for a
+   * fixed power, so its area/mass grows with the inverse-square solar-flux
+   * falloff: mass = (power-kW × specific-mass) × (apoapsis / Earth apoapsis)².
+   * Rings closer to the Sun carry smaller arrays, rings farther out larger.
+   * @param {number} apo_pctEarth - apoapsis as a fraction of Earth's apoapsis
+   */
+  solarPanelMassKg(apo_pctEarth) {
+    return this.vehicleProperties.satellite.solarPanelMass_EarthOrbit_kg * Math.pow(apo_pctEarth || 1, 2);
+  }
+
+  // Both eccentric families are transfer ellipses that meet Earth's orbit at
+  // perihelion, so the Earth→ring Hohmann's LARGER burn happens first — the
+  // reverse of circular/adapted (concentric) rings. ring_adecc = Adapted
+  // Eccentric (apsides fitted to the planets' true orbits); ring_ecce = Eccentric.
+  _isEccentricRing(ringName) {
+    return ringName.startsWith("ring_ecce") || ringName.startsWith("ring_adecc");
   }
 
   getDryMassForRing(ringName) {
     if (ringName === "ring_earth") return this.dryMasses.ring_earth;
     if (ringName === "ring_mars") return this.dryMasses.ring_mars;
     if (ringName.startsWith("ring_circ")) return this.dryMasses.circular_rings;
+    if (ringName.startsWith("ring_adecc")) return this.dryMasses.adapted_eccentric_rings;
     if (ringName.startsWith("ring_ecce")) return this.dryMasses.eccentric_rings;
     if (ringName.startsWith("ring_adapt")) return this.dryMasses.adapted_rings;
     return this.satelliteEmptyMass; // fallback
@@ -381,40 +407,110 @@ export class SimDeployment {
    * Adds station-keeping argon budget for 15-year lifetime
    * Includes Jupiter secular, SRP, and Earth/Mars co-orbital penalty
    */
-  addStationKeepingPropellant(vehicles, vehicleId, targetOrbitElements, lifetime_years = 15) {
-    const sat = vehicles[vehicleId];
-    if (!sat || sat.propellantType !== "Argon") return;
-
-    const r_au = targetOrbitElements.a || 1.5; // semi-major axis in AU
-    const isEarthRing = targetOrbitElements.ringType === "Earth";
-    const isMarsRing = targetOrbitElements.ringType === "Mars";
+  /**
+   * Pure station-keeping argon budget (kg) for a 15-yr (default) lifetime, from
+   * Jupiter secular + SRP + Earth/Mars co-orbital Δv. Single source of truth —
+   * reused by the display for the satellite mass/thrust colour schemes.
+   * @param {number} r_au - orbit semi-major axis (AU)
+   * @param {string} ringType - "Earth" | "Mars" | other
+   * @param {number} i_deg - inclination (deg)
+   * @param {number} dryMass_kg - satellite dry mass
+   */
+  stationKeepingArgonKg(r_au, ringType, i_deg, dryMass_kg, lifetime_years = 15) {
+    if (!(r_au > 0) || !(dryMass_kg > 0)) return 0;
+    const isEarthRing = ringType === "Earth";
+    const isMarsRing = ringType === "Mars";
 
     // 1. Jupiter secular Δv (Laskar 1988 envelope; m/s/yr)
     const base_dv = 15; // At 1 AU, low i
     let jupiter_dv = base_dv * Math.pow(1.0 / r_au, 1.5); // Scale with a^{-3/2}
     jupiter_dv = Math.max(12, Math.min(18, jupiter_dv)); // Clip to envelope
-    if (targetOrbitElements.i_deg > 10) jupiter_dv *= 0.9; // Inclination damping factor
+    if (i_deg > 10) jupiter_dv *= 0.9; // Inclination damping factor
 
     // 2. Solar Radiation Pressure (A/m = 0.04 m²/kg average for 50 m² panels on 1250 kg sat)
     const srp_at_1au = 36; // m/s per year at A/m = 0.02
-    const area_to_mass = 50 / sat.dryMass_kg; // ~0.04 m²/kg
+    const area_to_mass = 50 / dryMass_kg; // ~0.04 m²/kg
     const srp_dv = srp_at_1au * (0.02 / area_to_mass) * Math.pow(1.0 / r_au, 2);
 
     // 3. Earth/Mars co-orbital penalty (gravity gradient + differential SRP)
     const proximity_penalty = isEarthRing || isMarsRing ? 20 : 0; // m/s per year
 
-    const total_annual_dv_ms = jupiter_dv + srp_dv + proximity_penalty;
-    const total_dv_ms = total_annual_dv_ms * lifetime_years;
+    const total_dv_ms = (jupiter_dv + srp_dv + proximity_penalty) * lifetime_years;
 
-    // Rocket equation: m_prop = m_dry * (exp(Δv / (Isp·g0)) - 1)
+    // Rocket equation with 30% margin (thruster inefficiency, off-nominal, contingency)
     const isp = 4500; // argon gridded ion thruster (realistic 2030)
-    const g0 = 9.80665;
-    let argon_kg = sat.dryMass_kg * (Math.exp(total_dv_ms / (isp * g0)) - 1);
+    const argon_kg = dryMass_kg * (Math.exp(total_dv_ms / (isp * 9.80665)) - 1);
+    return Math.ceil(argon_kg * 1.3);
+  }
 
-    // Add 30% margin (thruster inefficiency, off-nominal orbits, contingency)
-    argon_kg = Math.ceil(argon_kg * 1.3);
+  /**
+   * Station-keeping model (replaces the Δv argon budget). For each ring it averages
+   * the per-sat station-keeping acceleration → thruster count + n-year propellant
+   * (ringBaseline). Planetary-ring sats above the ring's threshold are individually
+   * sized (satStationKeeping, capped at cfg.maxN thrusters and cfg.capacity kg).
+   * Stores per-ring baselines (this.ringStationKeeping, read by the display) and the
+   * sat-count-weighted averages for cost: this.thrusterMassByRing (avg N·tm) and
+   * this.skPropByRing (avg propellant). Also tracks max/distinct thruster counts.
+   * @param {Object} cfg - { F (N), tm (kg), maxN, n (yr), isp (s), capacity (kg) }
+   */
+  computeStationKeeping(satellites, orbitalElements, bodyPositions, cfg) {
+    // Per-ring dry mass (bus + lasers + distance-scaled solar).
+    const dryByRing = {};
+    for (const el of orbitalElements || []) {
+      if (!el || !el.ringName) continue;
+      dryByRing[el.ringName] = this.getDryMassForRing(el.ringName) + this.solarPanelMassKg(el.apsides ? el.apsides.apo_pctEarth : 1);
+    }
+    // Per-ring average station-keeping acceleration (sample the sats).
+    const sumA = {}, count = {};
+    for (const sat of satellites || []) {
+      const rn = sat && sat.ringName;
+      if (!rn || dryByRing[rn] === undefined || !sat.position) continue;
+      sumA[rn] = (sumA[rn] || 0) + stationKeepingAccel(sat.position, bodyPositions);
+      count[rn] = (count[rn] || 0) + 1;
+    }
+    // Per-ring baseline: thruster count, n-year propellant, refinement threshold.
+    const ringData = {};
+    for (const rn in dryByRing) {
+      const aAvg = count[rn] ? sumA[rn] / count[rn] : 0;
+      const dry = dryByRing[rn];
+      ringData[rn] = { dryMass: dry, aAvg, ...ringBaseline(aAvg, dry, cfg) };
+    }
+    // Per-sat sizing → sat-count-weighted ring averages (cost) + max/distinct N.
+    const sumN = {}, sumProp = {}, nSet = new Set();
+    let maxN = 1;
+    for (const sat of satellites || []) {
+      const rn = sat && sat.ringName;
+      if (!rn || !ringData[rn] || !sat.position) continue;
+      const rd = ringData[rn];
+      const isPlanetary = rn === "ring_earth" || rn === "ring_mars";
+      const s = satStationKeeping(stationKeepingAccel(sat.position, bodyPositions), rd.dryMass, rd, isPlanetary, cfg);
+      sumN[rn] = (sumN[rn] || 0) + s.N;
+      sumProp[rn] = (sumProp[rn] || 0) + s.skProp;
+      if (s.N > maxN) maxN = s.N;
+      nSet.add(s.N);
+    }
+    const thrusterMassByRing = {}, skPropByRing = {};
+    for (const rn in ringData) {
+      const c = count[rn] || 0;
+      thrusterMassByRing[rn] = (c ? sumN[rn] / c : ringData[rn].nRing) * cfg.tm;
+      skPropByRing[rn] = c ? sumProp[rn] / c : ringData[rn].skPropRing;
+    }
+    this.ringStationKeeping = ringData;
+    this.thrusterMassByRing = thrusterMassByRing;
+    this.skPropByRing = skPropByRing;
+    this.maxThrusterCount = maxN;
+    this.thrusterCounts = [...nSet].sort((a, b) => a - b);
+    return ringData;
+  }
 
-    // Add to satellite
+  addStationKeepingPropellant(vehicles, vehicleId, targetOrbitElements, lifetime_years = 15) {
+    const sat = vehicles[vehicleId];
+    if (!sat || sat.propellantType !== "Argon") return;
+
+    // SK propellant comes from the thrust-based model (computeStationKeeping), which
+    // must run before getMissionProfile; fall back to 0 if it hasn't.
+    const argon_kg = Math.ceil((this.skPropByRing && this.skPropByRing[targetOrbitElements.ringName]) || 0);
+
     this.addManeuverByPropellantRequired(vehicles, vehicleId, "Station keeping", argon_kg);
     sat.stationKeepingArgon_kg = argon_kg; // for reporting
     sat.propellantCapacity_kg = Math.max(sat.propellantCapacity_kg, sat.propellantLoaded_kg);
@@ -430,10 +526,10 @@ export class SimDeployment {
     const outbound = calculateHohmannDeltaV_km_s(this.earth, targetOrbitElements);
 
     // Deorbit is symmetric: same Δv as outbound, but in reverse order
-    const deorbitDeltaV1 = targetOrbitElements.ringName.startsWith("ring_ecce")
+    const deorbitDeltaV1 = this._isEccentricRing(targetOrbitElements.ringName)
       ? outbound.deltaV1 // eccentric: first burn is larger
       : outbound.deltaV2;
-    const deorbitDeltaV2 = targetOrbitElements.ringName.startsWith("ring_ecce") ? outbound.deltaV2 : outbound.deltaV1;
+    const deorbitDeltaV2 = this._isEccentricRing(targetOrbitElements.ringName) ? outbound.deltaV2 : outbound.deltaV1;
 
     // Add burns in reverse chronological order (last maneuver first in code)
     this.addManeuverByDeltaVRequired(vehicles, vehicleId, "Deorbit burn 2 (circularization at Earth)", deorbitDeltaV2);
@@ -522,18 +618,19 @@ export class SimDeployment {
     const outboundDeltaV_km_per_s =
       outboundDeltaVOverride || calculateHohmannDeltaV_km_s(this.earth, targetOrbitElements);
 
-    const outboundDeltaV1 = targetOrbitElements.ringName.startsWith("ring_ecce")
+    const outboundDeltaV1 = this._isEccentricRing(targetOrbitElements.ringName)
       ? outboundDeltaV_km_per_s.deltaV2
       : outboundDeltaV_km_per_s.deltaV1;
-    const outboundDeltaV2 = targetOrbitElements.ringName.startsWith("ring_ecce")
+    const outboundDeltaV2 = this._isEccentricRing(targetOrbitElements.ringName)
       ? outboundDeltaV_km_per_s.deltaV1
       : outboundDeltaV_km_per_s.deltaV2;
 
     const vehicles = {};
 
-    const solarPanelMass_kg =
-      this.vehicleProperties.satellite.solarPanelMass_EarthOrbit_kg * Math.pow(targetOrbitElements.apsides.apo_pctEarth, 2);
-    const baseDryMass = this.getDryMassForRing(targetOrbitElements.ringName);
+    const solarPanelMass_kg = this.solarPanelMassKg(targetOrbitElements.apsides.apo_pctEarth);
+    const baseDryMass =
+      this.getDryMassForRing(targetOrbitElements.ringName) +
+      ((this.thrusterMassByRing && this.thrusterMassByRing[targetOrbitElements.ringName]) || 0);
     const satelliteProps = { ...this.vehicleProperties.satellite, dryMass_kg: baseDryMass };
     this.addVehicle(vehicles, "Satellites", satelliteProps, solarPanelMass_kg);
 
