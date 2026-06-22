@@ -500,7 +500,7 @@ export const slidersData = {
       label: "Required throughput",
       description:
         "Total Earth↔Mars capacity the constellation is sized for. Drives the Earth/Mars in-ring worst-case rate (= half this), and — per relay type — either the ring count (concentric: throughput ∝ ring count³) or the in-ring rate (eccentric: rate = throughput / (2 × ring count), with ring count set separately for coverage/latency).",
-      min: 0,
+      min: -1,
       max: 5,
       value: 2,
       step: 0.05,
