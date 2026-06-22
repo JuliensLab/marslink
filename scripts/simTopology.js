@@ -225,6 +225,12 @@ export class TopologyBuilder {
     const normalizeAngle = (deg) => ((deg % 360) + 360) % 360;
     const maxDistanceAU = this.simLinkBudget.maxDistanceAU;
 
+    // --- DIAGNOSTIC (temporary): quantify long cross-route inter-ring links.
+    // stretch = link length / radial ring gap (≈1 for a clean radial link, ≫1 for a
+    // long azimuthal "wrong route" link); offset = azimuthal angle between matched sats.
+    const diagStretch = [];
+    const diagPairs = [];
+
     // Now: Only connect each ring to its IMMEDIATE NEXT (index +1)
     for (let i = 0; i < ringList.length - 1; i++) {
       const inner = ringList[i];
@@ -250,6 +256,9 @@ export class TopologyBuilder {
       const innerMaxLinks = ringMaxLinks.get(inner.name);
       const outerMaxLinks = ringMaxLinks.get(outer.name);
       const isFirstRing = inner.index === ringList[0].index;
+
+      const radialGap = Math.abs(rOuter - rInner) || 1e-9; // diagnostic baseline
+      let pairLinks = 0, pairLong = 0, pairMaxStretch = 1, pairMaxOffDeg = 0;
 
       const candidates = [];
 
@@ -336,8 +345,34 @@ export class TopologyBuilder {
         used.add(from.name);
         used.add(to.name);
         linksAdded++;
+
+        // DIAGNOSTIC: record this link's stretch + azimuthal offset.
+        const fA = positions[from.name].solarAngle, tA = positions[to.name].solarAngle;
+        const offDeg = Math.abs((((tA - fA) % 360 + 540) % 360) - 180);
+        const stretch = distanceAU / radialGap;
+        diagStretch.push(stretch);
+        pairLinks++;
+        if (stretch > pairMaxStretch) pairMaxStretch = stretch;
+        if (offDeg > pairMaxOffDeg) pairMaxOffDeg = offDeg;
+        if (stretch > 3) pairLong++;
       }
 
+      diagPairs.push({ pair: `${inner.index}->${outer.index}`, links: pairLinks, long: pairLong, maxStretch: pairMaxStretch, maxOffDeg: pairMaxOffDeg, innerSats: innerSats.length, outerSats: outerSats.length });
+    }
+
+    // DIAGNOSTIC aggregate (temporary): one concise line per topology build.
+    if (diagStretch.length) {
+      diagStretch.sort((a, b) => a - b);
+      const n = diagStretch.length;
+      const mean = diagStretch.reduce((s, v) => s + v, 0) / n;
+      const p95 = diagStretch[Math.min(n - 1, Math.floor(n * 0.95))];
+      const max = diagStretch[n - 1];
+      const long = diagStretch.filter((v) => v > 3).length;
+      const worst = diagPairs.slice().sort((a, b) => b.long - a.long).slice(0, 3);
+      this.interRingDiag = { totalLinks: n, meanStretch: mean, p95Stretch: p95, maxStretch: max, longCount: long, longPct: (100 * long) / n, pairs: diagPairs, worstPairs: worst };
+      console.log(
+        `[Marslink] interAdaptedRings diag: ${n} links | stretch(len/gap) mean=${mean.toFixed(1)} p95=${p95.toFixed(1)} max=${max.toFixed(1)} | long(>3x)=${long} (${((100 * long) / n).toFixed(1)}%) | worst: ${worst.map((p) => `${p.pair}[${p.long}/${p.links} off${p.maxOffDeg.toFixed(0)}deg]`).join(" ")}`
+      );
     }
   }
 
