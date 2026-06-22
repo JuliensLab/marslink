@@ -1,4 +1,6 @@
-// topologyAware.js — Specialized max-flow for the Marslink constellation topology.
+// topologyAware.js — "concentric-topology-aware" max-flow (registry key), specialized
+// for the CONCENTRIC relay families (ring_adapt_). It maps routes through the radial
+// ring chains and returns 0 for eccentric families, which must use a general solver.
 //
 // Exploits the known structure:
 //

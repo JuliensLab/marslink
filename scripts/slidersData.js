@@ -204,13 +204,6 @@ export const slidersData = {
       scale: "linear",
       updateLongTermScore: false,
     },
-    flowAlgorithm: {
-      type: "radio",
-      label: "Max-flow algorithm",
-      options: ["topology-aware", "push-relabel", "edmonds-karp"],
-      value: "topology-aware",
-      unit: "",
-    },
   },
   launch_schedule: {
     start_year: {
@@ -543,6 +536,15 @@ export const slidersData = {
       scale: "linear",
       updateLongTermScore: true,
     },
+    "flow-solver": {
+      type: "radio",
+      label: "Max-flow solver",
+      description:
+        "Algorithm that computes Earth↔Mars throughput. The 'concentric-topology-aware' fast path is specific to the Adapted-concentric family, so circular rings use a general solver.",
+      options: ["push-relabel", "edmonds-karp"],
+      value: "push-relabel",
+      unit: "",
+    },
     ringcount: {
       label: "Ring count",
       min: 0,
@@ -614,6 +616,15 @@ export const slidersData = {
       unit: " ports",
       scale: "linear",
       updateLongTermScore: true,
+    },
+    "flow-solver": {
+      type: "radio",
+      label: "Max-flow solver",
+      description:
+        "Algorithm that computes Earth↔Mars throughput. 'concentric-topology-aware' only understands concentric radial chains, so eccentric rings use a general solver.",
+      options: ["push-relabel", "edmonds-karp"],
+      value: "push-relabel",
+      unit: "",
     },
     ringcount: {
       label: "Ring count",
@@ -688,6 +699,15 @@ export const slidersData = {
       unit: " ports",
       scale: "linear",
       updateLongTermScore: true,
+    },
+    "flow-solver": {
+      type: "radio",
+      label: "Max-flow solver",
+      description:
+        "Algorithm that computes Earth↔Mars throughput. 'concentric-topology-aware' exploits this family's radial ring chains for speed; the general solvers work on any graph.",
+      options: ["concentric-topology-aware", "push-relabel", "edmonds-karp"],
+      value: "concentric-topology-aware",
+      unit: "",
     },
     ringcount: {
       label: "Ring count",
@@ -946,6 +966,15 @@ export const slidersData = {
       unit: " ports",
       scale: "linear",
       updateLongTermScore: true,
+    },
+    "flow-solver": {
+      type: "radio",
+      label: "Max-flow solver",
+      description:
+        "Algorithm that computes Earth↔Mars throughput. 'concentric-topology-aware' only understands concentric radial chains, so adapted-eccentric rings use a general solver.",
+      options: ["push-relabel", "edmonds-karp"],
+      value: "push-relabel",
+      unit: "",
     },
     "cross-ring-links": {
       type: "radio",

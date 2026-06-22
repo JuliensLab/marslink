@@ -31,8 +31,8 @@ export { edmondsKarp, pushRelabel, topologyAware };
  * @param {number}                   input.perfStart
  * @param {number}                   input.calctimeMs
  * @param {string}                   [input.algorithm]  - Key in FLOW_ALGORITHMS. Defaults to DEFAULT_ALGORITHM.
- * @param {Object}                   [input.topology]   - Structured topology info (used by topology-aware algorithm).
- * @param {Map<string,number>}       [input.nodeIds]    - name → node ID map (for topology-aware).
+ * @param {Object}                   [input.topology]   - Structured topology info (used by concentric-topology-aware).
+ * @param {Map<string,number>}       [input.nodeIds]    - name → node ID map (for concentric-topology-aware).
  * @returns {{ maxFlow: number, flows: Object<string, number> } | null}
  */
 export function computeMaxFlow({ graph, capacities, source, sink, perfStart, calctimeMs, algorithm, topology, nodeIds }) {

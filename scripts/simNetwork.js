@@ -117,8 +117,8 @@ export class SimNetwork {
     const sink = nodeIds.get("Mars");
 
     const algorithm = this.simLinkBudget.flowAlgorithm;
-    // Topology-aware skips simplification — it needs the original ring chains.
-    const useSimplification = algorithm !== "topology-aware";
+    // concentric-topology-aware skips simplification — it needs the original ring chains.
+    const useSimplification = algorithm !== "concentric-topology-aware";
 
     // --- STEP 1: SIMPLIFY ---
     const simplificationStack = [];
@@ -127,8 +127,8 @@ export class SimNetwork {
     }
 
     // --- STEP 2: RUN MAX FLOW ---
-    // Uses the algorithm selected in simLinkBudget.flowAlgorithm (from the
-    // Simulation section UI), falling back to the default in
+    // Uses the algorithm in simLinkBudget.flowAlgorithm (resolved per active relay
+    // family from its "<section>.flow-solver"), falling back to the default in
     // simFlowAlgorithms/interface.js if unset.
     const maxFlowResult = computeMaxFlow({
       graph,

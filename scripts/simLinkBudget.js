@@ -40,8 +40,24 @@ export class SimLinkBudget {
     this.solarExclusionDeg = technologyConfig["simulation.solarExclusionDeg"] || 0;
     this.solarExclusionRad = this.solarExclusionDeg * SIM_CONSTANTS.DEG_TO_RAD;
 
-    // Max-flow algorithm selection (one of the keys in FLOW_ALGORITHMS)
-    this.flowAlgorithm = technologyConfig["simulation.flowAlgorithm"] || undefined;
+    // Max-flow solver, now chosen PER RING TYPE: the concentric families have a fast
+    // specialized solver, the eccentric families need a general one. Resolve the active
+    // relay family's "<section>.flow-solver" (with a per-family code default so legacy
+    // configs without the key still pick a working solver).
+    const RELAY_SECTION = {
+      "Adapted concentric": "adapted_rings",
+      "Adapted eccentric": "adapted_eccentric_rings",
+      "Circular": "circular_rings",
+      "Eccentric": "eccentric_rings",
+    };
+    const DEFAULT_SOLVER = {
+      adapted_rings: "concentric-topology-aware",
+      circular_rings: "push-relabel",
+      eccentric_rings: "push-relabel",
+      adapted_eccentric_rings: "push-relabel",
+    };
+    const relaySection = RELAY_SECTION[technologyConfig["relay_type.selected"]] || "adapted_rings";
+    this.flowAlgorithm = technologyConfig[`${relaySection}.flow-solver`] || DEFAULT_SOLVER[relaySection];
 
     // Adapted-eccentric "cross-ring links" toggle: link the nearest sat on each of
     // two rings where their tracks cross in the xy plane, using the spare radial

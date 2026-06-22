@@ -260,34 +260,23 @@ export class TopologyBuilder {
       const radialGap = Math.abs(rOuter - rInner) || 1e-9; // diagnostic baseline
       let pairLinks = 0, pairLong = 0, pairMaxStretch = 1, pairMaxOffDeg = 0;
 
-      // --- Monotonic (order-preserving) matcher --------------------------------
-      // Both rings are sorted by true longitude. Walk inner sats in angular order and
-      // advance an outer pointer that only moves FORWARD (mod M, at most one lap), so
-      // an inner sat can never grab an outer sat belonging to a route already passed —
-      // that is what produced the long cross-route links. A purely-radial link is
-      // sun-aligned (solar-blinded), so we allow a SMALL forward skip (SKIP sats) to the
-      // nearest non-blinded outer — the ~1-sat diagonal, never a ±20 fallback.
+      // --- Order-preserving (monotonic) matcher ---------------------------------
+      // Both rings are sorted by true longitude, so we match them with a LINEAR merge:
+      // walk inner sats in ascending longitude and advance an outer pointer that only
+      // moves FORWARD (never wraps, never goes back). An inner sat can therefore only
+      // match a nearby outer sat — never one belonging to a route already passed, which
+      // was the source of the long cross-route links. A purely-radial link is sun-aligned
+      // (solar-blinded), so we scan a small window (op-1 .. op+SKIP) for the nearest
+      // non-blinded outer; that bounds every link to ~SKIP sats of azimuthal offset.
+      // (A handful of sats at the 0°/360° seam may go unmatched — far cheaper than the
+      // cross-ring links a wrap-around would let back in.)
       const N = innerSats.length;
       const M = outerSats.length;
-      const SKIP = 3; // max forward skip to clear blinding / a taken sat
-      // Departure-angle offset (same geometry as before; 0 for a radial backbone).
+      const SKIP = 2; // window half-width: max offset to clear blinding / a taken sat
       const angularOffsetDeg = (Math.atan2((rOuter - rInner) * Math.tan(departureRad), rOuter) * 180) / Math.PI;
-      // |angular distance| (deg, 0..180) from outer sat oi to a target angle.
-      const angDist = (oi, target) => {
-        const d = (((outerAngles[oi] - target) % 360) + 360) % 360;
-        return d > 180 ? 360 - d : d;
-      };
-      // Align the pointer to the first inner sat's target angle.
       let op = 0;
-      {
-        const a0 = normalizeAngle((positions[innerSats[0].name]?.solarAngle ?? 0) + angularOffsetDeg);
-        let k = 0;
-        while (k < M && outerAngles[k] < a0) k++;
-        op = k % M;
-      }
-      let consumed = 0; // outer sats passed; cap at M so we never wrap past the start
 
-      for (let ii = 0; ii < N && consumed < M; ii++) {
+      for (let ii = 0; ii < N; ii++) {
         const innerSat = innerSats[ii];
         const canConnectOut = isFirstRing && innerMaxLinks === 3 ? ii % 2 === 1 : linkCounts[innerSat.name] < innerMaxLinks;
         if (!canConnectOut || innerSat.outwards !== null) continue;
@@ -296,17 +285,15 @@ export class TopologyBuilder {
         if (!innerPos) continue;
         const target = normalizeAngle(innerPos.solarAngle + angularOffsetDeg);
 
-        // Advance the pointer forward to the outer sat nearest `target` (forward only).
-        while (consumed + 1 < M && angDist((op + 1) % M, target) < angDist(op, target)) {
-          op = (op + 1) % M;
-          consumed++;
-        }
+        // Advance to the first outer sat at/after the target longitude (forward only).
+        while (op < M && outerAngles[op] < target) op++;
 
-        // From the nearest forward sat, scan a small window for the closest valid,
-        // non-blinded, in-budget outer sat.
-        let assigned = -1, bestDist = Infinity, bestStep = 0;
-        for (let s = 0; s <= SKIP && consumed + s < M; s++) {
-          const oi = (op + s) % M;
+        // Scan a small window straddling the target (op-1 is the nearest below it) for
+        // the closest valid, non-blinded, in-budget outer sat.
+        let assigned = -1, bestDist = Infinity;
+        for (let s = -1; s <= SKIP; s++) {
+          const oi = op + s;
+          if (oi < 0 || oi >= M) continue;
           const outerSat = outerSats[oi];
           if (outerSat.inwards !== null) continue;
           if (linkCounts[outerSat.name] >= outerMaxLinks) continue;
@@ -315,7 +302,7 @@ export class TopologyBuilder {
           const dAU = this.calculateDistanceAU(innerPos, outerPos);
           if (dAU > maxDistanceAU) continue;
           if (this.isSolarBlinded(innerPos, outerPos)) continue;
-          if (dAU < bestDist) { bestDist = dAU; assigned = oi; bestStep = s; }
+          if (dAU < bestDist) { bestDist = dAU; assigned = oi; }
         }
         if (assigned < 0) continue;
 
@@ -323,9 +310,8 @@ export class TopologyBuilder {
         const distanceAU = bestDist;
         const distanceKm = distanceAU * AU_IN_KM;
         const gbps = this.calculateGbps(distanceKm);
-        // Advance the pointer past the matched sat (keeps the assignment monotonic).
-        op = (assigned + 1) % M;
-        consumed += bestStep + 1;
+        // Keep the assignment monotonic — the pointer never moves backward.
+        op = Math.max(op, assigned + 1);
 
         const [fId, tId] = from.name < to.name ? [from.name, to.name] : [to.name, from.name];
         const key = `${fId}-${tId}`;
@@ -1633,7 +1619,7 @@ export class TopologyBuilder {
   }
 
   /**
-   * Captures structured topology info for the topology-aware max-flow algorithm.
+   * Captures structured topology info for the concentric-topology-aware max-flow algorithm.
    * Returns ring chains (ordered from planet-connected sat outward), planet links,
    * and individual routes. Returns null if structure is incomplete.
    *

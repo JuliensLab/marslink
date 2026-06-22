@@ -61,8 +61,10 @@ import { topologyAware } from "./topologyAware.js?v=4.6";
 export const FLOW_ALGORITHMS = {
   "edmonds-karp": edmondsKarp,
   "push-relabel": pushRelabel,
-  "topology-aware": topologyAware,
+  // Specialized for the CONCENTRIC relay families (ring_adapt_): exploits their
+  // radial ring chains. Returns 0 for eccentric families — pick a general solver there.
+  "concentric-topology-aware": topologyAware,
 };
 
 /** The algorithm used when none is explicitly specified. */
-export const DEFAULT_ALGORITHM = "topology-aware";
+export const DEFAULT_ALGORITHM = "concentric-topology-aware";
