@@ -933,6 +933,20 @@ export class SimUi {
    *     latency knob (held); the worst-case in-ring rate is derived = throughput/(2·R).
    */
   applyDesignFromThroughput(reqGbps) {
+    // Re-entrancy guard: applySliderValues below dispatches slider events that run
+    // their own handlers synchronously; should any path lead back here, bail rather
+    // than recurse. Legitimate callers (init, the requiredgbps slider, the simple
+    // tech/relay/ring rows) are always top-level, never nested.
+    if (this._applyingDesign) return;
+    this._applyingDesign = true;
+    try {
+      this._applyDesignFromThroughput(reqGbps);
+    } finally {
+      this._applyingDesign = false;
+    }
+  }
+
+  _applyDesignFromThroughput(reqGbps) {
     const selKey = SimUi.RELAY_TYPE_SECTIONS[this.getSelectedRelayType()] || "adapted_rings";
     const isEccentric = this._isEccentricSection(selKey);
     const T_mbps = Math.max(0, reqGbps * 1000);
@@ -2996,12 +3010,6 @@ export class SimUi {
         case "simulation.flowAlgorithm":
         case "simulation.linkUpdateIntervalHours":
         case "simulation.failed-satellites-slider":
-        case "relay_type.requiredgbps":
-          // Throughput-driven design: size Earth/Mars rings + (concentric) the ring
-          // count or (eccentric) the in-ring rate. Those sub-slider writes each trigger
-          // the rebuild, so this case does not fall through.
-          this.applyDesignFromThroughput(newValue);
-          break;
         case "relay_type.ringcount":
         case "relay_type.selected":
           // Show only the selected relay family's config section, then rebuild (the
@@ -3075,6 +3083,13 @@ export class SimUi {
               "satellite",
             ])
           );
+          break;
+
+        case "relay_type.requiredgbps":
+          // Throughput-driven design: size Earth/Mars rings + (concentric) the ring
+          // count or (eccentric) the in-ring rate. Those sub-slider writes each trigger
+          // the rebuild themselves. Standalone case (not in the fall-through chain above).
+          this.applyDesignFromThroughput(newValue);
           break;
 
         case "economics.satellite-cost-slider":
