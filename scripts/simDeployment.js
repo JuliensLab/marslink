@@ -542,34 +542,58 @@ export class SimDeployment {
    * @param {Array} targetOrbitElementsArray - Array of orbital elements for each ring
    * @returns {Object} Mission profile for the given target orbit
    */
+  /**
+   * Largest-feasible-payload mission profile for one ring.
+   *
+   * getMissionProfileOneOrbit returns { error:true, satCountPerDeploymentFlight } when the
+   * per-flight payload makes the outbound burn exceed vehicle propellant capacity.
+   * Feasibility is MONOTONIC in sats-per-flight (fewer sats ⇒ less mass ⇒ feasible), so we
+   * BINARY-search the largest feasible count. The previous code decremented the cap by one
+   * each iteration with a 10-try limit, so a high-Δv ring that only fits ~100 sats/flight
+   * (e.g. an eccentric ring whose perihelion velocity is high) never converged and threw
+   * "Too many iterations" — which nuked the entire cost computation for every ring.
+   */
+  _searchFeasibleProfile(targetOrbitElements, outboundDeltaVOverride, maxSatCap = Infinity) {
+    const run = (cap) => this.getMissionProfileOneOrbit(targetOrbitElements, cap, outboundDeltaVOverride);
+
+    // The common low-Δv case fits the largest allowed payload immediately.
+    const top = run(maxSatCap);
+    if (!top.error) return top.result;
+
+    // Errored: the count it tried is an infeasible upper bound. A flight must carry at
+    // least one satellite — if even that overflows, the ring genuinely can't be deployed.
+    let hi = top.satCountPerDeploymentFlight;
+    const single = run(1);
+    if (single.error) {
+      throw new Error(
+        `Cannot deploy ${targetOrbitElements.ringName}: a single-satellite flight exceeds vehicle capacity by ${Math.round(single.excess)} kg`
+      );
+    }
+
+    // Largest feasible sats-per-flight in [1, hi).
+    let lo = 1, best = single.result;
+    while (lo + 1 < hi) {
+      const mid = (lo + hi) >> 1;
+      const m = run(mid);
+      if (m.error) hi = mid;
+      else { lo = mid; best = m.result; }
+    }
+    return best;
+  }
+
   getMissionProfile(targetOrbitElementsArray) {
     const results_by_orbit = [];
     for (const targetOrbitElements of targetOrbitElementsArray) {
-      if (targetOrbitElements == null) {
-        continue;
-      }
-      let counter = 0;
-      let maxSatCountPerDeploymentFlight_fromLoop = Infinity;
-      let missionProfile;
-      do {
-        if (counter++ > 10) throw new Error("Too many iterations");
-        missionProfile = this.getMissionProfileOneOrbit(targetOrbitElements, maxSatCountPerDeploymentFlight_fromLoop);
-        if (missionProfile.error) {
-          maxSatCountPerDeploymentFlight_fromLoop = missionProfile.satCountPerDeploymentFlight - 1;
-        }
-        if (maxSatCountPerDeploymentFlight_fromLoop <= 0) {
-          throw new Error("Max satellites per deployment flight is less than 1");
-        }
-      } while (missionProfile.error);
-      const result = {
+      if (targetOrbitElements == null) continue;
+      const result = this._searchFeasibleProfile(targetOrbitElements);
+      results_by_orbit.push({
         ringName: targetOrbitElements.ringName,
         satCount: targetOrbitElements.satCount,
-        deploymentFlights_count: missionProfile.result.deploymentFlights_count,
-        satCountPerDeploymentFlight: missionProfile.result.satCountPerDeploymentFlight,
-        vehicles: missionProfile.result.vehicles,
-        orbits: missionProfile.result.orbits,
-      };
-      results_by_orbit.push(result);
+        deploymentFlights_count: result.deploymentFlights_count,
+        satCountPerDeploymentFlight: result.satCountPerDeploymentFlight,
+        vehicles: result.vehicles,
+        orbits: result.orbits,
+      });
     }
     return { byOrbit: results_by_orbit };
   }
@@ -586,20 +610,7 @@ export class SimDeployment {
    * @returns {Object} { satCountPerDeploymentFlight, vehicles, orbits }
    */
   getFlightProfile(targetOrbitElements, outboundDeltaV, maxSatCount = Infinity) {
-    let counter = 0;
-    let maxSatCountPerDeploymentFlight_fromLoop = maxSatCount;
-    let missionProfile;
-    do {
-      if (counter++ > 10) throw new Error("Too many iterations in getFlightProfile");
-      missionProfile = this.getMissionProfileOneOrbit(targetOrbitElements, maxSatCountPerDeploymentFlight_fromLoop, outboundDeltaV);
-      if (missionProfile.error) {
-        maxSatCountPerDeploymentFlight_fromLoop = missionProfile.satCountPerDeploymentFlight - 1;
-      }
-      if (maxSatCountPerDeploymentFlight_fromLoop <= 0) {
-        throw new Error("Max satellites per flight is less than 1 for this delta-V");
-      }
-    } while (missionProfile.error);
-    return missionProfile.result;
+    return this._searchFeasibleProfile(targetOrbitElements, outboundDeltaV, maxSatCount);
   }
 
   /**
