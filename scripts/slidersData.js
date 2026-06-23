@@ -204,6 +204,16 @@ export const slidersData = {
       scale: "linear",
       updateLongTermScore: false,
     },
+    "interring-matcher": {
+      type: "radio",
+      label: "Inter-ring matcher",
+      description:
+        "Algorithm pairing inner-ring sats with outer-ring sats for the concentric relay families' radial backbone. Kept selectable for comparison. linear-merge = current (forward-only merge); monotonic-wrap = forward pointer with wraparound; greedy-nearest = original shortest-distance greedy (can emit long cross-route links).",
+      options: ["linear-merge", "monotonic-wrap", "greedy-nearest"],
+      value: "linear-merge",
+      unit: "",
+      updateLongTermScore: true,
+    },
   },
   launch_schedule: {
     start_year: {

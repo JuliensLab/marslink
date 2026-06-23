@@ -59,6 +59,10 @@ export class SimLinkBudget {
     const relaySection = RELAY_SECTION[technologyConfig["relay_type.selected"]] || "adapted_rings";
     this.flowAlgorithm = technologyConfig[`${relaySection}.flow-solver`] || DEFAULT_SOLVER[relaySection];
 
+    // Inter-ring (radial backbone) matcher for the concentric families — three variants
+    // kept selectable for comparison (see TopologyBuilder.interAdaptedRings).
+    this.interRingMatcher = technologyConfig["simulation.interring-matcher"] || "linear-merge";
+
     // Adapted-eccentric "cross-ring links" toggle: link the nearest sat on each of
     // two rings where their tracks cross in the xy plane, using the spare radial
     // laser. Default on (only affects topologies that actually use eccentric rings).

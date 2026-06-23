@@ -3007,6 +3007,7 @@ export class SimUi {
         case "simulation.maxSatCount":
         case "simulation.calctimeSec":
         case "simulation.solarExclusionDeg":
+        case "simulation.interring-matcher":
         case "circular_rings.flow-solver":
         case "eccentric_rings.flow-solver":
         case "adapted_rings.flow-solver":

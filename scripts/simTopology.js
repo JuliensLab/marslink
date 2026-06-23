@@ -166,7 +166,20 @@ export class TopologyBuilder {
 
   }
 
+  // Inter-ring radial backbone for the concentric relay families. THREE matchers are kept
+  // side-by-side for comparison, selected by Simulation → "Inter-ring matcher"
+  // (this.simLinkBudget.interRingMatcher): "linear-merge" (default, current), "monotonic-wrap",
+  // and "greedy-nearest". They share identical setup and differ only in how each inner-ring
+  // sat is paired with an outer-ring sat. (We'll keep the winner and delete the rest later.)
   interAdaptedRings(rings, positions, linkCounts, finalLinks, targetDepartureAngle = 0, satellites, existingLinks) {
+    const args = [rings, positions, linkCounts, finalLinks, targetDepartureAngle, satellites, existingLinks];
+    const mode = (this.simLinkBudget && this.simLinkBudget.interRingMatcher) || "linear-merge";
+    if (mode === "greedy-nearest") return this._interAdaptedRings_greedyWindowed(...args);
+    if (mode === "monotonic-wrap") return this._interAdaptedRings_monotonic(...args);
+    return this._interAdaptedRings_linearMerge(...args);
+  }
+
+  _interAdaptedRings_linearMerge(rings, positions, linkCounts, finalLinks, targetDepartureAngle = 0, satellites, existingLinks) {
     // Both concentric relay families share this radial-backbone construction:
     // adapted concentric (ring_adapt_) and circular (ring_circ_). Only one relay
     // type is active at a time, so merging the prefixes here can't collide ring
@@ -321,6 +334,206 @@ export class TopologyBuilder {
         existingLinks.add(key);
         from.outwards = to.name;
         to.inwards = from.name;
+      }
+    }
+  }
+
+  // Matcher "monotonic-wrap": forward outer pointer modulo M with a `consumed` cap (so it
+  // never laps past the start) and a SKIP=3 forward window. Predecessor of linear-merge.
+  _interAdaptedRings_monotonic(rings, positions, linkCounts, finalLinks, targetDepartureAngle = 0, satellites, existingLinks) {
+    const circularRingNames = Object.keys(rings).filter(
+      (ringName) => ringName.startsWith("ring_adapt_") || ringName.startsWith("ring_circ_")
+    );
+    if (circularRingNames.length === 0) return;
+    const parseIndex = (name) => { const match = name.match(/_(\d+)$/); return match ? parseInt(match[1], 10) : -1; };
+    const ringList = circularRingNames
+      .map((name) => ({ name, index: parseIndex(name), radius: rings[name][0].a }))
+      .filter((r) => r.index >= 0);
+    ringList.sort((a, b) => a.index - b.index);
+    const AU_IN_KM = this.AU_IN_KM;
+    const ringSatellites = {};
+    ringList.forEach((ring) => {
+      ringSatellites[ring.name] = rings[ring.name]
+        .filter((sat) => sat.orbitalZone === "BETWEEN_EARTH_AND_MARS")
+        .slice()
+        .sort((a, b) => a.position.solarAngle - b.position.solarAngle);
+    });
+    const ringMaxLinks = new Map();
+    ringList.forEach((ring) => { ringMaxLinks.set(ring.name, this.simLinkBudget.getMaxLinksPerRing(ring.name)); });
+    ringList.forEach((ring) => {
+      const maxLinks = ringMaxLinks.get(ring.name);
+      if (maxLinks !== 3) return;
+      ringSatellites[ring.name].forEach((sat, i) => { if (i % 2 === 0) sat.outwards = "premarked"; else sat.inwards = "premarked"; });
+    });
+    const normalizeAngle = (deg) => ((deg % 360) + 360) % 360;
+    const maxDistanceAU = this.simLinkBudget.maxDistanceAU;
+
+    for (let i = 0; i < ringList.length - 1; i++) {
+      const inner = ringList[i];
+      const outer = ringList[i + 1];
+      if (outer.index !== inner.index + 1) continue;
+      const innerSats = ringSatellites[inner.name];
+      const outerSats = ringSatellites[outer.name];
+      if (!innerSats.length || !outerSats.length) continue;
+      const outerAngles = outerSats.map((s) => s.position.solarAngle);
+      const rInner = inner.radius;
+      const rOuter = outer.radius;
+      const departureRad = (targetDepartureAngle * Math.PI) / 180;
+      const innerMaxLinks = ringMaxLinks.get(inner.name);
+      const outerMaxLinks = ringMaxLinks.get(outer.name);
+      const isFirstRing = inner.index === ringList[0].index;
+
+      const N = innerSats.length;
+      const M = outerSats.length;
+      const SKIP = 3; // max forward skip to clear blinding / a taken sat
+      const angularOffsetDeg = (Math.atan2((rOuter - rInner) * Math.tan(departureRad), rOuter) * 180) / Math.PI;
+      const angDist = (oi, target) => { const d = (((outerAngles[oi] - target) % 360) + 360) % 360; return d > 180 ? 360 - d : d; };
+      let op = 0;
+      {
+        const a0 = normalizeAngle((positions[innerSats[0].name]?.solarAngle ?? 0) + angularOffsetDeg);
+        let k = 0;
+        while (k < M && outerAngles[k] < a0) k++;
+        op = k % M;
+      }
+      let consumed = 0; // outer sats passed; cap at M so we never wrap past the start
+
+      for (let ii = 0; ii < N && consumed < M; ii++) {
+        const innerSat = innerSats[ii];
+        const canConnectOut = isFirstRing && innerMaxLinks === 3 ? ii % 2 === 1 : linkCounts[innerSat.name] < innerMaxLinks;
+        if (!canConnectOut || innerSat.outwards !== null) continue;
+        const innerPos = positions[innerSat.name];
+        if (!innerPos) continue;
+        const target = normalizeAngle(innerPos.solarAngle + angularOffsetDeg);
+        while (consumed + 1 < M && angDist((op + 1) % M, target) < angDist(op, target)) { op = (op + 1) % M; consumed++; }
+        let assigned = -1, bestDist = Infinity, bestStep = 0;
+        for (let s = 0; s <= SKIP && consumed + s < M; s++) {
+          const oi = (op + s) % M;
+          const outerSat = outerSats[oi];
+          if (outerSat.inwards !== null) continue;
+          if (linkCounts[outerSat.name] >= outerMaxLinks) continue;
+          const outerPos = positions[outerSat.name];
+          if (!outerPos) continue;
+          const dAU = this.calculateDistanceAU(innerPos, outerPos);
+          if (dAU > maxDistanceAU) continue;
+          if (this.isSolarBlinded(innerPos, outerPos)) continue;
+          if (dAU < bestDist) { bestDist = dAU; assigned = oi; bestStep = s; }
+        }
+        if (assigned < 0) continue;
+        const from = innerSat, to = outerSats[assigned];
+        const distanceAU = bestDist;
+        const distanceKm = distanceAU * AU_IN_KM;
+        const gbps = this.calculateGbps(distanceKm);
+        op = (assigned + 1) % M;
+        consumed += bestStep + 1;
+        const [fId, tId] = from.name < to.name ? [from.name, to.name] : [to.name, from.name];
+        const key = `${fId}-${tId}`;
+        if (existingLinks.has(key)) continue;
+        finalLinks.push({ fromId: fId, toId: tId, distanceAU, distanceKm, latencySeconds: this.calculateLatency(distanceKm), gbpsCapacity: gbps });
+        linkCounts[from.name]++;
+        linkCounts[to.name]++;
+        existingLinks.add(key);
+        from.outwards = to.name;
+        to.inwards = from.name;
+      }
+    }
+  }
+
+  // Matcher "greedy-nearest": binary-search to the radially-nearest outer sat, scan a ±20
+  // window, collect all candidates, sort by distance, and greedily assign shortest-first.
+  // The original matcher — simple and short-link-optimal locally, but can emit long
+  // cross-route links where rings are phase-shifted (what the monotonic matchers fixed).
+  _interAdaptedRings_greedyWindowed(rings, positions, linkCounts, finalLinks, targetDepartureAngle = 0, satellites, existingLinks) {
+    const circularRingNames = Object.keys(rings).filter(
+      (ringName) => ringName.startsWith("ring_adapt_") || ringName.startsWith("ring_circ_")
+    );
+    if (circularRingNames.length === 0) return;
+    const parseIndex = (name) => { const match = name.match(/_(\d+)$/); return match ? parseInt(match[1], 10) : -1; };
+    const ringList = circularRingNames
+      .map((name) => ({ name, index: parseIndex(name), radius: rings[name][0].a }))
+      .filter((r) => r.index >= 0);
+    ringList.sort((a, b) => a.index - b.index);
+    const AU_IN_KM = this.AU_IN_KM;
+    const ringSatellites = {};
+    ringList.forEach((ring) => {
+      ringSatellites[ring.name] = rings[ring.name]
+        .filter((sat) => sat.orbitalZone === "BETWEEN_EARTH_AND_MARS")
+        .slice()
+        .sort((a, b) => a.position.solarAngle - b.position.solarAngle);
+    });
+    const ringMaxLinks = new Map();
+    ringList.forEach((ring) => { ringMaxLinks.set(ring.name, this.simLinkBudget.getMaxLinksPerRing(ring.name)); });
+    ringList.forEach((ring) => {
+      const maxLinks = ringMaxLinks.get(ring.name);
+      if (maxLinks !== 3) return;
+      ringSatellites[ring.name].forEach((sat, i) => { if (i % 2 === 0) sat.outwards = "premarked"; else sat.inwards = "premarked"; });
+    });
+    const normalizeAngle = (deg) => ((deg % 360) + 360) % 360;
+    const maxDistanceAU = this.simLinkBudget.maxDistanceAU;
+
+    for (let i = 0; i < ringList.length - 1; i++) {
+      const inner = ringList[i];
+      const outer = ringList[i + 1];
+      if (outer.index !== inner.index + 1) continue;
+      const innerSats = ringSatellites[inner.name];
+      const outerSats = ringSatellites[outer.name];
+      if (!innerSats.length || !outerSats.length) continue;
+      const outerAngles = outerSats.map((s) => s.position.solarAngle);
+      const rInner = inner.radius;
+      const rOuter = outer.radius;
+      const departureRad = (targetDepartureAngle * Math.PI) / 180;
+      const innerMaxLinks = ringMaxLinks.get(inner.name);
+      const outerMaxLinks = ringMaxLinks.get(outer.name);
+      const isFirstRing = inner.index === ringList[0].index;
+
+      const candidates = [];
+      for (let idx = 0; idx < innerSats.length; idx++) {
+        const innerSat = innerSats[idx];
+        const canConnectOut = isFirstRing && innerMaxLinks === 3 ? idx % 2 === 1 : linkCounts[innerSat.name] < innerMaxLinks;
+        if (!canConnectOut || innerSat.outwards !== null) continue;
+        const innerPos = positions[innerSat.name];
+        if (!innerPos) continue;
+        const distEst = rOuter - rInner;
+        const tanOffset = distEst * Math.tan(departureRad);
+        const angularOffsetRad = Math.atan2(tanOffset, rOuter);
+        const idealTargetSolarAngle = normalizeAngle(innerPos.solarAngle + (angularOffsetRad * 180) / Math.PI);
+        let oIdx = 0;
+        while (oIdx < outerAngles.length && outerAngles[oIdx] < idealTargetSolarAngle) oIdx++;
+        const OUTER_WINDOW = 20;
+        const oLen = outerSats.length;
+        for (let w = -OUTER_WINDOW; w <= OUTER_WINDOW; w++) {
+          const outerSat = outerSats[(((oIdx + w) % oLen) + oLen) % oLen];
+          if (outerSat.inwards !== null) continue;
+          if (linkCounts[outerSat.name] >= outerMaxLinks) continue;
+          const outerPos = positions[outerSat.name];
+          if (!outerPos) continue;
+          const distanceAU = this.calculateDistanceAU(innerPos, outerPos);
+          if (distanceAU > maxDistanceAU) continue;
+          if (this.isSolarBlinded(innerPos, outerPos)) continue;
+          const distanceKm = distanceAU * AU_IN_KM;
+          const gbps = this.calculateGbps(distanceKm);
+          candidates.push({ from: innerSat, to: outerSat, distanceAU, distanceKm, gbps });
+        }
+      }
+
+      candidates.sort((a, b) => a.distanceAU - b.distanceAU);
+
+      const used = new Set();
+      for (const { from, to, distanceAU, distanceKm, gbps } of candidates) {
+        if (used.has(from.name) || used.has(to.name)) continue;
+        if (linkCounts[from.name] >= innerMaxLinks) continue;
+        if (linkCounts[to.name] >= outerMaxLinks) continue;
+        if (from.outwards !== null || to.inwards !== null) continue;
+        const [fId, tId] = from.name < to.name ? [from.name, to.name] : [to.name, from.name];
+        const key = `${fId}-${tId}`;
+        if (existingLinks.has(key)) continue;
+        finalLinks.push({ fromId: fId, toId: tId, distanceAU, distanceKm, latencySeconds: this.calculateLatency(distanceKm), gbpsCapacity: gbps });
+        linkCounts[from.name]++;
+        linkCounts[to.name]++;
+        existingLinks.add(key);
+        from.outwards = to.name;
+        to.inwards = from.name;
+        used.add(from.name);
+        used.add(to.name);
       }
     }
   }
