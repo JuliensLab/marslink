@@ -1,6 +1,21 @@
 // simOrbits.js
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.6";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.28";
+
+/**
+ * Ecliptic longitude (deg) where Earth's and Mars's orbits are closest, used as the
+ * zero-reference for geometry sampling (the angle from which earth/mars offsets are
+ * measured). This is the heliocentric direction of the narrowest gap the relay rings
+ * must bridge — physically meaningful, unlike the old Mars-perihelion reference.
+ *
+ * Computed ONCE (offline, not at runtime) as the true minimum-distance point between
+ * the two orbits in 2-D (z dropped — orbits are near-coplanar) from the J2000 elements
+ * (Earth: p=102.85°, e=0.0167, a=1.00002; Mars: p=336.09°, e=0.0934, a=1.5236365) by
+ * brute-force min |r_Mars(L_m) − r_Earth(L_e)|. Result: Mars-side closest longitude
+ * ≈ 330.0° (Earth-side ≈ 329.75°, min gap ≈ 0.371 AU). Replaces the old reference,
+ * Mars's perihelion longitude (mars.p = 336.0882°). Recompute if the elements change.
+ */
+export const EARTH_MARS_CLOSEST_APPROACH_DEG = 330.0;
 
 /**
  * Computes heliocentric coordinates and rotation angles for an object based on its Keplerian orbital elements.

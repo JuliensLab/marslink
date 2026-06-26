@@ -1,6 +1,6 @@
 // slidersData.js
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.6";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.28";
 
 export const slidersData = {
   display: {
@@ -81,11 +81,11 @@ export const slidersData = {
       value: "",
       unit: "",
     },
-    "plane-nodes": {
+    "reference-lines": {
       type: "checkbox",
-      label: "Earth↔Mars plane nodes",
-      description: "Draw the line of nodes where Earth's and Mars's orbital planes intersect — a line through the Sun from Mars's orbit on one side to the other, in 2D and 3D.",
-      options: ["Show"],
+      label: "Reference lines",
+      description: "Draw reference direction lines through the Sun (ending on Mars's orbit), in 2D and 3D. • Closest approach: the Earth–Mars orbits' narrowest-gap direction — the geometry-sampling 0° reference. • Mars apsides: Mars's perihelion–aphelion (major-axis) line. • Plane nodes: where Earth's and Mars's orbital planes intersect. • Earth apsides: Earth's perihelion–aphelion line.",
+      options: ["Closest approach", "Mars apsides", "Plane nodes", "Earth apsides"],
       value: "",
       unit: "",
     },
@@ -208,10 +208,38 @@ export const slidersData = {
       type: "radio",
       label: "Inter-ring matcher",
       description:
-        "Algorithm pairing inner-ring sats with outer-ring sats for the concentric relay families' radial backbone. Kept selectable for comparison. linear-merge = current (forward-only merge); monotonic-wrap = forward pointer with wraparound; greedy-nearest = original shortest-distance greedy (can emit long cross-route links).",
-      options: ["linear-merge", "monotonic-wrap", "greedy-nearest"],
+        "Algorithm pairing inner-ring sats with outer-ring sats for the concentric relay families' radial backbone. Kept selectable for comparison. linear-merge = current (forward-only merge); monotonic-wrap = forward pointer with wraparound; greedy-nearest = original shortest-distance greedy (can emit long cross-route links); greedy-merge = greedy-nearest plus an island-merge repair — an augmenting-path pass that shifts the routes between an inner-rooted partial (stalagmite) and an outer-rooted partial (stalactite) so they meet into a complete Earth→Mars route, maximising the complete-route count while preserving greedy's existing routes; periapsis-chain / periapsis-radial = seed route at the Mars-periapsis angle then a parallel neighbour sweep using every satellite — the seed hop picks the nearest sat to the previous sat (chain) or to the periapsis angle itself (radial); max-throughput = pools all rings (routes may skip rings) and greedily packs the fattest node-disjoint Earth→Mars routes first to maximise aggregate Gbps (Σ capacity of each route's longest segment); logs its realised total vs. a max-flow upper bound to the console.",
+      options: ["linear-merge", "monotonic-wrap", "greedy-nearest", "greedy-merge", "periapsis-chain", "periapsis-radial", "max-throughput"],
       value: "linear-merge",
       unit: "",
+      updateLongTermScore: true,
+    },
+    "route-continuity": {
+      type: "checkbox",
+      label: "Route continuity",
+      description:
+        "Drop radial chains that aren't a complete Earth↔Mars route. A post-pass (after planet-attach, any concentric matcher) walks each chain and removes the ones missing the required end — including their Earth/Mars planet links — since island chains carry no Earth↔Mars flow; freed terminals fall through to the lattice/spare. Check both to keep only complete routes.",
+      options: ["Require inner link", "Require outer link"],
+      optionDescriptions: {
+        "Require inner link":
+          "Require a link toward the Earth (inner) side: remove every chain that does NOT reach the Earth ring (Mars-side stubs and floating chains). Also enforced inline during greedy-nearest (a sat links outward only if it has an inward feed; innermost ring exempt).",
+        "Require outer link":
+          "Require a link toward the Mars (outer) side: remove every chain that does NOT reach the Mars ring (Earth-side stubs and floating chains).",
+      },
+      value: "",
+      unit: "",
+      updateLongTermScore: true,
+    },
+    "greedy-merge-swap-degrees": {
+      label: "Island-merge swap",
+      description:
+        "greedy-merge matcher only: the maximum sun-angle (degrees) a fork-swap may span when joining a stalagmite to a stalactite. The repair only completes an island when it can be done by shifting a few adjacent roads within this angular window from the partial's tip; wider joins are left alone (so no long cross-links). 0 disables merging; larger merges more islands at the cost of wider lateral shifts.",
+      min: 0,
+      max: 30,
+      value: 3,
+      step: 0.5,
+      unit: "°",
+      scale: "linear",
       updateLongTermScore: true,
     },
   },
@@ -414,6 +442,42 @@ export const slidersData = {
       updateLongTermScore: true,
     },
   },
+  relay_type: {
+    selected: {
+      label: "Relay ring type",
+      type: "radio",
+      options: ["Adapted concentric", "Adapted eccentric", "Circular", "Eccentric"],
+      value: "Adapted concentric",
+      optionDescriptions: {
+        "Adapted concentric": "Nested rings between Earth and Mars; relay traffic crosses radially ring-to-ring. The ring count sets the relay capacity.",
+        "Adapted eccentric": "Ellipses tangent to both planet orbits; each ring relays Earth→Mars along its azimuthal loop. The ring count (with the in-ring rate) sets the relay capacity.",
+        "Circular": "Plain concentric circular rings; relay traffic crosses radially ring-to-ring. The ring count sets the relay capacity.",
+        "Eccentric": "Plain eccentric ellipses; relay traffic runs along each ring's azimuthal loop. The ring count (with the in-ring rate) sets the relay capacity.",
+      },
+      updateLongTermScore: true,
+    },
+    ringcount: {
+      label: "Relay ring count",
+      min: 0,
+      max: 100,
+      value: 26,
+      step: 1,
+      unit: "",
+      scale: "linear",
+      updateLongTermScore: true,
+    },
+    planet_sizing: {
+      type: "radio",
+      label: "Earth/Mars auto-size",
+      description:
+        "How the Earth & Mars in-ring worst-case rate (their 'Throughput in ring' sliders) is set from the live relay capacity shown on the Capacity card. Each planet ring is sized to HALF the relay capacity, because a planet injects at a single gateway and its ring carries the traffic two ways. " +
+        "'off': manual — set the Earth/Mars in-ring rate yourself. " +
+        "'auto': keep it locked to half the live relay capacity, re-tracking whenever the relay capacity changes.",
+      options: ["off", "auto"],
+      value: "auto",
+      unit: "",
+    },
+  },
   ring_earth: {
     "laser-ports-per-satellite": {
       label: "Laser Terminals per Satellite",
@@ -450,7 +514,7 @@ export const slidersData = {
       min: 0,
       max: 7,
       value: 1.7,
-      step: 0.05,
+      step: 0.005,
       unit: " Mbps",
       scale: "pow10",
       updateLongTermScore: true,
@@ -492,46 +556,9 @@ export const slidersData = {
       min: 0,
       max: 7,
       value: 1.7,
-      step: 0.05,
+      step: 0.005,
       unit: " Mbps",
       scale: "pow10",
-      updateLongTermScore: true,
-    },
-  },
-  relay_type: {
-    requiredgbps: {
-      label: "Required throughput",
-      description:
-        "Total Earth↔Mars capacity the constellation is sized for. Drives the Earth/Mars in-ring worst-case rate (= half this), and — per relay type — either the ring count (concentric: throughput ∝ ring count³) or the in-ring rate (eccentric: rate = throughput / (2 × ring count), with ring count set separately for coverage/latency).",
-      min: -1,
-      max: 5,
-      value: 2,
-      step: 0.05,
-      unit: " Gbps",
-      scale: "pow10",
-      updateLongTermScore: true,
-    },
-    selected: {
-      label: "Relay ring type",
-      type: "radio",
-      options: ["Adapted concentric", "Adapted eccentric", "Circular", "Eccentric"],
-      value: "Adapted concentric",
-      optionDescriptions: {
-        "Adapted concentric": "Nested rings between Earth and Mars; relay traffic crosses radially ring-to-ring. Ring count is derived from the required throughput.",
-        "Adapted eccentric": "Ellipses tangent to both planet orbits; each ring relays Earth→Mars along its azimuthal loop. Ring count is a coverage/latency knob; the in-ring rate carries the throughput.",
-        "Circular": "Plain concentric circular rings; relay traffic crosses radially ring-to-ring. Ring count is derived from the required throughput.",
-        "Eccentric": "Plain eccentric ellipses; relay traffic runs along each ring's azimuthal loop. Ring count is a coverage/latency knob; the in-ring rate carries the throughput.",
-      },
-      updateLongTermScore: true,
-    },
-    ringcount: {
-      label: "Relay ring count",
-      min: 0,
-      max: 100,
-      value: 26,
-      step: 1,
-      unit: "",
-      scale: "linear",
       updateLongTermScore: true,
     },
   },
@@ -704,10 +731,20 @@ export const slidersData = {
       label: "Laser Terminals per Satellite",
       min: 2,
       max: 10,
-      value: 2,
+      value: 5,
       step: 1,
       unit: " ports",
       scale: "linear",
+      updateLongTermScore: true,
+    },
+    lattice: {
+      type: "radio",
+      label: "Circular lattice",
+      description:
+        "How many laser terminals each satellite spends on intra-ring (azimuthal) links, on top of the radial backbone. None = all spare terminals go to spacecraft access; Half = one circular link per sat (a matching); Full = a complete azimuthal ring (two links). Lowering it frees terminals for spacecraft to attach to.",
+      options: ["No circular connections", "Half lattice (1 laser terminal)", "Full lattice (2 laser terminals)"],
+      value: "Full lattice (2 laser terminals)",
+      unit: "",
       updateLongTermScore: true,
     },
     "flow-solver": {
@@ -756,13 +793,15 @@ export const slidersData = {
       updateLongTermScore: true,
       displayCondition: { slider: "auto_route_count", value: "no" },
     },
-    linear_satcount_increase: {
-      label: "Satcount increase with AU distance",
+    "satcount-density-routes": {
+      label: "Sat count: density → routes",
+      description:
+        "How outer-ring satellite counts scale. 0% = fixed azimuthal density: satCount grows with radius (satCount ∝ a) so inter-sat spacing stays constant and outer rings carry more sats. 100% = one sat per route: every ring carries exactly the route count, giving clean 1:1 radial routes with no surplus. The innermost ring always carries the route count regardless. (Replaces the old linear satcount-increase ramp.)",
       min: 0,
-      max: 2,
-      value: 0.21,
-      step: 0.01,
-      unit: "",
+      max: 100,
+      value: 100,
+      step: 1,
+      unit: " %",
       scale: "linear",
       updateLongTermScore: true,
     },
@@ -853,7 +892,7 @@ export const slidersData = {
       unit: " %",
       scale: "linear",
       updateLongTermScore: true,
-      description: "Shifts the Mars-side endpoint outward (+) or inward (−) by this % of Mars's anchor radius. 0 = no offset.",
+      description: "Shifts the Mars-side endpoint inward (+, into the relay area) or outward (−) by this % of Mars's anchor radius. 0 = no offset.",
     },
     "band-0-pct": {
       label: "Density · band 1 (near Earth)",

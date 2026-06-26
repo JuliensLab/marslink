@@ -1,7 +1,7 @@
 // simSatellites.js
 
-import { helioCoords, positionFromSolarAngle } from "./simOrbits.js?v=4.6";
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.6";
+import { helioCoords, positionFromSolarAngle } from "./simOrbits.js?v=4.28";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.28";
 
 export class SimSatellites {
   constructor(simLinkBudget, planets) {
@@ -306,7 +306,12 @@ export class SimSatellites {
     }
     if (routeCount == 0) return [];
 
-    const linearSatCountIncrease = uiConfig["adapted_rings.linear_satcount_increase"];
+    // Outer-ring sat-count scaling: 0 = fixed azimuthal density (satCount ∝ radius),
+    // 1 = one sat per route on every ring (constant count = routeCount, clean radial routes).
+    const satDensityToRoutes = (() => {
+      const v = uiConfig["adapted_rings.satcount-density-routes"];
+      return Math.min(1, Math.max(0, (typeof v === "number" ? v : 100) / 100));
+    })();
     // Orbital-plane blends (RAAN and arg-perigee, independent): 0% = Earth,
     // 100% = Mars. Carried on the config so any consumer (main display +
     // workers) applies them.
@@ -337,10 +342,13 @@ export class SimSatellites {
     // Endpoint distances: the planet's chosen radius (perihelion a(1-e) / a /
     // apohelion a(1+e)) nudged by the side offset. These sit at ringId 0 and
     // ringCount-1, which the loop skips — keeping the rings between the planet rings.
+    // Both offsets are signed so + moves the endpoint INTO the relay area: the Earth
+    // (inner) endpoint outward (1 + off), the Mars (outer) endpoint inward (1 − off).
+    // 0 = endpoint sits on the planet's orbit.
     const planetRadius = (p, anchor) =>
       anchor === "perihelion" ? p.a * (1 - p.e) : anchor === "apohelion" ? p.a * (1 + p.e) : p.a;
     const R_in = planetRadius(this.getEarth(), earthAnchor) * (1 + earthOffset / 100);
-    const R_out = planetRadius(this.getMars(), marsAnchor) * (1 + marsOffset / 100);
+    const R_out = planetRadius(this.getMars(), marsAnchor) * (1 - marsOffset / 100);
 
     // Distribution equalizer: the ring-density curve across the Earth→Mars span is
     // defined by control anchors {x∈[0,1], y≥0}, linearly interpolated (held flat
@@ -394,10 +402,14 @@ export class SimSatellites {
 
     const startId = removeFirstRing ? 1 : 0;
     const endId = removeLastRing ? ringCount - 2 : ringCount - 1;
+    // Anchor the density↔routes blend to the innermost active ring (which always carries
+    // exactly routeCount): satCount = routeCount·[1 + (1−t)·(a_ring/a_inner − 1)]. t=0 holds
+    // azimuthal spacing constant (satCount ∝ a); t=1 gives routeCount on every ring.
+    const aInner = solveA(warpR(startId / (ringCount - 1))) || 1e-9;
     for (let ringId = startId; ringId <= endId; ringId++) {
       const ringType = "Adapted";
       const satDistanceSunAu = solveA(warpR(ringId / (ringCount - 1)));
-      let satCount = Math.ceil(routeCount * (1 + (linearSatCountIncrease * ringId) / ringCount));
+      let satCount = Math.ceil(routeCount * (1 + (1 - satDensityToRoutes) * (satDistanceSunAu / aInner - 1)));
       satellitesConfig.push({
         satCount: satCount,
         satDistanceSun: satDistanceSunAu,

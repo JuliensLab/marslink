@@ -1,10 +1,12 @@
 // carModel.js
 
-import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js?v=4.6";
-import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js?v=4.6";
-import { RGBELoader } from "three/addons/loaders/RGBELoader.js?v=4.6";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js?v=4.28";
+import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js?v=4.28";
+import { RGBELoader } from "three/addons/loaders/RGBELoader.js?v=4.28";
 
-// Function to load and create a car model
+// Function to load and create a car model. `scaleFactor` may be a number OR a getter
+// () => number, read when the (async) model finishes loading — so the roadster picks up
+// its size factor even though it loads after setRoadsterSizeFactor() has already run.
 export function createCarModel(THREE, planetData, scene, planets, scaleFactor = 1) {
   const dracoLoader = new DRACOLoader();
   dracoLoader.setDecoderPath("./scripts/imported/draco/");
@@ -41,8 +43,10 @@ export function createCarModel(THREE, planetData, scene, planets, scaleFactor = 
     });
     carModel.getObjectByName("glass").material = glassMaterial;
 
-    // Adjust scaling and position for the solar system
-    const scale = 0.001 * scaleFactor;
+    // Adjust scaling and position for the solar system. Read the factor NOW (the model
+    // loaded async) so a roadster size set before the model existed still applies.
+    const factor = typeof scaleFactor === "function" ? scaleFactor() : scaleFactor;
+    const scale = 0.001 * factor;
     carModel.scale.set(scale, scale, scale);
     carModel.position.set(0, 0, 0);
 

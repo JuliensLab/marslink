@@ -1,6 +1,6 @@
 // simLinkBudget.js
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.6";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.28";
 
 export class SimLinkBudget {
   constructor() {
@@ -63,10 +63,35 @@ export class SimLinkBudget {
     // kept selectable for comparison (see TopologyBuilder.interAdaptedRings).
     this.interRingMatcher = technologyConfig["simulation.interring-matcher"] || "linear-merge";
 
+    // "Route continuity" — a single multi-checkbox carrying both prune toggles (comma-joined).
+    //  • Require inner link (default on): drop chains not reaching the Earth ring; also enforced
+    //    inline by greedy-nearest (a sat links outward only if it has an inward feed).
+    //  • Require outer link (default off): drop chains not reaching the Mars ring.
+    // pruneIncompleteRadialChains reads both; greedy-nearest's inline pass reads inner only.
+    const routeContinuity = String(technologyConfig["simulation.route-continuity"] ?? "Require inner link");
+    this.greedyRadialContinuity = routeContinuity.includes("Require inner link");
+    this.greedyRequireOuterLink = routeContinuity.includes("Require outer link");
+
+    // "greedy-merge" matcher: max sun-angle (degrees) the island-merge fork-swap may span from a
+    // stalagmite tip. Larger = merges more islands but allows wider lateral shifts; default 3°.
+    const swapDeg = parseFloat(technologyConfig["simulation.greedy-merge-swap-degrees"]);
+    this.greedyMergeSwapDegrees = Number.isFinite(swapDeg) && swapDeg >= 0 ? swapDeg : 3;
+
     // Adapted-eccentric "cross-ring links" toggle: link the nearest sat on each of
     // two rings where their tracks cross in the xy plane, using the spare radial
     // laser. Default on (only affects topologies that actually use eccentric rings).
     this.eccentricCrossRingLinks = technologyConfig["adapted_eccentric_rings.cross-ring-links"] !== "no";
+
+    // Adapted-concentric "Circular lattice": caps how many laser terminals each sat
+    // spends on intra-ring (azimuthal) links — 0 none, 1 half lattice (matching), 2 full
+    // ring. Built on top of the radial backbone (allocated first); terminals left after
+    // radial + lattice are the spare ports spacecraft can attach to. Lowering it below
+    // the greedy max frees ports for ship access at a fixed terminal count. Default Full
+    // (= the prior greedy-fill behaviour). Mapped from the radio label to a count.
+    {
+      const opt = technologyConfig["adapted_rings.lattice"] || "Full lattice (2 laser terminals)";
+      this.adaptedLattice = opt.startsWith("No") ? 0 : opt.startsWith("Half") ? 1 : 2;
+    }
 
     // Invalidate Gbps cache when tech config changes
     this._gbpsCache = new Map();

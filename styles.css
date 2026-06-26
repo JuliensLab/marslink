@@ -1080,6 +1080,45 @@ select.slider {
   white-space: nowrap;
 }
 
+/* Fleet-link distribution card */
+.fl-legend {
+  font-size: 10px;
+  color: var(--text-3);
+  letter-spacing: 0.02em;
+  margin: 2px 0 4px;
+}
+.fl-group-title {
+  font-size: var(--fs-xs);
+  color: var(--text-1);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  margin: 8px 0 2px;
+}
+.fl-stat {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-1);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+}
+.fl-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  flex: 0 0 auto;
+  transform: translateY(1px);
+}
+.fl-name { color: var(--text-2); width: 36px; flex: 0 0 auto; }
+.fl-vals {
+  color: var(--text-1);
+  font-variant-numeric: tabular-nums;
+  margin-left: auto;
+  white-space: nowrap;
+}
+.fl-vals b { color: var(--text-0); font-weight: 600; }
+.fl-sep { color: var(--text-3); }
+.fl-chart { height: 116px; margin-top: 4px; }
+
 /* Colour-scale legend (Live metrics) */
 .legend-scale {
   display: flex;
@@ -1148,6 +1187,20 @@ select.slider {
   border-bottom: 1px solid var(--border-1);
 }
 .sens-cat-header:first-of-type { margin-top: var(--s-2); }
+
+/* Sensitivity: Simple / Optimized sub-mode segmented toggle. */
+.sens-mode-btn {
+  padding: 6px 16px;
+  font-size: var(--fs-md);
+  color: var(--text-1);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.sens-mode-btn + .sens-mode-btn { border-left: 1px solid var(--border-2, #333); }
+.sens-mode-btn:hover { background: rgba(255, 255, 255, 0.06); color: var(--text-0); }
+.sens-mode-btn.active { background: var(--accent-dim); color: var(--accent-hot); }
 
 /* Sensitivity: toggle for the collapsible breakdown charts in a category. */
 .sens-charts-toggle {
@@ -1267,10 +1320,6 @@ select.slider {
 .recalc-status.phase-links .recalc-bar-fill { background: var(--accent); }
 .recalc-status.phase-flow .recalc-dot { background: var(--warn); }
 .recalc-status.phase-flow .recalc-bar-fill { background: var(--warn); }
-/* Auto-sizer convergence ("tuning") */
-.recalc-status.phase-tuning .recalc-label { color: var(--text-1); }
-.recalc-status.phase-tuning .recalc-dot { background: var(--accent-hot); animation: recalc-pulse 0.8s ease-in-out infinite; }
-.recalc-status.phase-tuning .recalc-bar-fill { background: var(--accent-hot); }
 /* Background prefetch: quiet, no bar */
 .recalc-status.phase-prefetch { color: var(--text-3); }
 .recalc-status.phase-prefetch .recalc-dot { background: var(--text-3); animation: recalc-pulse 1.6s ease-in-out infinite; }

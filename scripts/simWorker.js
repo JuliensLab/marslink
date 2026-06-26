@@ -9,13 +9,14 @@
 // Loaded as an ES module worker:
 //   new Worker(new URL("./simWorker.js", import.meta.url), { type: "module" })
 
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.6";
-import { SimSatellites } from "./simSatellites.js?v=4.6";
-import { SimLinkBudget } from "./simLinkBudget.js?v=4.6";
-import { SimNetwork } from "./simNetwork.js?v=4.6";
-import { SimDeployment } from "./simDeployment.js?v=4.6";
-import { SimMissionValidator } from "./simMissionValidator.js?v=4.6";
-import { minOf } from "./simMath.js?v=4.6";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.28";
+import { SimSatellites } from "./simSatellites.js?v=4.28";
+import { SimLinkBudget } from "./simLinkBudget.js?v=4.28";
+import { SimNetwork } from "./simNetwork.js?v=4.28";
+import { SimDeployment } from "./simDeployment.js?v=4.28";
+import { SimMissionValidator } from "./simMissionValidator.js?v=4.28";
+import { minOf } from "./simMath.js?v=4.28";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.28";
 
 // --- State (initialized lazily on the first compute) ---
 let simLinkBudget = null;
@@ -247,6 +248,22 @@ function runPipeline({ requestId, windowIdx, configEpoch, uiConfig, satellitesCo
 }
 
 /**
+ * Geometry-sampling mode (optimizer + sensitivity "geometry" planet placement):
+ * relocate Earth & Mars to explicit orbital longitudes, decoupled from `date`. Angles
+ * are measured from the Earth–Mars closest-approach direction (the narrowest part of
+ * the gap the relay must bridge) — EARTH_MARS_CLOSEST_APPROACH_DEG — NOT Mars's
+ * perihelion as before. The relay satellites stay at `date` (a fixed reference phase
+ * set by the caller); the dense rings are ~rotation-invariant, so the score reflects
+ * the planet geometry. No-op unless both offsets are provided.
+ */
+function applyGeometryOffsets(earthAngleOffset, marsAngleOffset) {
+  if (earthAngleOffset == null || marsAngleOffset == null) return;
+  const ref = EARTH_MARS_CLOSEST_APPROACH_DEG;
+  simSolarSystem.setPlanetSolarAngle("Earth", ref + earthAngleOffset);
+  simSolarSystem.setPlanetSolarAngle("Mars", ref + marsAngleOffset);
+}
+
+/**
  * Run ONE full sensitivity scenario end-to-end in the worker: the iterative
  * ring-sizing feedback loop followed by the flow/latency compute. This mirrors
  * the former main-thread sweep (simUi feedback loop + SimMain.longTermRun) so a
@@ -261,7 +278,7 @@ function runPipeline({ requestId, windowIdx, configEpoch, uiConfig, satellitesCo
  * @param {number} msg.flowCalctimeMs    max-flow time budget (longTermRun uses 20000)
  * @param {number} msg.maxIterations     feedback-loop cap (100, matching the serial path)
  */
-function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flowCalctimeMs = 20000, maxIterations = 15, sizingBudgetMs = 6000, objectiveOnly = false }) {
+function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flowCalctimeMs = 20000, maxIterations = 15, sizingBudgetMs = 6000, objectiveOnly = false, earthAngleOffset = null, marsAngleOffset = null }) {
   ensureState();
   const t0 = performance.now();
   const date = new Date(simDate);
@@ -348,7 +365,9 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
   // mission profile, cost trees, max-flow and latencies — just build the topology
   // once and return the relay throughput. Orders of magnitude cheaper per eval.
   if (objectiveOnly) {
-    const planets = Object.values(simSolarSystem.updatePlanetsPositions(date));
+    const planetsArr = simSolarSystem.updatePlanetsPositions(date);
+    applyGeometryOffsets(earthAngleOffset, marsAngleOffset);
+    const planets = Object.values(planetsArr);
     const satellites = simSatellites.updateSatellitesPositions(date);
     simNetwork.getPossibleLinks(planets, satellites);
     const rs = simNetwork.routeSummary;
@@ -385,6 +404,7 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
 
   // 3. Final scenario compute (mirrors SimMain.longTermRun for a single date).
   const planetsObj = simSolarSystem.updatePlanetsPositions(date);
+  applyGeometryOffsets(earthAngleOffset, marsAngleOffset);
   const planets = Object.values(planetsObj);
   const satellites = simSatellites.updateSatellitesPositions(date);
   const satellitesCount = satellites.length;

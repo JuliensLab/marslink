@@ -19,13 +19,18 @@ export class SensitivityPool {
    *   estimated heap stays under this budget. Defaults to ~60% of the cage,
    *   leaving headroom for the main thread, result deserialization, GC lag, and
    *   per-scenario estimate error.
+   * @param {number} [opts.memBudgetPct=60] budget as a percentage of the heap cage,
+   *   used when memBudgetMB is not given.
    */
   constructor(size, opts = {}) {
     const cores = (typeof navigator !== "undefined" && navigator.hardwareConcurrency) || 4;
     this.size = Math.max(1, Math.min(size || Math.floor(cores / 2), cores));
     const heapLimitMB = (typeof performance !== "undefined" && performance.memory)
       ? Math.round(performance.memory.jsHeapSizeLimit / 1048576) : 4096;
-    this.memBudgetMB = opts.memBudgetMB || Math.floor(heapLimitMB * 0.6);
+    // Budget as a fraction of the shared heap cage (default 60%); memBudgetMB, if
+    // given, overrides with an absolute cap.
+    const frac = opts.memBudgetPct > 0 ? Math.min(100, opts.memBudgetPct) / 100 : 0.6;
+    this.memBudgetMB = opts.memBudgetMB || Math.floor(heapLimitMB * frac);
     this.inFlightMB = 0;
     this.queue = [];
     this.pending = new Map(); // requestId -> entry
@@ -36,7 +41,7 @@ export class SensitivityPool {
     // utilization: ({ active, size, queued, pending, inFlightMB, memBudgetMB }) => void
     this.onActivity = null;
     for (let i = 0; i < this.size; i++) {
-      const worker = new Worker(new URL("./simWorker.js?v=4.6", import.meta.url), { type: "module" });
+      const worker = new Worker(new URL("./simWorker.js?v=4.28", import.meta.url), { type: "module" });
       const slot = { worker, busy: false };
       worker.onmessage = (e) => this._onMessage(slot, e.data);
       worker.onerror = (e) => this._onWorkerError(slot, e);

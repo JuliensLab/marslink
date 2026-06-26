@@ -1,6 +1,6 @@
 // simSolarSystem.js
 
-import { helioCoords } from "./simOrbits.js?v=4.6";
+import { helioCoords, positionFromSolarAngle } from "./simOrbits.js?v=4.28";
 
 export class SimSolarSystem {
   constructor() {
@@ -214,5 +214,22 @@ export class SimSolarSystem {
     for (const [name, object] of Object.entries(this.solarSystemData.planets))
       this.solarSystemData.planets[name].position = helioCoords(object, simDaysSinceStart);
     return this.solarSystemData.planets;
+  }
+
+  /**
+   * Relocate a named planet to an explicit true ecliptic longitude (degrees),
+   * decoupled from any date — used by the optimizer's geometry-sampling mode to
+   * place Earth/Mars on their orbits by geometry rather than by time. Overwrites
+   * .position {x,y,z,r,solarAngle} (preserving any other fields); call after
+   * updatePlanetsPositions so the rest of .position is already populated.
+   * @returns {object|null} the planet object, or null if no such planet.
+   */
+  setPlanetSolarAngle(name, solarAngleDeg) {
+    const planet = this.solarSystemData.planets.find((p) => p.name === name);
+    if (!planet) return null;
+    const L = ((solarAngleDeg % 360) + 360) % 360;
+    const pos = positionFromSolarAngle(planet, L);
+    planet.position = { ...(planet.position || {}), x: pos.x, y: pos.y, z: pos.z, r: pos.r, solarAngle: L };
+    return planet;
   }
 }

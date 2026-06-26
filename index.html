@@ -24,8 +24,8 @@
   <!-- Inline SVG favicon — no extra request, scales nicely. Same ◉ as the brand. -->
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230b0f1a'/%3E%3Ccircle cx='16' cy='16' r='8' fill='none' stroke='%23ff6b35' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='3' fill='%23ff6b35'/%3E%3C/svg%3E">
 
-  <script src="scripts/imported/chart/chart.js?v=4.6"></script>
-  <link rel="stylesheet" href="styles.css?v=4.6">
+  <script src="scripts/imported/chart/chart.js?v=4.28"></script>
+  <link rel="stylesheet" href="styles.css?v=4.28">
 </head>
 
 <body>
@@ -50,6 +50,9 @@
       </button>
       <button class="mode-tab" data-mode="sensitivity" role="tab">
         <span class="tab-icon" aria-hidden="true">◫</span> Sensitivity
+      </button>
+      <button class="mode-tab" data-mode="archive" role="tab">
+        <span class="tab-icon" aria-hidden="true">📦</span> Archive
       </button>
     </nav>
 
@@ -127,13 +130,6 @@
           <span class="search-icon" aria-hidden="true">⌕</span>
           <input type="search" id="slider-search" placeholder="Filter parameters…" autocomplete="off">
         </div>
-        <div class="presets">
-          <select id="presets-select" aria-label="Presets">
-            <option value="">Presets…</option>
-          </select>
-          <button id="save-preset-btn" class="icon-btn" title="Save current as preset">＋</button>
-          <button id="delete-preset-btn" class="icon-btn" title="Delete selected preset">－</button>
-        </div>
       </div>
 
       <div class="drawer-body" id="sliders-container"></div>
@@ -149,8 +145,8 @@
         </div>
       </header>
       <div class="drawer-body" style="padding: var(--s-4);">
-        <p class="muted">
-          Sweep any combination of ring count, laser tech and launch date. Check a metric to enable it; unchecked metrics use the current config as-is. Earth/Mars rings auto-size via simple config logic.
+        <p class="muted" id="sens-intro">
+          Sweep ring count, laser tech and planet geometry. Check a metric to enable it; unchecked metrics use the current config as-is. Earth/Mars rings auto-size via simple config logic.
         </p>
 
         <div class="form-group">
@@ -163,13 +159,13 @@
             <span class="muted">to</span>
             <input type="number" id="sens-ring-end" value="50" min="1" max="100" style="width:60px;">
             <span class="muted">step</span>
-            <input type="number" id="sens-ring-step" value="5" min="1" max="50" style="width:50px;">
+            <input type="number" id="sens-ring-step" value="10" min="1" max="50" style="width:50px;">
           </div>
         </div>
 
         <div class="form-group">
           <label>
-            <input type="checkbox" id="sens-tech-enable" checked>
+            <input type="checkbox" id="sens-tech-enable">
             Laser tech improvement
           </label>
           <div class="sens-row" style="display:flex; gap:var(--s-2); align-items:center;">
@@ -186,21 +182,30 @@
         </div>
 
         <div class="form-group">
-          <label>
-            <input type="checkbox" id="sens-date-enable">
-            Launch date
-          </label>
-          <div class="sens-row" style="display:flex; gap:var(--s-2); align-items:center; flex-wrap:wrap;">
-            <input type="date" id="sens-date-start" value="2030-01-01">
-            <span class="muted">to</span>
-            <input type="date" id="sens-date-end" value="2030-12-31">
-            <span class="muted">step</span>
-            <input type="number" id="sens-date-step" value="30" min="1" max="3650" style="width:60px;">
-            <span class="muted">days</span>
+          <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
+            <span style="font-weight:600;">Planet geometry</span>
+            <select id="sens-geom-mode" style="width:auto;" title="How Earth & Mars are placed for each scenario. 'Current date' uses real ephemeris at the current sim date (one scenario). 'Geometry ×4 / ×16' place the planets at orbital longitudes measured from the Earth–Mars closest-approach direction, decoupled from date (the relay sats stay at a fixed phase).">
+              <option value="current" selected>Current date</option>
+              <option value="geometry-4">Geometry ×4</option>
+              <option value="geometry-16">Geometry ×16</option>
+            </select>
+            <button type="button" id="sens-geom-info" class="icon-btn" aria-expanded="false" title="Explain the geometry modes" style="line-height:1; padding:2px 6px;">&#9432;</button>
           </div>
+          <div id="sens-geom-help" hidden style="margin:4px 0 8px; padding:8px; border:1px solid var(--border-2,#333); border-radius:6px; background:var(--accent-dim,rgba(255,255,255,0.02));"></div>
         </div>
 
-        <div class="form-group" style="margin-top:var(--s-2);">
+        <div class="sens-mode-toggle" role="tablist" style="display:flex; margin:var(--s-3) 0; border:1px solid var(--border-2,#333); border-radius:6px; overflow:hidden; width:fit-content;">
+          <button type="button" id="sens-mode-simple" class="sens-mode-btn active" data-mode="simple" title="Fast parallel sweep across worker threads.">Simple</button>
+          <button type="button" id="sens-mode-optimized" class="sens-mode-btn" data-mode="optimized" title="Run the curve optimizer for each scenario (one at a time), resize Earth/Mars, and archive each result.">Optimized</button>
+        </div>
+
+        <div class="form-group" id="sens-opt-controls" style="display:none;">
+          <label style="display:flex; align-items:center; gap:6px;"><input type="checkbox" id="opt-reset" checked> Reset selected curves to default each step</label>
+          <label style="display:flex; align-items:center; gap:6px;"><input type="checkbox" id="opt-archive" checked> Add each result to the archive</label>
+          <div class="muted" style="font-size:11px; margin-top:4px;">Optimizer depth (evals / points / geoms) is configured in the Adapted rings → Optimize panel. Optimized mode runs one scenario at a time.</div>
+        </div>
+
+        <div class="form-group" id="sens-worker-group" style="margin-top:var(--s-2);">
           <div class="sens-row" style="display:flex; gap:var(--s-2); align-items:center;">
             <span class="muted">Worker threads</span>
             <input type="number" id="sens-worker-count" value="0" min="1" max="64" style="width:50px;" title="Parallel workers for the sweep (ignored when displaying each step)">
@@ -260,6 +265,15 @@
           </div>
         </div>
       </div>
+    </div>
+
+    <!-- Archive pane -->
+    <div id="archive-pane" class="drawer-pane" hidden>
+      <header class="drawer-header">
+        <h2>Archive</h2>
+        <button class="icon-btn drawer-close" data-close-drawer aria-label="Close">×</button>
+      </header>
+      <div class="drawer-body" id="archive-pane-body" style="padding: var(--s-4);"></div>
     </div>
 
   </section>
@@ -349,7 +363,7 @@
       }
     }
   </script>
-  <script type="module" src="scripts/simMain.js?v=4.6"></script>
+  <script type="module" src="scripts/simMain.js?v=4.28"></script>
 </body>
 
 </html>

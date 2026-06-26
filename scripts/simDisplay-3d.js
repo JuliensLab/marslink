@@ -1,14 +1,14 @@
 // simDisplay-3d.js
 
 import * as THREE from "three";
-import { OrbitControls } from "three/addons/controls/OrbitControls.js?v=4.6";
-import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js?v=4.6";
-import { RenderPass } from "three/addons/postprocessing/RenderPass.js?v=4.6";
-import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js?v=4.6";
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.6";
-import { createCarModel } from "./modelCar.js?v=4.6";
-import { positionFromSolarAngle } from "./simOrbits.js?v=4.6";
-import { stationKeepingAccel, THRUST_BINS, satSchemeT, rampHex, OVER_BUDGET_HEX, isThrustScheme, satStationKeeping, satTotalProp } from "./simStationKeeping.js?v=4.6";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js?v=4.28";
+import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js?v=4.28";
+import { RenderPass } from "three/addons/postprocessing/RenderPass.js?v=4.28";
+import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js?v=4.28";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.28";
+import { createCarModel } from "./modelCar.js?v=4.28";
+import { positionFromSolarAngle } from "./simOrbits.js?v=4.28";
+import { stationKeepingAccel, THRUST_BINS, satSchemeT, rampHex, OVER_BUDGET_HEX, isThrustScheme, satStationKeeping, satTotalProp } from "./simStationKeeping.js?v=4.28";
 
 /**
  * Converts astronomical units (AU) to 3D units using a scale factor.
@@ -17,7 +17,7 @@ import { stationKeepingAccel, THRUST_BINS, satSchemeT, rampHex, OVER_BUDGET_HEX,
  * @returns {number} Distance in 3D units
  */
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.6";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.28";
 
 export let sunScaleFactor = SIM_CONSTANTS.SUN_SCALE_FACTOR;
 export let planetScaleFactor = SIM_CONSTANTS.PLANET_SCALE_FACTOR;
@@ -64,7 +64,7 @@ export class SimDisplay {
     this.skCfg = { F: 0.17, tm: 15, maxN: 64, n: 5, isp: 2500, capacity: 1500 };
     this.satLabelMode = false; // per-satellite labels (3D rendering deferred; 2D implemented)
     this.planetOrbitsGroup = null;
-    this.planeNodesGroup = null;
+    this.referenceLinesGroup = null;
     this.satThrusterMax = 1;   // fleet max thruster count (Thrusters colour scale)
     this.satLaserMax = 1;      // fleet max laser terminals (Lasers colour scale)
     this.satLaserValues = [1];
@@ -267,8 +267,10 @@ export class SimDisplay {
         this.scene.add(planetMesh);
         this.planets[planetData.name] = planetMesh;
       } else if (planetData.shape === "car") {
-        // Use the helper function to create the car model
-        createCarModel(THREE, planetData, this.scene, this.planets, planetScaleFactor);
+        // Use the helper function to create the car model. Pass a getter for the roadster's
+        // OWN size factor (not the planet factor) — read when the async model finishes, so
+        // it lands correctly even if loadPlanets re-runs after setRoadsterSizeFactor().
+        createCarModel(THREE, planetData, this.scene, this.planets, () => this.roadsterSizeFactor);
       }
     }
   }
@@ -314,32 +316,37 @@ export class SimDisplay {
     this.planetOrbitsGroup.visible = on;
   }
 
-  // Earth↔Mars line of nodes: a line through the Sun from Mars's orbit at one node
-  // longitude to Mars's orbit at the other (180° away). Same ecliptic→world mapping
-  // (x, z, −y) as the planet meshes/orbits.
-  buildPlaneNodes(n1, n2) {
-    if (this.planeNodesGroup) {
-      this.scene.remove(this.planeNodesGroup);
-      this.planeNodesGroup.traverse((o) => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
-      this.planeNodesGroup = null;
+  // Reference lines through the Sun, each from Mars's orbit at one longitude to the
+  // other (180° away). Same ecliptic→world mapping (x, z, −y) as the planet meshes/orbits.
+  // `list` = enabled option labels; `angles` = { "<label>": {n1, n2} } for all options.
+  buildReferenceLines(list, angles) {
+    const COLORS = { "Closest approach": 0x5dd6a0, "Mars apsides": 0x4fc3d8, "Plane nodes": 0xd8b85a, "Earth apsides": 0xe0795a };
+    if (this.referenceLinesGroup) {
+      this.scene.remove(this.referenceLinesGroup);
+      this.referenceLinesGroup.traverse((o) => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
+      this.referenceLinesGroup = null;
     }
     const group = new THREE.Group();
     group.visible = false;
     const mars = this.solarSystemData.planets.find((p) => p.name === "Mars");
     if (mars) {
       const toWorld = (ang) => { const p = positionFromSolarAngle(mars, ang); return new THREE.Vector3(auTo3D(p.x), auTo3D(p.z), -auTo3D(p.y)); };
-      const mat = new THREE.LineBasicMaterial({ color: 0xd8b85a, transparent: true, opacity: 0.85 });
-      const pts = [toWorld(n1), new THREE.Vector3(0, 0, 0), toWorld(n2)];
-      group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), mat));
+      for (const key of list) {
+        const ang = angles && angles[key], col = COLORS[key];
+        if (!ang || col == null) continue;
+        const mat = new THREE.LineBasicMaterial({ color: col, transparent: true, opacity: 0.85 });
+        const pts = [toWorld(ang.n1), new THREE.Vector3(0, 0, 0), toWorld(ang.n2)];
+        group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), mat));
+      }
     }
-    this.planeNodesGroup = group;
+    this.referenceLinesGroup = group;
     this.scene.add(group);
   }
 
-  setPlaneNodes(value, n1, n2) {
-    const on = Array.isArray(value) ? value.length > 0 : !!(value && String(value).length);
-    this.buildPlaneNodes(n1, n2);
-    this.planeNodesGroup.visible = on;
+  setReferenceLines(value, angles) {
+    const list = Array.isArray(value) ? value : String(value || "").split(",").map((s) => s.trim()).filter(Boolean);
+    this.buildReferenceLines(list, angles || {});
+    this.referenceLinesGroup.visible = list.length > 0;
   }
 
   setSatLabelMode(on) {
@@ -664,6 +671,195 @@ export class SimDisplay {
 
   updatePossibleLinks(links) {
     this.possibleLinks = links;
+  }
+
+  // ── Spacecraft-flight overlay (transfer arcs + extension links + ship markers) ──
+  // Lazily create the reusable scene objects: a Points cloud for ships (updated in
+  // place each frame), a LineSegments buffer for extension links (in place), and a
+  // Group of Lines for the transfer arcs (rebuilt only when the in-transit set changes).
+  _initFlightOverlay() {
+    if (this._flightInit) return;
+    this._flightInit = true;
+
+    // Round sprite for the ship point markers.
+    const cnv = document.createElement("canvas"); cnv.width = cnv.height = 64;
+    const cx = cnv.getContext("2d");
+    const grd = cx.createRadialGradient(32, 32, 0, 32, 32, 30);
+    grd.addColorStop(0, "rgba(255,255,255,1)");
+    grd.addColorStop(0.65, "rgba(255,255,255,1)");
+    grd.addColorStop(1, "rgba(255,255,255,0)");
+    cx.fillStyle = grd; cx.beginPath(); cx.arc(32, 32, 30, 0, Math.PI * 2); cx.fill();
+    const shipTex = new THREE.CanvasTexture(cnv);
+
+    this._flightArcsGroup = new THREE.Group();
+    this._flightArcsGroup.frustumCulled = false;
+    this.scene.add(this._flightArcsGroup);
+    this._flightArcRefs = null;
+    this._flightArcMat = new THREE.LineBasicMaterial({ color: 0xffa83c, transparent: true, opacity: 0.7 });
+
+    this._flightLinksGeom = new THREE.BufferGeometry();
+    this._flightLinksGeom.setAttribute("position", new THREE.BufferAttribute(new Float32Array(0), 3));
+    this._flightLinksMat = new THREE.LineBasicMaterial({ color: 0x00d2aa, transparent: true, opacity: 0.95 });
+    this._flightLinks = new THREE.LineSegments(this._flightLinksGeom, this._flightLinksMat);
+    this._flightLinks.frustumCulled = false;
+    this._flightLinks.renderOrder = 2;
+    this.scene.add(this._flightLinks);
+
+    this._flightShipsGeom = new THREE.BufferGeometry();
+    this._flightShipsGeom.setAttribute("position", new THREE.BufferAttribute(new Float32Array(0), 3));
+    this._flightShipsGeom.setAttribute("color", new THREE.BufferAttribute(new Float32Array(0), 3));
+    this._flightShipsMat = new THREE.PointsMaterial({ size: 13, sizeAttenuation: false, map: shipTex, vertexColors: true, transparent: true, alphaTest: 0.3, depthWrite: false });
+    this._flightShips = new THREE.Points(this._flightShipsGeom, this._flightShipsMat);
+    this._flightShips.frustumCulled = false;
+    this._flightShips.renderOrder = 3;
+    this.scene.add(this._flightShips);
+  }
+
+  setFlightData(data) {
+    this.flightData = data || { ships: [], arcs: [], links: [] };
+    if (!this.scene) return;
+    this._initFlightOverlay();
+    const fd = this.flightData;
+
+    // Ships — update position + color attributes in place (resize only if count changed).
+    const ships = fd.ships || [];
+    const ns = ships.length;
+    let posAttr = this._flightShipsGeom.getAttribute("position");
+    let colAttr = this._flightShipsGeom.getAttribute("color");
+    if (posAttr.count !== ns) {
+      posAttr = new THREE.BufferAttribute(new Float32Array(ns * 3), 3);
+      colAttr = new THREE.BufferAttribute(new Float32Array(ns * 3), 3);
+      this._flightShipsGeom.setAttribute("position", posAttr);
+      this._flightShipsGeom.setAttribute("color", colAttr);
+    }
+    for (let i = 0; i < ns; i++) {
+      const s = ships[i];
+      posAttr.setXYZ(i, auTo3D(s.x), auTo3D(s.z), -auTo3D(s.y));
+      if (s.connected === false) colAttr.setXYZ(i, 0.55, 0.55, 0.55);
+      else if (s.direction === "EM") colAttr.setXYZ(i, 0.07, 0.78, 1.0);
+      else colAttr.setXYZ(i, 1.0, 0.31, 0.85);
+    }
+    posAttr.needsUpdate = true; colAttr.needsUpdate = true;
+    this._flightShipsGeom.setDrawRange(0, ns);
+    if (ns) this._flightShipsGeom.computeBoundingSphere();
+
+    // Extension links — 2 vertices per link, in place.
+    const links = fd.links || [];
+    const nl = links.length;
+    let lAttr = this._flightLinksGeom.getAttribute("position");
+    if (lAttr.count !== nl * 2) {
+      lAttr = new THREE.BufferAttribute(new Float32Array(nl * 2 * 3), 3);
+      this._flightLinksGeom.setAttribute("position", lAttr);
+    }
+    for (let i = 0; i < nl; i++) {
+      const l = links[i];
+      if (!l.from || !l.to) continue;
+      lAttr.setXYZ(i * 2, auTo3D(l.from.x), auTo3D(l.from.z), -auTo3D(l.from.y));
+      lAttr.setXYZ(i * 2 + 1, auTo3D(l.to.x), auTo3D(l.to.z), -auTo3D(l.to.y));
+    }
+    lAttr.needsUpdate = true;
+    this._flightLinksGeom.setDrawRange(0, nl * 2);
+    if (nl) this._flightLinksGeom.computeBoundingSphere();
+
+    // Arcs — rebuild only when the set of (cached) polylines changes.
+    const arcs = fd.arcs || [];
+    const same = this._flightArcRefs && this._flightArcRefs.length === arcs.length && this._flightArcRefs.every((a, i) => a === arcs[i]);
+    if (!same) {
+      for (const child of this._flightArcsGroup.children) child.geometry.dispose();
+      this._flightArcsGroup.clear();
+      for (const arc of arcs) {
+        if (!arc || arc.length < 2) continue;
+        const pts = new Float32Array(arc.length * 3);
+        for (let i = 0; i < arc.length; i++) { pts[i * 3] = auTo3D(arc[i].x); pts[i * 3 + 1] = auTo3D(arc[i].z); pts[i * 3 + 2] = -auTo3D(arc[i].y); }
+        const geom = new THREE.BufferGeometry();
+        geom.setAttribute("position", new THREE.BufferAttribute(pts, 3));
+        this._flightArcsGroup.add(new THREE.Line(geom, this._flightArcMat));
+      }
+      this._flightArcRefs = arcs.slice();
+    }
+  }
+
+  // ── Coverage-probe overlay (Monte-Carlo independent point cloud + access links) ──
+  // A Points cloud for the probe markers and a LineSegments buffer for the access
+  // links (probe → backbone node), both updated in place. Probes are static, so
+  // positions only change when the cloud is resampled.
+  _initProbeOverlay() {
+    if (this._probeInit) return;
+    this._probeInit = true;
+
+    // Round sprite for the probe point markers.
+    const cnv = document.createElement("canvas"); cnv.width = cnv.height = 64;
+    const cx = cnv.getContext("2d");
+    const grd = cx.createRadialGradient(32, 32, 0, 32, 32, 30);
+    grd.addColorStop(0, "rgba(255,255,255,1)");
+    grd.addColorStop(0.6, "rgba(255,255,255,1)");
+    grd.addColorStop(1, "rgba(255,255,255,0)");
+    cx.fillStyle = grd; cx.beginPath(); cx.arc(32, 32, 30, 0, Math.PI * 2); cx.fill();
+    const probeTex = new THREE.CanvasTexture(cnv);
+
+    this._probeLinksGeom = new THREE.BufferGeometry();
+    this._probeLinksGeom.setAttribute("position", new THREE.BufferAttribute(new Float32Array(0), 3));
+    this._probeLinksMat = new THREE.LineBasicMaterial({ color: 0x66c8ff, transparent: true, opacity: 0.3 });
+    this._probeLinks = new THREE.LineSegments(this._probeLinksGeom, this._probeLinksMat);
+    this._probeLinks.frustumCulled = false;
+    this._probeLinks.renderOrder = 2;
+    this.scene.add(this._probeLinks);
+
+    this._probePointsGeom = new THREE.BufferGeometry();
+    this._probePointsGeom.setAttribute("position", new THREE.BufferAttribute(new Float32Array(0), 3));
+    this._probePointsGeom.setAttribute("color", new THREE.BufferAttribute(new Float32Array(0), 3));
+    this._probePointsMat = new THREE.PointsMaterial({ size: 7, sizeAttenuation: false, map: probeTex, vertexColors: true, transparent: true, alphaTest: 0.3, depthWrite: false });
+    this._probePoints = new THREE.Points(this._probePointsGeom, this._probePointsMat);
+    this._probePoints.frustumCulled = false;
+    this._probePoints.renderOrder = 3;
+    this.scene.add(this._probePoints);
+  }
+
+  setProbeData(data) {
+    this.probeData = data || { probes: [], links: [] };
+    if (!this.scene) return;
+    this._initProbeOverlay();
+    const pd = this.probeData;
+
+    // Probe markers — update position + color in place (resize only on count change).
+    const probes = pd.probes || [];
+    const np = probes.length;
+    let posAttr = this._probePointsGeom.getAttribute("position");
+    let colAttr = this._probePointsGeom.getAttribute("color");
+    if (posAttr.count !== np) {
+      posAttr = new THREE.BufferAttribute(new Float32Array(np * 3), 3);
+      colAttr = new THREE.BufferAttribute(new Float32Array(np * 3), 3);
+      this._probePointsGeom.setAttribute("position", posAttr);
+      this._probePointsGeom.setAttribute("color", colAttr);
+    }
+    for (let i = 0; i < np; i++) {
+      const p = probes[i];
+      posAttr.setXYZ(i, auTo3D(p.x), auTo3D(p.z), -auTo3D(p.y));
+      if (p.connected === false) colAttr.setXYZ(i, 0.6, 0.6, 0.65);       // grey — no link
+      else if (p.connected) colAttr.setXYZ(i, 0.35, 0.9, 0.66);           // green — linked
+      else colAttr.setXYZ(i, 0.85, 0.85, 0.9);                            // pale — not yet measured
+    }
+    posAttr.needsUpdate = true; colAttr.needsUpdate = true;
+    this._probePointsGeom.setDrawRange(0, np);
+    if (np) this._probePointsGeom.computeBoundingSphere();
+
+    // Access links — 2 vertices per link, in place.
+    const links = pd.links || [];
+    const nl = links.length;
+    let lAttr = this._probeLinksGeom.getAttribute("position");
+    if (lAttr.count !== nl * 2) {
+      lAttr = new THREE.BufferAttribute(new Float32Array(nl * 2 * 3), 3);
+      this._probeLinksGeom.setAttribute("position", lAttr);
+    }
+    for (let i = 0; i < nl; i++) {
+      const l = links[i];
+      if (!l.from || !l.to) continue;
+      lAttr.setXYZ(i * 2, auTo3D(l.from.x), auTo3D(l.from.z), -auTo3D(l.from.y));
+      lAttr.setXYZ(i * 2 + 1, auTo3D(l.to.x), auTo3D(l.to.z), -auTo3D(l.to.y));
+    }
+    lAttr.needsUpdate = true;
+    this._probeLinksGeom.setDrawRange(0, nl * 2);
+    if (nl) this._probeLinksGeom.computeBoundingSphere();
   }
 
   updateActiveLinks(links) {

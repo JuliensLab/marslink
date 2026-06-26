@@ -1,19 +1,23 @@
 // simMain.js
 
-import { SimUi } from "./simUi.js?v=4.6";
-import { SimTime } from "./simTime.js?v=4.6";
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.6";
-import { SimSatellites } from "./simSatellites.js?v=4.6";
-import { SimDeployment } from "./simDeployment.js?v=4.6";
-import { SimMissionValidator } from "./simMissionValidator.js?v=4.6";
-import { SimLinkBudget } from "./simLinkBudget.js?v=4.6";
-import { SimNetwork } from "./simNetwork.js?v=4.6";
+import { SimUi } from "./simUi.js?v=4.28";
+import { SimTime } from "./simTime.js?v=4.28";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.28";
+import { SimSatellites } from "./simSatellites.js?v=4.28";
+import { SimDeployment } from "./simDeployment.js?v=4.28";
+import { SimMissionValidator } from "./simMissionValidator.js?v=4.28";
+import { SimLinkBudget } from "./simLinkBudget.js?v=4.28";
+import { SimNetwork } from "./simNetwork.js?v=4.28";
 // Import both SimDisplay implementations with unique names
-import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=4.6";
-import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=4.6";
-import { generateReport } from "./reportGenerator.js?v=4.6";
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.6";
-import { minOf, maxOf } from "./simMath.js?v=4.6";
+import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=4.28";
+import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=4.28";
+import { generateReport } from "./reportGenerator.js?v=4.28";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.28";
+import { minOf, maxOf } from "./simMath.js?v=4.28";
+import { SimFlightController } from "./simFlightController.js?v=4.28";
+import { SimProbeController } from "./simProbeController.js?v=4.28";
+import { findDepartureWindows } from "./simTransfer.js?v=4.28";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.28";
 
 export class SimMain {
   // Clamp argument to [-1, 1] to prevent NaN from Math.asin domain errors
@@ -31,11 +35,42 @@ export class SimMain {
     // simNetwork kept on main thread ONLY for the longTermRun batch path
     this.simNetwork = new SimNetwork(this.simLinkBudget, this.simSatellites);
 
+    // Spacecraft-flight overlay (fleet transfers + ship link extension).
+    this.simFlight = new SimFlightController();
+    this._flightExtFrame = 0;
+    this._flightExtVersion = 0;        // bumped each time _flightExt is recomputed
+    this._fleetLinkDrawnVersion = -1;  // version the Fleet-link card/charts were last drawn for
+    this.fleetLinkCharts = { cap: null, lat: null }; // Chart.js instances (expanded view)
+    // Fleet-link card 3-state toggle: 'closed' | 'compact' | 'expanded'.
+    this._fleetLinkState = "expanded";
+    try { const s = localStorage.getItem("marslink-fleetlink-state"); if (s) this._fleetLinkState = s; } catch {}
+
+    // Monte-Carlo coverage-field overlay (independent probes — the alternative
+    // to the flight fleet). Probes are static + independent, so per-frame cost
+    // is nil; the measurement against the backbone is recomputed throttled.
+    this.simProbe = new SimProbeController();
+    this._probeMeasFrame = 0;
+    this._probeMeasVersion = 0;  // bumped each time _probeMeas is recomputed
+    this._probeMeas = null;      // latest measureProbes() result (for the Coverage card)
+    this._probeMeasdLinks = null; // possibleLinks ref the probes were last measured against
+    this._lastProbeRender = null; // render-data ref last pushed to the display
+    this._lastProbeDisplay = null; // display instance last pushed to (detect 2D↔3D switch)
+    this._coverageDrawnVersion = -1; // version the Coverage card/charts were last drawn for
+    this.coverageCharts = { cap: null, lat: null, relayCap: null, relayLat: null }; // Chart.js instances (expanded)
+    // Coverage card 3-state toggle: 'closed' | 'compact' | 'expanded'.
+    this._coverageState = "compact";
+    try { const s = localStorage.getItem("marslink-coverage-state"); if (s) this._coverageState = s; } catch {}
+
+    // Start the clock mid-transfer so flights are visible on load: the next
+    // Earth→Mars departure window + 3 months (rather than "now", which usually
+    // sits between windows with no ships in flight).
+    this._setInitialSimDate();
+
     // Debug handle: lets the console / preview inspect live sim state.
     if (typeof window !== "undefined") window.simMain = this;
 
     // --- Worker + triple-buffered window cache (-1/0/+1) ---
-    this.simWorker = new Worker(new URL("./simWorker.js?v=4.6", import.meta.url), { type: "module" });
+    this.simWorker = new Worker(new URL("./simWorker.js?v=4.28", import.meta.url), { type: "module" });
     this.simWorker.onmessage = (event) => this.handleWorkerMessage(event);
     this.simWorker.onerror = (event) => console.error("[Marslink] Worker error:", event.message);
     this.simWorker.postMessage({ type: "init" });
@@ -67,7 +102,9 @@ export class SimMain {
     this.satelliteColorMode = "Quad";
     this.thrustBodies = ""; // iso-thrust contour bodies (2D), comma list; "" = off
     this.planetOrbits = ""; // planet orbit toggle ("Show" = on) — true ellipses from elements
-    this.planeNodes = ""; // Earth↔Mars plane-of-nodes line toggle ("Show" = on)
+    // Reference lines drawn through the Sun (2D + 3D), as a comma list of enabled
+    // options: "Closest approach" | "Mars apsides" | "Plane nodes" | "Earth apsides".
+    this.referenceLines = "";
     this.geostationaryOrbits = ""; // geostationary orbit circles (Earth/Mars comma list)
     this.satLabelMode = false; // per-satellite value labels (S key)
     // Station-keeping model config { F (N), tm (kg), maxN, n (yr), isp (s), capacity (kg) }
@@ -115,13 +152,13 @@ export class SimMain {
     this.simDisplay.simSatellites = this.simSatellites;
     this.simDisplay.setLinksColors(this.linksColors);
     this.simDisplay.setSizeFactors(this.sunSizeFactor, this.planetsSizeFactor, this.satelliteSizeFactor);
+    if (typeof this.simDisplay.setRoadsterSizeFactor === "function") this.simDisplay.setRoadsterSizeFactor(this.roadsterSizeFactor);
     this.simDisplay.setSatelliteColorMode(this.satelliteColorMode);
     if (typeof this.simDisplay.setThrustBodies === "function") this.simDisplay.setThrustBodies(this.thrustBodies);
     this.pushSatellitePhysics();
     if (typeof this.simDisplay.setPlanetOrbits === "function") this.simDisplay.setPlanetOrbits(this.planetOrbits);
-    if (typeof this.simDisplay.setPlaneNodes === "function") {
-      const { n1, n2 } = this._earthMarsPlaneNodes();
-      this.simDisplay.setPlaneNodes(this.planeNodes, n1, n2);
+    if (typeof this.simDisplay.setReferenceLines === "function") {
+      this.simDisplay.setReferenceLines(this.referenceLines, this._referenceLineAngles());
     }
     if (typeof this.simDisplay.setGeostationaryOrbits === "function") this.simDisplay.setGeostationaryOrbits(this.geostationaryOrbits);
     if (typeof this.simDisplay.setSatLabelMode === "function") this.simDisplay.setSatLabelMode(this.satLabelMode);
@@ -161,11 +198,10 @@ export class SimMain {
     }
   }
 
-  setPlaneNodes(value) {
-    this.planeNodes = value;
-    if (this.simDisplay && typeof this.simDisplay.setPlaneNodes === "function") {
-      const { n1, n2 } = this._earthMarsPlaneNodes();
-      this.simDisplay.setPlaneNodes(value, n1, n2);
+  setReferenceLines(value) {
+    this.referenceLines = value;
+    if (this.simDisplay && typeof this.simDisplay.setReferenceLines === "function") {
+      this.simDisplay.setReferenceLines(value, this._referenceLineAngles());
     }
   }
 
@@ -550,42 +586,38 @@ export class SimMain {
   }
 
   /**
-   * Vertical Earth→relay→Mars capacity data-path as SVG (the expanded Capacity diagram).
-   * Single bars = junctions; double bars = an eccentric ring's two routes; thick single
-   * bars = a concentric ring's route. Planets are colour-coded. Self-contained (explicit
-   * colours), so it renders identically in the panel and anywhere the markup is reused.
+   * Shared vertical Earth→relay→Mars data-path SVG, used by BOTH the Capacity and the Flow
+   * cards. The skeleton is identical for both — one column per relay ring (single bars =
+   * junctions; double bars = an eccentric ring's two routes; thick single = a concentric
+   * ring's route), colour-coded planets, planet ring lines. Only the per-segment LABELS and
+   * the planet ground-link numbers differ (link capacity vs achieved flow), so callers pass
+   * pre-formatted label strings and the two cards stay visually in lock-step. Self-contained
+   * (explicit colours), so it renders identically in the panel and anywhere it's reused.
+   *
+   * @param d.relayRingCount  number of relay rings (0 ⇒ draws the "no relay" broken path)
+   * @param d.isEccentric     true ⇒ double route bars; false ⇒ thick single route bars
+   * @param d.earthSide1/2, d.marsSide1/2  the two busiest planet ground-link values
+   * @param d.fmtNum          formatter for the small planet-side numbers
+   * @param d.labels          pre-formatted strings, any of which may be null to skip:
+   *                          earthTotal, ringEarth, earthJunction, relayMain, relayL1..L3,
+   *                          marsJunction, ringMars, marsTotal, bottleneck, noRelayMain,
+   *                          noRelaySub
    */
-  _capacityPathSvg(d) {
-    const { rs, earthInring, marsInring, earthCap, marsCap, earthCapTotal, marsCapTotal,
-            earthRingRange, marsRingRange, relayRingCount, bottleneckLine,
-            fmtMbps, fmtRange, fmtNum, minOf, maxOf } = d;
+  _relayPathSvg(d) {
+    const { relayRingCount, isEccentric, fmtNum,
+            earthSide1 = 0, earthSide2 = 0, marsSide1 = 0, marsSide2 = 0, labels = {} } = d;
 
     const W = 365, barL = 12, barR = 150, labelX = 158, H = 208;
     const EARTH = "#4d97e0", MARS = "#e07a52", RELAY = "#8893a0",
           EARTH_LN = "#3f6d92", MARS_LN = "#8a5a48", // muted planet-tinted ring lines
           TXT = "#c9ced6", MUT = "#868d97", WARN = "#e0b352", BG = "#181b21";
-    const isEccentric = !!(rs && rs.ringDetail);
-
-    // ring↔relay junction aggregates (eccentric: from ringDetail; null otherwise).
-    // Each eccentric ring has ONE junction (tangent point) per planet, made of k links.
-    // eJuncRings = junctions (rings that connect), eJuncN = total links across them.
-    let eJuncN = null, eJuncCap = 0, eJuncRings = 0, mJuncN = null, mJuncCap = 0, mJuncRings = 0;
-    if (rs && rs.ringDetail) {
-      eJuncN = 0; mJuncN = 0;
-      for (const r of rs.ringDetail) {
-        eJuncN += r.earth.count; eJuncCap += r.earth.mbps; if (r.earth.count > 0) eJuncRings++;
-        mJuncN += r.mars.count; mJuncCap += r.mars.mbps; if (r.mars.count > 0) mJuncRings++;
-      }
-    }
-    const stat = (arr) => (arr && arr.length ? { lo: minOf(arr), hi: maxOf(arr), avg: arr.reduce((a, b) => a + b, 0) / arr.length } : null);
-    const eS = stat(earthInring), mS = stat(marsInring);
 
     const Y = { eg: 16, er: 34, ej: 51, r0: 70, r1: 88, r2: 106, r3: 124, mj: 143, mr: 160, mg: 178, bn: 196 };
     const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;");
     const txt = (x, y, t, fill = TXT, size = 11, anchor = "start") =>
-      `<text x="${x}" y="${(y + 3.5).toFixed(1)}" fill="${fill}" font-size="${size}"${anchor !== "start" ? ` text-anchor="${anchor}"` : ""}>${esc(t)}</text>`;
+      t == null || t === "" ? "" : `<text x="${x}" y="${(y + 3.5).toFixed(1)}" fill="${fill}" font-size="${size}"${anchor !== "start" ? ` text-anchor="${anchor}"` : ""}>${esc(t)}</text>`;
 
-    let s = `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Earth to Mars relay capacity path" style="width:100%;height:auto;font-family:ui-monospace,Menlo,Consolas,monospace;">`;
+    let s = `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Earth to Mars relay path" style="width:100%;height:auto;font-family:ui-monospace,Menlo,Consolas,monospace;">`;
     s += `<rect x="0" y="0" width="${W}" height="${H}" rx="7" fill="${BG}"/>`;
     s += `<line x1="${barL}" y1="${Y.er}" x2="${barR}" y2="${Y.er}" stroke="${EARTH_LN}" stroke-width="1"/>`;
     s += `<line x1="${barL}" y1="${Y.mr}" x2="${barR}" y2="${Y.mr}" stroke="${MARS_LN}" stroke-width="1"/>`;
@@ -604,13 +636,13 @@ export class SimMain {
       s += `<line x1="${pcx - 5}" y1="${midY + 5}" x2="${pcx + 5}" y2="${midY - 5}" stroke="${WARN}" stroke-width="1.6"/>`;
       s += `<circle cx="${eX}" cy="${Y.er}" r="5.5" fill="${EARTH}"/>`;
       s += `<circle cx="${mX}" cy="${Y.mr}" r="4" fill="${MARS}"/>`;
-      s += txt(eX, Y.eg, `Earth ${fmtMbps(earthCapTotal)}`, EARTH, 12, "middle");
-      if (eS) s += txt(labelX, Y.er, `ring Earth ${fmtRange(eS.lo, eS.avg, eS.hi)}`, EARTH);
-      s += txt(labelX, midY - 6, `no relay rings`, WARN, 12);
-      s += txt(labelX, midY + 11, `no Earth↔Mars path`, MUT, 11);
-      if (mS) s += txt(labelX, Y.mr, `ring Mars ${fmtRange(mS.lo, mS.avg, mS.hi)}`, MARS);
-      s += txt(mX, Y.mg, `Mars ${fmtMbps(marsCapTotal)}`, MARS, 12, "middle");
-      if (bottleneckLine) s += txt(barL, Y.bn, bottleneckLine, WARN);
+      s += txt(eX, Y.eg, labels.earthTotal, EARTH, 12, "middle");
+      s += txt(labelX, Y.er, labels.ringEarth, EARTH);
+      s += txt(labelX, midY - 6, labels.noRelayMain || "no relay rings", WARN, 12);
+      s += txt(labelX, midY + 11, labels.noRelaySub || "no Earth↔Mars path", MUT, 11);
+      s += txt(labelX, Y.mr, labels.ringMars, MARS);
+      s += txt(mX, Y.mg, labels.marsTotal, MARS, 12, "middle");
+      s += txt(barL, Y.bn, labels.bottleneck, WARN);
       s += `</svg>`;
       return s;
     }
@@ -633,28 +665,102 @@ export class SimMain {
     const pcx = barL + (barR - barL) / 2;
     const eX = +(pcx - slot).toFixed(1), mX = +(pcx + slot).toFixed(1); // planets offset: Earth one slot left, Mars one slot right
     s += `<circle cx="${eX.toFixed(1)}" cy="${Y.er}" r="5.5" fill="${EARTH}"/>`;
-    s += txt(eX - 10, Y.er, fmtNum(earthCap.side1 || 0), EARTH_LN, 11, "end");
-    s += txt(eX + 10, Y.er, fmtNum(earthCap.side2 || 0), EARTH_LN, 11);
+    s += txt(eX - 10, Y.er, fmtNum(earthSide1 || 0), EARTH_LN, 11, "end");
+    s += txt(eX + 10, Y.er, fmtNum(earthSide2 || 0), EARTH_LN, 11);
     s += `<circle cx="${mX.toFixed(1)}" cy="${Y.mr}" r="4" fill="${MARS}"/>`;
-    s += txt(mX - 9, Y.mr, fmtNum(marsCap.side1 || 0), MARS_LN, 11, "end");
-    s += txt(mX + 9, Y.mr, fmtNum(marsCap.side2 || 0), MARS_LN, 11);
+    s += txt(mX - 9, Y.mr, fmtNum(marsSide1 || 0), MARS_LN, 11, "end");
+    s += txt(mX + 9, Y.mr, fmtNum(marsSide2 || 0), MARS_LN, 11);
     // Earth/Mars totals sit centred over/under their planet; per-segment values run down
     // the right column, each coloured to match its diagram element (Earth, relay, Mars).
-    s += txt(eX, Y.eg, `Earth ${fmtMbps(earthCapTotal)}`, EARTH, 12, "middle");
-    if (eS) s += txt(labelX, Y.er, `ring Earth ${fmtRange(eS.lo, eS.avg, eS.hi)}`, EARTH);
-    s += txt(labelX, Y.ej, eJuncN != null ? `${eJuncRings} junctions · ${eJuncN} links · ${fmtMbps(eJuncCap)}` : `ring → relay`, EARTH);
-    if (rs) {
-      s += txt(labelX, Y.r0, fmtMbps(rs.totalThroughput), RELAY, 12);
-      s += txt(labelX, Y.r1, `${relayRingCount} rings, ${rs.routeCount} routes`, RELAY);
-      s += txt(labelX, Y.r2, fmtRange(rs.minThroughput, rs.avgThroughput, rs.maxThroughput), RELAY);
-      s += txt(labelX, Y.r3, `${(rs.minLatency / 60).toFixed(1)}|${(rs.avgLatency / 60).toFixed(1)}|${(rs.maxLatency / 60).toFixed(1)} min`, RELAY);
-    }
-    s += txt(labelX, Y.mj, mJuncN != null ? `${mJuncRings} junctions · ${mJuncN} links · ${fmtMbps(mJuncCap)}` : `relay → ring`, MARS);
-    if (mS) s += txt(labelX, Y.mr, `ring Mars ${fmtRange(mS.lo, mS.avg, mS.hi)}`, MARS);
-    s += txt(mX, Y.mg, `Mars ${fmtMbps(marsCapTotal)}`, MARS, 12, "middle");
-    if (bottleneckLine) s += txt(barL, Y.bn, bottleneckLine, WARN);
+    s += txt(eX, Y.eg, labels.earthTotal, EARTH, 12, "middle");
+    s += txt(labelX, Y.er, labels.ringEarth, EARTH);
+    s += txt(labelX, Y.ej, labels.earthJunction, EARTH);
+    s += txt(labelX, Y.r0, labels.relayMain, RELAY, 12);
+    s += txt(labelX, Y.r1, labels.relayL1, RELAY);
+    s += txt(labelX, Y.r2, labels.relayL2, RELAY);
+    s += txt(labelX, Y.r3, labels.relayL3, RELAY);
+    s += txt(labelX, Y.mj, labels.marsJunction, MARS);
+    s += txt(labelX, Y.mr, labels.ringMars, MARS);
+    s += txt(mX, Y.mg, labels.marsTotal, MARS, 12, "middle");
+    s += txt(barL, Y.bn, labels.bottleneck, WARN);
     s += `</svg>`;
     return s;
+  }
+
+  /**
+   * Vertical Earth→relay→Mars CAPACITY data-path (expanded Capacity diagram). Builds the
+   * capacity label set and hands the skeleton to {@link _relayPathSvg}.
+   */
+  _capacityPathSvg(d) {
+    const { rs, earthInring, marsInring, earthCap, marsCap, earthCapTotal, marsCapTotal,
+            relayRingCount, bottleneckLine, fmtMbps, fmtRange, fmtNum } = d;
+
+    // ring↔relay junction aggregates (eccentric: from ringDetail; null otherwise).
+    // Each eccentric ring has ONE junction (tangent point) per planet, made of k links.
+    // eJuncRings = junctions (rings that connect), eJuncN = total links across them.
+    let eJuncN = null, eJuncCap = 0, eJuncRings = 0, mJuncN = null, mJuncCap = 0, mJuncRings = 0;
+    if (rs && rs.ringDetail) {
+      eJuncN = 0; mJuncN = 0;
+      for (const r of rs.ringDetail) {
+        eJuncN += r.earth.count; eJuncCap += r.earth.mbps; if (r.earth.count > 0) eJuncRings++;
+        mJuncN += r.mars.count; mJuncCap += r.mars.mbps; if (r.mars.count > 0) mJuncRings++;
+      }
+    }
+    const stat = (arr) => (arr && arr.length ? { lo: minOf(arr), hi: maxOf(arr), avg: arr.reduce((a, b) => a + b, 0) / arr.length } : null);
+    const eS = stat(earthInring), mS = stat(marsInring);
+
+    return this._relayPathSvg({
+      relayRingCount, isEccentric: !!(rs && rs.ringDetail), fmtNum,
+      earthSide1: earthCap.side1, earthSide2: earthCap.side2,
+      marsSide1: marsCap.side1, marsSide2: marsCap.side2,
+      labels: {
+        earthTotal: `Earth ${fmtMbps(earthCapTotal)}`,
+        ringEarth: eS ? `ring Earth ${fmtRange(eS.lo, eS.avg, eS.hi)}` : null,
+        earthJunction: eJuncN != null ? `${eJuncRings} junctions · ${eJuncN} links · ${fmtMbps(eJuncCap)}` : `ring → relay`,
+        relayMain: rs ? fmtMbps(rs.totalThroughput) : null,
+        relayL1: rs ? `${relayRingCount} rings, ${rs.routeCount} routes` : null,
+        relayL2: rs ? fmtRange(rs.minThroughput, rs.avgThroughput, rs.maxThroughput) : null,
+        relayL3: rs ? `${(rs.minLatency / 60).toFixed(1)}|${(rs.avgLatency / 60).toFixed(1)}|${(rs.maxLatency / 60).toFixed(1)} min` : null,
+        marsJunction: mJuncN != null ? `${mJuncRings} junctions · ${mJuncN} links · ${fmtMbps(mJuncCap)}` : `relay → ring`,
+        ringMars: mS ? `ring Mars ${fmtRange(mS.lo, mS.avg, mS.hi)}` : null,
+        marsTotal: `Mars ${fmtMbps(marsCapTotal)}`,
+        bottleneck: bottleneckLine,
+      },
+    });
+  }
+
+  /**
+   * Flow counterpart of {@link _capacityPathSvg}: same vertical data-path, but the labels
+   * read the achieved max-flow (Gbps + % of each planet's ground capacity) and the junctions
+   * show how many routes actually carry flow. Relay-type agnostic — concentric and eccentric
+   * families render identically (eccentric just gets the double route bars).
+   */
+  _flowPathSvg(d) {
+    const { rs, earthInring, marsInring, earthFlow, marsFlow, earthFlowTotal, marsFlowTotal,
+            earthCapTotal, marsCapTotal, actualFlowMbps, earthActive, marsActive,
+            relayRingCount, bottleneckLine, fmtMbps, fmtRange, fmtNum, pct } = d;
+
+    const stat = (arr) => (arr && arr.length ? { lo: minOf(arr), hi: maxOf(arr), avg: arr.reduce((a, b) => a + b, 0) / arr.length } : null);
+    const eS = stat(earthInring), mS = stat(marsInring);
+
+    return this._relayPathSvg({
+      relayRingCount, isEccentric: !!(rs && rs.ringDetail), fmtNum,
+      earthSide1: earthFlow.side1, earthSide2: earthFlow.side2,
+      marsSide1: marsFlow.side1, marsSide2: marsFlow.side2,
+      labels: {
+        earthTotal: `Earth ${fmtMbps(earthFlowTotal)} · ${pct(earthFlowTotal, earthCapTotal)}`,
+        ringEarth: eS ? `ring Earth ${fmtRange(eS.lo, eS.avg, eS.hi)}` : null,
+        earthJunction: earthActive != null ? `${earthActive} routes active` : `ring → relay`,
+        relayMain: rs ? fmtMbps(actualFlowMbps) : null,
+        relayL1: rs ? `${relayRingCount} rings, ${rs.routeCount} routes` : null,
+        relayL2: rs ? fmtRange(rs.minThroughput, rs.avgThroughput, rs.maxThroughput) : null,
+        relayL3: rs ? `${(rs.minLatency / 60).toFixed(1)}|${(rs.avgLatency / 60).toFixed(1)}|${(rs.maxLatency / 60).toFixed(1)} min` : null,
+        marsJunction: marsActive != null ? `${marsActive} routes active` : `relay → ring`,
+        ringMars: mS ? `ring Mars ${fmtRange(mS.lo, mS.avg, mS.hi)}` : null,
+        marsTotal: `Mars ${fmtMbps(marsFlowTotal)} · ${pct(marsFlowTotal, marsCapTotal)}`,
+        bottleneck: bottleneckLine,
+      },
+    });
   }
 
   /** The two ecliptic longitudes (degrees) where Earth's and Mars's orbital planes
@@ -671,6 +777,522 @@ export class SimMain {
     let n1 = ((Math.atan2(ly, lx) * 180) / Math.PI) % 360;
     if (n1 < 0) n1 += 360;
     return { n1, n2: (n1 + 180) % 360 };
+  }
+
+  // Mars's line of apsides: the perihelion is at solar angle = Mars's longitude of perihelion
+  // (p); aphelion is 180° opposite. Same {n1, n2} angle pair shape as _earthMarsPlaneNodes.
+  _marsPeriapsisNodes() {
+    const Mp = this.simSatellites.getMars();
+    const n1 = ((((Mp && Mp.p) || 0) % 360) + 360) % 360;
+    return { n1, n2: (n1 + 180) % 360 };
+  }
+
+  // Earth's line of apsides: perihelion at solar angle = Earth's longitude of perihelion (p).
+  _earthPeriapsisNodes() {
+    const E = this.simSatellites.getEarth();
+    const n1 = ((((E && E.p) || 0) % 360) + 360) % 360;
+    return { n1, n2: (n1 + 180) % 360 };
+  }
+
+  // Earth–Mars orbits' closest approach: the geometry-sampling 0° reference direction
+  // (narrowest gap between the orbits); the opposite side is the widest gap.
+  _closestApproachNodes() {
+    const n1 = ((EARTH_MARS_CLOSEST_APPROACH_DEG % 360) + 360) % 360;
+    return { n1, n2: (n1 + 180) % 360 };
+  }
+
+  // All reference-line angle pairs, keyed by the checkbox option label. Passed to the
+  // display, which draws only the enabled ones.
+  _referenceLineAngles() {
+    return {
+      "Closest approach": this._closestApproachNodes(),
+      "Mars apsides": this._marsPeriapsisNodes(),
+      "Plane nodes": this._earthMarsPlaneNodes(),
+      "Earth apsides": this._earthPeriapsisNodes(),
+    };
+  }
+
+  /**
+   * Set the initial sim clock to the middle of the next Earth→Mars transfer —
+   * the next departure window + 3 months — so the fleet overlay shows ships in
+   * flight on load instead of "now" (which usually falls between windows). Falls
+   * back to real-time on any failure.
+   */
+  _setInitialSimDate() {
+    try {
+      const planets = this.simSolarSystem.getSolarSystemData().planets;
+      const earth = planets.find((p) => p.name === "Earth");
+      const mars = planets.find((p) => p.name === "Mars");
+      if (!earth || !mars) return;
+      const now = this.simTime.getDate();
+      const horizon = new Date(now.getTime() + 3 * 365.25 * 24 * 60 * 60 * 1000);
+      const windows = findDepartureWindows(earth, mars, now, horizon);
+      if (!windows.length) return;
+      const start = new Date(windows[0]);
+      start.setUTCMonth(start.getUTCMonth() + 3); // ~mid-transit
+      this.simTime.initDate = start;
+      this.simTime.simMsSinceStart = 0;
+      this.simTime.previousRealMs = performance.now();
+    } catch (e) {
+      console.warn("[Marslink] initial sim date fallback:", e && e.message);
+    }
+  }
+
+  /**
+   * Right-panel "Fleet" metric card (spacecraft-flight overlay). Built from the
+   * SimFlightController's ledger at the current sim date. Returned as a full
+   * .metric-card so it can be emitted inside getCostsHtml AND swapped in place
+   * each frame via refreshFleetMetric() (the date + in-transit counts change as
+   * time animates, between the worker-driven full panel regenerations).
+   */
+  fleetMetricHtml() {
+    const f = this.simFlight;
+    const shell = (inner) => `<div class="metric-card" id="fleet-metric-card">${inner}</div>`;
+    if (!f || !f.enabled) {
+      return shell(`<div class="metric-header"><span class="metric-label">Fleet</span><span class="metric-value-sm" style="color:var(--text-3)">hidden</span></div>`);
+    }
+    const planets = this.simSolarSystem.getSolarSystemData().planets;
+    const earth = planets.find((p) => p.name === "Earth");
+    const mars = planets.find((p) => p.name === "Mars");
+    f.ensureFleet(earth, mars);
+    if (!f.fleet) return shell(`<div class="metric-header"><span class="metric-label">Fleet</span><span class="metric-value-sm">—</span></div>`);
+    const d = this.simTime.getDate();
+    const c = f.fleet.poolCountsAt(d);
+    const inTransit = c.transitToMars + c.transitToEarth;
+    const row = (label, val, color) =>
+      `<div class="detail-row"><span class="detail-label"${color ? ` style="color:${color}"` : ""}>${label}</span><span class="detail-value">${val.toLocaleString()}</span></div>`;
+    let inner = `<div class="metric-header"><span class="metric-label">Fleet</span><span class="metric-value-sm">${c.total.toLocaleString()} ships</span></div>`;
+    inner += `<div style="font-size:11px;color:var(--text-3);margin:-2px 0 4px;">${d.toISOString().slice(0, 10)} · ${inTransit.toLocaleString()} in transit</div>`;
+    inner += `<div class="metric-details" style="display:block;">`;
+    inner += row("→ Mars (transit)", c.transitToMars, "#12c8ff");
+    inner += row("→ Earth (transit)", c.transitToEarth, "#ff4fd8");
+    inner += row("On Earth", c.onEarth);
+    inner += row("On Mars", c.onMars);
+    if (c.retired) inner += row("Retired", c.retired);
+    inner += `</div>`;
+    return shell(inner);
+  }
+
+  /**
+   * Right-panel "Fleet link" connectivity-analysis card. Reads the latest ship
+   * extension result (this._flightExt, computed throttled in updateLoop): how many
+   * in-transit ships reach the relay backbone, the deepest relay chain, and the
+   * access-link capacity/latency distribution (ship → its backbone root; the
+   * root→Earth/Mars leg is the existing network's job).
+   */
+  /** Full-unit formatters shared by the Fleet-link card + its charts. */
+  _fmtCapFull(g) {
+    if (!isFinite(g) || g <= 0) return "—";
+    if (g >= 1) return `${g.toFixed(g >= 10 ? 0 : 1)} Gbps`;
+    const mb = g * 1000;
+    return mb >= 10 ? `${Math.round(mb)} Mbps` : `${mb.toFixed(1)} Mbps`;
+  }
+  _fmtLatFull(s) {
+    if (!isFinite(s) || s <= 0) return "—";
+    if (s >= 3600) return `${(s / 3600).toFixed(1)} h`;
+    if (s >= 60) return `${(s / 60).toFixed(1)} min`;
+    return `${Math.round(s)} s`;
+  }
+
+  fleetConnectivityHtml() {
+    const f = this.simFlight;
+    const shell = (inner) => `<div class="metric-card" id="fleet-connectivity-card">${inner}</div>`;
+    const head = (val, color) => `<div class="metric-header"><span class="metric-label">Fleet link</span><span class="metric-value-sm"${color ? ` style="color:${color}"` : ""}>${val}</span></div>`;
+    if (!f || !f.enabled) return shell(head("hidden", "var(--text-3)"));
+    const ext = this._flightExt;
+    if (!ext || !ext.summary || ext.summary.total === 0) return shell(head("no ships in transit", "var(--text-3)"));
+
+    const { connected, unconnected, total } = ext.summary;
+    const reachPct = total ? Math.round((connected / total) * 100) : 0;
+    const conn = ext.perShip.filter((s) => s.connected);
+    const hopsMax = conn.reduce((m, s) => Math.max(m, s.hops), 0);
+
+    const fmtCap = (g) => this._fmtCapFull(g);
+    const fmtLat = (s) => this._fmtLatFull(s);
+    const finite = (key) => conn.map((s) => s[key]).filter((v) => isFinite(v) && v > 0);
+    const med = (key) => { const a = finite(key).sort((x, y) => x - y); return a.length ? a[Math.floor(a.length / 2)] : NaN; };
+    const stats = (key) => { const a = finite(key); if (!a.length) return null; return { min: Math.min(...a), max: Math.max(...a), avg: a.reduce((s, v) => s + v, 0) / a.length }; };
+
+    const E = "#3b82f6", M = "#e0573e";
+    const state = this._fleetLinkState;
+    const arrow = state === "expanded" ? "&#9662;" : "&#9656;";
+    const label = state === "expanded" ? "Compact" : state === "compact" ? "Charts" : "Distributions";
+
+    let inner = head(`${connected}/${total} linked`);
+    inner += `<div class="metric-sub">${reachPct}% reach · max ${hopsMax} hop${hopsMax === 1 ? "" : "s"}${unconnected ? ` · <span style="color:var(--accent-hot)">${unconnected} cut off</span>` : ""}</div>`;
+    inner += `<div class="metric-toggle" id="fleetlink-toggle" onclick="window.simMain.cycleFleetLink()"><span class="arrow">${arrow}</span><span>${label}</span></div>`;
+
+    if (state === "compact") {
+      const row = (l, v, c) => `<div class="detail-row"><span class="detail-label"${c ? ` style="color:${c}"` : ""}>${l}</span><span class="detail-value">${v}</span></div>`;
+      inner += `<div class="metric-details" style="display:block;">`;
+      inner += row(`<span style="color:${E}">Earth</span> / <span style="color:${M}">Mars</span> cap`, `${fmtCap(med("capEarthGbps"))} / ${fmtCap(med("capMarsGbps"))}`);
+      inner += row(`<span style="color:${E}">Earth</span> / <span style="color:${M}">Mars</span> lag`, `${fmtLat(med("latEarthSec"))} / ${fmtLat(med("latMarsSec"))}`);
+      inner += row("To relay (cap · lag)", `${fmtCap(med("capacityGbps"))} · ${fmtLat(med("accessLatencySec"))}`);
+      if (unconnected) inner += row("Unconnected", String(unconnected), "var(--accent-hot)");
+      inner += `</div>`;
+    } else if (state === "expanded") {
+      const statLine = (color, name, st, fmt) => st
+        ? `<div class="fl-stat"><span class="fl-dot" style="background:${color}"></span><span class="fl-name">${name}</span><span class="fl-vals">${fmt(st.min)} <span class="fl-sep">·</span> <b>${fmt(st.avg)}</b> <span class="fl-sep">·</span> ${fmt(st.max)}</span></div>`
+        : `<div class="fl-stat"><span class="fl-dot" style="background:${color}"></span><span class="fl-name">${name}</span><span class="fl-vals" style="color:var(--text-3)">—</span></div>`;
+      inner += `<div id="fleetlink-content" style="display:block;">`;
+      inner += `<div class="fl-legend">min · <b>avg</b> · max — best single-path · ${conn.length} ship${conn.length === 1 ? "" : "s"}</div>`;
+      inner += `<div class="fl-group-title">Capacity to planet</div>`;
+      inner += statLine(E, "Earth", stats("capEarthGbps"), fmtCap);
+      inner += statLine(M, "Mars", stats("capMarsGbps"), fmtCap);
+      inner += `<div class="chart-wrap fl-chart"><canvas id="fl-cap-chart"></canvas></div>`;
+      inner += `<div class="fl-group-title">Latency to planet</div>`;
+      inner += statLine(E, "Earth", stats("latEarthSec"), fmtLat);
+      inner += statLine(M, "Mars", stats("latMarsSec"), fmtLat);
+      inner += `<div class="chart-wrap fl-chart"><canvas id="fl-lat-chart"></canvas></div>`;
+      const ca = stats("capacityGbps"), la = stats("accessLatencySec");
+      inner += `<div class="fl-group-title">Access to relay backbone</div>`;
+      inner += `<div class="detail-row"><span class="detail-label">Capacity</span><span class="detail-value">${ca ? `${fmtCap(ca.min)} · ${fmtCap(ca.avg)} · ${fmtCap(ca.max)}` : "—"}</span></div>`;
+      inner += `<div class="detail-row"><span class="detail-label">Latency</span><span class="detail-value">${la ? `${fmtLat(la.min)} · ${fmtLat(la.avg)} · ${fmtLat(la.max)}` : "—"}</span></div>`;
+      if (unconnected) inner += `<div class="detail-row"><span class="detail-label" style="color:var(--accent-hot)">Unconnected</span><span class="detail-value">${unconnected}</span></div>`;
+      inner += `</div>`;
+    }
+    return shell(inner);
+  }
+
+  /** Cycle the Fleet-link card: closed → compact → expanded → closed. */
+  cycleFleetLink() {
+    const next = { closed: "compact", compact: "expanded", expanded: "closed" };
+    this._fleetLinkState = next[this._fleetLinkState] || "expanded";
+    try { localStorage.setItem("marslink-fleetlink-state", this._fleetLinkState); } catch {}
+    this._renderFleetLinkCard();
+  }
+
+  /** Rebuild the Fleet-link card DOM + (re)create its charts for the current data/state. */
+  _renderFleetLinkCard() {
+    const b = document.getElementById("fleet-connectivity-card");
+    if (b) b.outerHTML = this.fleetConnectivityHtml();
+    this.makeFleetLinkCharts();
+  }
+
+  destroyFleetLinkCharts() {
+    for (const k of ["cap", "lat"]) {
+      const c = this.fleetLinkCharts && this.fleetLinkCharts[k];
+      if (c) { try { c.destroy(); } catch {} this.fleetLinkCharts[k] = null; }
+    }
+  }
+
+  /**
+   * (Re)create the two Fleet-link distribution charts (Earth vs Mars, grouped
+   * histograms). No-op unless the card is expanded and the canvases are present.
+   * Called after every panel render and whenever _flightExt changes.
+   */
+  makeFleetLinkCharts() {
+    this.destroyFleetLinkCharts();
+    this._fleetLinkDrawnVersion = this._flightExtVersion;
+    if (this._fleetLinkState !== "expanded") return;
+    const ext = this._flightExt;
+    if (!ext || !ext.perShip) return;
+    const conn = ext.perShip.filter((s) => s.connected);
+    if (!conn.length) return;
+    const capCanvas = document.getElementById("fl-cap-chart");
+    const latCanvas = document.getElementById("fl-lat-chart");
+    if (capCanvas) this.fleetLinkCharts.cap = this._fleetHistChart(capCanvas, conn.map((s) => s.capEarthGbps), conn.map((s) => s.capMarsGbps), "cap");
+    if (latCanvas) this.fleetLinkCharts.lat = this._fleetHistChart(latCanvas, conn.map((s) => s.latEarthSec), conn.map((s) => s.latMarsSec), "lat");
+  }
+
+  /** Build one grouped Earth/Mars histogram (Chart.js). kind: "cap" (Gbps) | "lat" (seconds). */
+  _fleetHistChart(canvas, earthRaw, marsRaw, kind) {
+    if (typeof Chart === "undefined") return null;
+    const earth = earthRaw.filter((v) => isFinite(v) && v > 0);
+    const mars = marsRaw.filter((v) => isFinite(v) && v > 0);
+    const all = earth.concat(mars);
+    if (!all.length) return null;
+
+    // Pick a single display unit for the whole axis from the combined max.
+    let scale, unit;
+    if (kind === "cap") { const mx = Math.max(...all); if (mx >= 1) { scale = 1; unit = "Gbps"; } else { scale = 1000; unit = "Mbps"; } }
+    else { const mxMin = Math.max(...all) / 60; if (mxMin >= 120) { scale = 1 / 3600; unit = "h"; } else { scale = 1 / 60; unit = "min"; } }
+
+    const eS = earth.map((v) => v * scale), mS = mars.map((v) => v * scale);
+    const sv = eS.concat(mS);
+    const min = Math.min(...sv), max = Math.max(...sv);
+    const BINS = 16, range = (max - min) || 1, bw = range / BINS;
+    const binize = (arr) => { const c = new Array(BINS).fill(0); for (const v of arr) { let i = Math.floor((v - min) / range * BINS); if (i >= BINS) i = BINS - 1; if (i < 0) i = 0; c[i]++; } return c; };
+    const eC = binize(eS), mC = binize(mS);
+    const fmt = (v) => v >= 100 ? String(Math.round(v)) : v >= 10 ? v.toFixed(0) : v.toFixed(1);
+    const labels = []; for (let i = 0; i < BINS; i++) labels.push(fmt(min + (i + 0.5) * bw));
+
+    const textDim = "#525c75", textMuted = "#7c879f", grid = "rgba(255,255,255,0.06)", tipBg = "#1a2030";
+    return new Chart(canvas.getContext("2d"), {
+      type: "bar",
+      data: {
+        labels,
+        datasets: [
+          { label: "Earth", data: eC, backgroundColor: "rgba(59,130,246,0.6)", hoverBackgroundColor: "rgba(59,130,246,0.85)", borderRadius: 2, barPercentage: 1, categoryPercentage: 0.92 },
+          { label: "Mars", data: mC, backgroundColor: "rgba(224,87,62,0.6)", hoverBackgroundColor: "rgba(224,87,62,0.85)", borderRadius: 2, barPercentage: 1, categoryPercentage: 0.92 },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false, // card re-renders as time animates; skip per-update tweening
+        layout: { padding: { top: 2, right: 4, bottom: 0, left: 0 } },
+        scales: {
+          x: {
+            title: { display: true, text: `${kind === "cap" ? "Capacity" : "Latency"} (${unit})`, color: textMuted, font: { size: 10 } },
+            ticks: { color: textDim, font: { size: 9 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 6 },
+            grid: { display: false }, border: { color: grid },
+          },
+          y: {
+            title: { display: true, text: "ships", color: textMuted, font: { size: 10 } },
+            ticks: { color: textDim, font: { size: 9 }, maxTicksLimit: 4, precision: 0 },
+            grid: { color: grid }, border: { display: false }, beginAtZero: true,
+          },
+        },
+        plugins: {
+          legend: { display: true, position: "top", align: "end", labels: { color: textMuted, font: { size: 10 }, boxWidth: 10, boxHeight: 10 } },
+          tooltip: {
+            backgroundColor: tipBg, titleColor: "#eef1f7", bodyColor: "#b9c0d0",
+            borderColor: "rgba(255,255,255,0.1)", borderWidth: 1, cornerRadius: 4, padding: 8,
+            titleFont: { size: 11 }, bodyFont: { size: 11 },
+            callbacks: {
+              title: (items) => { const i = items[0].dataIndex; return `${fmt(min + i * bw)}–${fmt(min + (i + 1) * bw)} ${unit}`; },
+              label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y} ship${ctx.parsed.y === 1 ? "" : "s"}`,
+            },
+          },
+        },
+      },
+    });
+  }
+
+  /**
+   * Swap the live Fleet cards. The ships card is cheap (text only) and refreshes
+   * every tick; the Fleet-link card is only rebuilt when its data changed
+   * (_flightExtVersion) so we don't tear down + recreate Chart.js every frame.
+   */
+  refreshFleetMetric() {
+    const a = document.getElementById("fleet-metric-card");
+    if (a) a.outerHTML = this.fleetMetricHtml();
+    if (this._flightExtVersion !== this._fleetLinkDrawnVersion) this._renderFleetLinkCard();
+  }
+
+  /**
+   * Right-panel "Coverage probes" card (Monte-Carlo coverage-field overlay).
+   * Reports the coverage fraction (% of independent probes that found any
+   * spare-port backbone node) and, like the Fleet-link card, a 3-state view:
+   * closed → compact (median rows) → expanded (min·avg·max stat lines +
+   * distribution charts) for capacity/latency to Earth & Mars and to the relay
+   * access hop. Built from this._probeMeas (computed throttled in Phase 5c).
+   */
+  coverageMetricHtml() {
+    const p = this.simProbe;
+    const shell = (inner) => `<div class="metric-card" id="coverage-metric-card">${inner}</div>`;
+    const head = (val, color) => `<div class="metric-header"><span class="metric-label">Coverage probes</span><span class="metric-value-sm"${color ? ` style="color:${color}"` : ""}>${val}</span></div>`;
+    if (!p || !p.enabled) return shell(head("hidden", "var(--text-3)"));
+    const meas = this._probeMeas;
+    if (!meas || !meas.summary || meas.summary.total === 0) return shell(head("sampling…", "var(--text-3)"));
+
+    const { connected, unconnected, total } = meas.summary;
+    const reachPct = total ? Math.round((connected / total) * 100) : 0;
+    const conn = meas.perProbe.filter((s) => s.connected);
+
+    const fmtCap = (g) => this._fmtCapFull(g);
+    const fmtLat = (s) => this._fmtLatFull(s);
+    const finite = (key) => conn.map((s) => s[key]).filter((v) => isFinite(v) && v > 0);
+    const med = (key) => { const a = finite(key).sort((x, y) => x - y); return a.length ? a[Math.floor(a.length / 2)] : NaN; };
+    const stats = (key) => { const a = finite(key); if (!a.length) return null; return { min: Math.min(...a), max: Math.max(...a), avg: a.reduce((s, v) => s + v, 0) / a.length }; };
+
+    const E = "#3b82f6", M = "#e0573e", R = "#16c8aa";
+    const state = this._coverageState;
+    const arrow = state === "expanded" ? "&#9662;" : "&#9656;";
+    const label = state === "compact" ? "Charts" : state === "expanded" ? "Compact" : "Distributions";
+
+    let inner = head(`${reachPct}% coverage`);
+    inner += `<div class="metric-sub">${connected.toLocaleString()}/${total.toLocaleString()} probes linked${unconnected ? ` · <span style="color:var(--accent-hot)">${unconnected.toLocaleString()} no link</span>` : ""}</div>`;
+    inner += `<div class="metric-toggle" id="coverage-toggle" onclick="window.simMain.cycleCoverage()"><span class="arrow">${arrow}</span><span>${label}</span></div>`;
+
+    if (state === "compact") {
+      const row = (l, v, c) => `<div class="detail-row"><span class="detail-label"${c ? ` style="color:${c}"` : ""}>${l}</span><span class="detail-value">${v}</span></div>`;
+      inner += `<div class="metric-details" style="display:block;">`;
+      inner += row(`<span style="color:${E}">Earth</span> / <span style="color:${M}">Mars</span> cap`, `${fmtCap(med("capEarthGbps"))} / ${fmtCap(med("capMarsGbps"))}`);
+      inner += row(`<span style="color:${E}">Earth</span> / <span style="color:${M}">Mars</span> lag`, `${fmtLat(med("latEarthSec"))} / ${fmtLat(med("latMarsSec"))}`);
+      inner += row("To relay (cap · lag)", `${fmtCap(med("capacityGbps"))} · ${fmtLat(med("accessLatencySec"))}`);
+      inner += `</div>`;
+    } else if (state === "expanded") {
+      const statLine = (color, name, st, fmt) => st
+        ? `<div class="fl-stat"><span class="fl-dot" style="background:${color}"></span><span class="fl-name">${name}</span><span class="fl-vals">${fmt(st.min)} <span class="fl-sep">·</span> <b>${fmt(st.avg)}</b> <span class="fl-sep">·</span> ${fmt(st.max)}</span></div>`
+        : `<div class="fl-stat"><span class="fl-dot" style="background:${color}"></span><span class="fl-name">${name}</span><span class="fl-vals" style="color:var(--text-3)">—</span></div>`;
+      inner += `<div id="coverage-content" style="display:block;">`;
+      inner += `<div class="fl-legend">min · <b>avg</b> · max — best single-path · ${conn.length} probe${conn.length === 1 ? "" : "s"}</div>`;
+
+      inner += `<div class="fl-group-title">Capacity to planet</div>`;
+      inner += statLine(E, "Earth", stats("capEarthGbps"), fmtCap);
+      inner += statLine(M, "Mars", stats("capMarsGbps"), fmtCap);
+      inner += `<div class="chart-wrap fl-chart"><canvas id="cov-cap-chart"></canvas></div>`;
+
+      inner += `<div class="fl-group-title">Latency to planet</div>`;
+      inner += statLine(E, "Earth", stats("latEarthSec"), fmtLat);
+      inner += statLine(M, "Mars", stats("latMarsSec"), fmtLat);
+      inner += `<div class="chart-wrap fl-chart"><canvas id="cov-lat-chart"></canvas></div>`;
+
+      inner += `<div class="fl-group-title">To relay (access hop)</div>`;
+      inner += statLine(R, "Capacity", stats("capacityGbps"), fmtCap);
+      inner += `<div class="chart-wrap fl-chart"><canvas id="cov-relaycap-chart"></canvas></div>`;
+      inner += statLine(R, "Latency", stats("accessLatencySec"), fmtLat);
+      inner += `<div class="chart-wrap fl-chart"><canvas id="cov-relaylat-chart"></canvas></div>`;
+      inner += `</div>`;
+    }
+    return shell(inner);
+  }
+
+  /** Cycle the Coverage card: closed → compact → expanded → closed. */
+  cycleCoverage() {
+    const next = { closed: "compact", compact: "expanded", expanded: "closed" };
+    this._coverageState = next[this._coverageState] || "expanded";
+    try { localStorage.setItem("marslink-coverage-state", this._coverageState); } catch {}
+    this._renderCoverageCard();
+  }
+
+  /** Rebuild the Coverage card DOM + (re)create its charts for the current data/state. */
+  _renderCoverageCard() {
+    const b = document.getElementById("coverage-metric-card");
+    if (b) b.outerHTML = this.coverageMetricHtml();
+    this.makeCoverageCharts();
+  }
+
+  destroyCoverageCharts() {
+    for (const k of ["cap", "lat", "relayCap", "relayLat"]) {
+      const c = this.coverageCharts && this.coverageCharts[k];
+      if (c) { try { c.destroy(); } catch {} this.coverageCharts[k] = null; }
+    }
+  }
+
+  /**
+   * (Re)create the four Coverage distribution charts — capacity-to-planet and
+   * latency-to-planet (Earth vs Mars), plus the to-relay access-hop capacity and
+   * latency. No-op unless the card is expanded and the canvases are present.
+   * Called after every panel render and whenever the measurement changes.
+   */
+  makeCoverageCharts() {
+    this.destroyCoverageCharts();
+    this._coverageDrawnVersion = this._probeMeasVersion;
+    if (this._coverageState !== "expanded") return;
+    const meas = this._probeMeas;
+    if (!meas || !meas.perProbe) return;
+    const conn = meas.perProbe.filter((s) => s.connected);
+    if (!conn.length) return;
+    const E = "rgba(59,130,246,0.6)", Eh = "rgba(59,130,246,0.85)";
+    const M = "rgba(224,87,62,0.6)", Mh = "rgba(224,87,62,0.85)";
+    const R = "rgba(22,200,170,0.62)", Rh = "rgba(22,200,170,0.85)";
+    const cap = document.getElementById("cov-cap-chart");
+    const lat = document.getElementById("cov-lat-chart");
+    const rcap = document.getElementById("cov-relaycap-chart");
+    const rlat = document.getElementById("cov-relaylat-chart");
+    if (cap) this.coverageCharts.cap = this._coverageHistChart(cap, [
+      { label: "Earth", color: E, hover: Eh, data: conn.map((s) => s.capEarthGbps) },
+      { label: "Mars", color: M, hover: Mh, data: conn.map((s) => s.capMarsGbps) },
+    ], "cap");
+    if (lat) this.coverageCharts.lat = this._coverageHistChart(lat, [
+      { label: "Earth", color: E, hover: Eh, data: conn.map((s) => s.latEarthSec) },
+      { label: "Mars", color: M, hover: Mh, data: conn.map((s) => s.latMarsSec) },
+    ], "lat");
+    if (rcap) this.coverageCharts.relayCap = this._coverageHistChart(rcap, [
+      { label: "To relay", color: R, hover: Rh, data: conn.map((s) => s.capacityGbps) },
+    ], "cap");
+    if (rlat) this.coverageCharts.relayLat = this._coverageHistChart(rlat, [
+      { label: "To relay", color: R, hover: Rh, data: conn.map((s) => s.accessLatencySec) },
+    ], "lat");
+  }
+
+  /**
+   * One grouped histogram (Chart.js) over 1–2 series. kind: "cap" (Gbps) | "lat"
+   * (seconds). Capacity follows ~1/d² and spans orders of magnitude, so it is
+   * binned on a LOG axis (a linear axis dumps almost every probe into the first
+   * bin); latency has a narrow range and stays linear.
+   */
+  _coverageHistChart(canvas, series, kind) {
+    if (typeof Chart === "undefined") return null;
+    const cleaned = series.map((s) => ({ ...s, vals: s.data.filter((v) => isFinite(v) && v > 0) }));
+    const all = cleaned.flatMap((s) => s.vals);
+    if (!all.length) return null;
+
+    const BINS = 16;
+    const min = Math.min(...all), max = Math.max(...all);
+
+    // Per-kind binning: log-spaced for capacity, linear for latency.
+    let binOf, centerOf, edgeOf, axisLabel, valFmt, tipSuffix = "";
+    if (kind === "cap") {
+      const lo = Math.log10(min), hi = Math.log10(max), span = (hi - lo) || 1;
+      binOf = (v) => { const i = Math.floor((Math.log10(v) - lo) / span * BINS); return i < 0 ? 0 : i >= BINS ? BINS - 1 : i; };
+      centerOf = (i) => Math.pow(10, lo + (i + 0.5) * span / BINS);
+      edgeOf = (i) => Math.pow(10, lo + i * span / BINS);
+      axisLabel = "Capacity (log)";
+      // Compact, per-value unit: G = Gbps, M = Mbps, k = kbps.
+      valFmt = (g) => {
+        if (g >= 1) return `${g >= 100 ? Math.round(g) : g >= 10 ? g.toFixed(0) : g.toFixed(1)}G`;
+        const mb = g * 1000;
+        if (mb >= 1) return `${mb >= 100 ? Math.round(mb) : mb >= 10 ? mb.toFixed(0) : mb.toFixed(1)}M`;
+        const kb = g * 1e6;
+        return `${kb >= 100 ? Math.round(kb) : kb >= 10 ? kb.toFixed(0) : kb.toFixed(1)}k`;
+      };
+    } else {
+      let scale, unit;
+      if (max / 60 >= 120) { scale = 1 / 3600; unit = "h"; } else { scale = 1 / 60; unit = "min"; }
+      const smin = min * scale, smax = max * scale, range = (smax - smin) || 1;
+      binOf = (v) => { const i = Math.floor((v * scale - smin) / range * BINS); return i < 0 ? 0 : i >= BINS ? BINS - 1 : i; };
+      centerOf = (i) => smin + (i + 0.5) * range / BINS;
+      edgeOf = (i) => smin + i * range / BINS;
+      axisLabel = `Latency (${unit})`;
+      tipSuffix = ` ${unit}`;
+      valFmt = (v) => v >= 100 ? String(Math.round(v)) : v >= 10 ? v.toFixed(0) : v.toFixed(1);
+    }
+
+    const binize = (vals) => { const c = new Array(BINS).fill(0); for (const v of vals) c[binOf(v)]++; return c; };
+    const labels = []; for (let i = 0; i < BINS; i++) labels.push(valFmt(centerOf(i)));
+    const datasets = cleaned.map((s) => ({ label: s.label, data: binize(s.vals), backgroundColor: s.color, hoverBackgroundColor: s.hover || s.color, borderRadius: 2, barPercentage: 1, categoryPercentage: 0.92 }));
+
+    const textDim = "#525c75", textMuted = "#7c879f", grid = "rgba(255,255,255,0.06)", tipBg = "#1a2030";
+    return new Chart(canvas.getContext("2d"), {
+      type: "bar",
+      data: { labels, datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        layout: { padding: { top: 2, right: 4, bottom: 0, left: 0 } },
+        scales: {
+          x: {
+            title: { display: true, text: axisLabel, color: textMuted, font: { size: 10 } },
+            ticks: { color: textDim, font: { size: 9 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 6 },
+            grid: { display: false }, border: { color: grid },
+          },
+          y: {
+            title: { display: true, text: "probes", color: textMuted, font: { size: 10 } },
+            ticks: { color: textDim, font: { size: 9 }, maxTicksLimit: 4, precision: 0 },
+            grid: { color: grid }, border: { display: false }, beginAtZero: true,
+          },
+        },
+        plugins: {
+          legend: { display: datasets.length > 1, position: "top", align: "end", labels: { color: textMuted, font: { size: 10 }, boxWidth: 10, boxHeight: 10 } },
+          tooltip: {
+            backgroundColor: tipBg, titleColor: "#eef1f7", bodyColor: "#b9c0d0",
+            borderColor: "rgba(255,255,255,0.1)", borderWidth: 1, cornerRadius: 4, padding: 8,
+            titleFont: { size: 11 }, bodyFont: { size: 11 },
+            callbacks: {
+              title: (items) => { const i = items[0].dataIndex; return `${valFmt(edgeOf(i))}–${valFmt(edgeOf(i + 1))}${tipSuffix}`; },
+              label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y} probe${ctx.parsed.y === 1 ? "" : "s"}`,
+            },
+          },
+        },
+      },
+    });
+  }
+
+  /**
+   * Swap the live Coverage card. Rebuilt + charts recreated only when the
+   * measurement changed (_probeMeasVersion), so we don't tear down + recreate
+   * Chart.js every frame as time animates.
+   */
+  refreshCoverageMetric() {
+    if (this._probeMeasVersion === this._coverageDrawnVersion && document.getElementById("coverage-metric-card")) return;
+    const a = document.getElementById("coverage-metric-card");
+    if (a) a.outerHTML = this.coverageMetricHtml();
+    this.makeCoverageCharts();
   }
 
   getCostsHtml(costs, networkData, latencyData) {
@@ -728,6 +1350,13 @@ export class SimMain {
       html += `<div class="detail-row"><span class="detail-label">Deployment flights</span><span class="detail-value">${totalFlights.toLocaleString()}</span></div>`;
     }
     html += `</div></div>`;
+
+    // ── 1b. FLEET (spacecraft-flight overlay) ──
+    // Fleet-link card is emitted last (see end of getCostsHtml).
+    html += this.fleetMetricHtml();
+
+    // ── 1c. COVERAGE PROBES (Monte-Carlo coverage-field overlay) ──
+    html += this.coverageMetricHtml();
 
     // ── 2. COST ──
     if (costs) {
@@ -843,9 +1472,15 @@ export class SimMain {
       }
 
       const techFactor = this.simLinkBudget.techImprovementFactor || 1;
-      // No relay rings ⇒ no Earth↔Mars path ⇒ zero end-to-end capacity (a planet ring's
-      // own internal capacity is not a usable Earth-to-Mars figure here).
-      const capHeaderValue = relayRingCount === 0 ? fmtMbps(0) : rs ? fmtMbps(rs.totalThroughput) : fmtMbps(earthCapTotal);
+      // End-to-end Earth↔Mars capacity = the BOTTLENECK stage: the min of the Earth-ring, relay,
+      // and Mars-ring capacities (the same `segments` the bottleneck line is computed from), NOT
+      // the relay number alone — a smaller planet-ring/ground link caps the whole path. This keeps
+      // the header consistent with the "Bottleneck: …" subline. No relay rings ⇒ no Earth↔Mars path
+      // ⇒ zero (a planet ring's own internal capacity is not a usable Earth-to-Mars figure here).
+      const capHeaderValue =
+        relayRingCount === 0 ? fmtMbps(0)
+        : segments.length ? fmtMbps(minOf(segments.map((s) => s.cap)))
+        : rs ? fmtMbps(rs.totalThroughput) : fmtMbps(earthCapTotal);
 
       html += `<div class="metric-card">`;
       html += `<div class="metric-header">`;
@@ -1156,43 +1791,47 @@ export class SimMain {
         const earthFlowTotal = earthFlow.side1 + earthFlow.side2;
         const marsFlowTotal = marsFlow.side1 + marsFlow.side2;
 
-        let activeRoutes = 0;
+        // Active Earth\u2194relay / Mars\u2194relay routes (links that actually carry flow). A relay
+        // ring is any ring_* that isn't a planet ring \u2014 the old code hard-coded "ring_adapt",
+        // so this count read 0 for the eccentric/circular families; keeping it relay-type
+        // agnostic makes the Flow card correct for every relay family.
+        let earthActive = null, marsActive = null;
         if (networkData?.links) {
-          activeRoutes = networkData.links.filter((l) => l.gbpsFlow > 0 && (
-            (l.fromId.startsWith("ring_earth") && l.toId.startsWith("ring_adapt")) ||
-            (l.fromId.startsWith("ring_adapt") && l.toId.startsWith("ring_earth"))
-          )).length;
+          const isRelayRing = (id) => id && id.startsWith("ring_") && !id.startsWith("ring_earth") && !id.startsWith("ring_mars");
+          const countActive = (planetPrefix) => networkData.links.filter((l) =>
+            l.gbpsFlow > 0 &&
+            ((l.fromId.startsWith(planetPrefix) && isRelayRing(l.toId)) ||
+             (l.toId.startsWith(planetPrefix) && isRelayRing(l.fromId)))
+          ).length;
+          earthActive = countActive("ring_earth");
+          marsActive = countActive("ring_mars");
         }
         const adaptedFlowPct = rs && rs.totalThroughput > 0 ? pct(actualFlowMbps, rs.totalThroughput) : "";
 
         html += `<div class="metric-sub">${pct(actualFlowMbps, rs ? rs.totalThroughput : earthCapTotal)} of capacity</div>`;
 
-        // Toggle for flow diagram
+        // Toggle for flow diagram (closed \u2192 compact ASCII \u2192 expanded SVG)
         html += `<div class="metric-toggle" id="flow-toggle">`;
         html += `<span class="arrow" id="flow-arrow">&#9656;</span><span>Diagram</span>`;
         html += `</div>`;
 
-        // Compact flow diagram
+        // Compact flow diagram (ASCII, mirrors the compact Capacity diagram)
         html += `<pre class="capacity-diagram" id="flow-compact" style="display: none;">`;
         html += planetLine(earthFlow.side1, "\u25CF", earthFlow.side2, `${fmtMbps(earthFlowTotal)}, ${pct(earthFlowTotal, earthCapTotal)}`, -2);
         if (rs) html += `${pipes}  ${fmtMbps(actualFlowMbps)}, ${adaptedFlowPct}\n`;
         html += planetLine(marsFlow.side1, "\u2022", marsFlow.side2, `${fmtMbps(marsFlowTotal)}, ${pct(marsFlowTotal, marsCapTotal)}`, 2);
         html += `</pre>`;
 
-        // Expanded flow diagram
+        // Expanded flow diagram \u2014 vertical Earth\u2192relay\u2192Mars data path as SVG, the same
+        // skeleton as the Capacity diagram with flow-reading labels (works for both ring
+        // families). The compact ASCII above stays for the mid toggle state.
         html += `<div id="flow-content" style="display: none;">`;
-        html += `<pre class="capacity-diagram">`;
-        html += planetLine(earthFlow.side1, "\u25CF", earthFlow.side2, `Earth ${fmtMbps(earthFlowTotal)}, ${pct(earthFlowTotal, earthCapTotal)}`, -2);
-        if (rs) {
-          const adaptedRingCount = Object.keys(ringCapacities).filter((r) => r.startsWith("ring_adapt")).length;
-          html += `${pipes}  ${fmtMbps(actualFlowMbps)}, ${adaptedFlowPct}\n`;
-          html += `${pipes}  ${adaptedRingCount} rings\n`;
-          html += `${pipes}  ${activeRoutes}/${rs.routeCount} routes active\n`;
-          html += `${pipes}  ${fmtRange(rs.minThroughput, rs.avgThroughput, rs.maxThroughput)}\n`;
-          html += `${pipes}  ${(rs.minLatency / 60).toFixed(1)}|${(rs.avgLatency / 60).toFixed(1)}|${(rs.maxLatency / 60).toFixed(1)} min\n`;
-        }
-        html += planetLine(marsFlow.side1, "\u2022", marsFlow.side2, `Mars ${fmtMbps(marsFlowTotal)}, ${pct(marsFlowTotal, marsCapTotal)}`, 2);
-        html += `</pre>`;
+        html += this._flowPathSvg({
+          rs, earthInring, marsInring, earthFlow, marsFlow, earthFlowTotal, marsFlowTotal,
+          earthCapTotal, marsCapTotal, actualFlowMbps, earthActive, marsActive,
+          relayRingCount, bottleneckLine,
+          fmtMbps, fmtRange, fmtNum, pct,
+        });
         html += `</div>`;
       } else if (!flowSelected) {
         html += `<div class="metric-sub">Select Flow to enable</div>`;
@@ -1244,6 +1883,9 @@ export class SimMain {
       html += `</div>`;
     }
     html += `</div>`;
+
+    // \u2500\u2500 6. FLEET LINK (in-transit ship connectivity) \u2014 last card. \u2500\u2500
+    html += this.fleetConnectivityHtml();
 
     return html;
   }
@@ -1464,6 +2106,7 @@ export class SimMain {
    */
   applyWindowResult(result) {
     this.lastNetworkData = result.networkData || null;
+    this.lastLatencyData = result.latencyData || null; // surfaced to the archive metric capture
     this.maxFlowGbps = result.networkData ? result.networkData.maxFlowGbps || 0 : 0;
     this.capacityInfo = result.capacityInfo || null;
     this.routeSummary = result.routeSummary || null;
@@ -1538,10 +2181,10 @@ export class SimMain {
         this.resultTrees = msg.resultTreesData || [];
         this.updateSatelliteFuel();
         this._maybeAutoRefreshReport();
-        // Simple-config ring count slider feedback loop: fires on the earlier
-        // links-ready path so the user sees the correction without waiting
-        // for the full flow computation.
-        if (this.ui?.runSimpleFeedbackStep) this.ui.runSimpleFeedbackStep();
+        // Earth/Mars auto-size: size each planet ring's worst-case in-ring rate to half
+        // the live relay capacity (the Capacity card number). Fires on the earlier
+        // links-ready path so the user sees the correction without waiting for the flow.
+        if (this.ui?.runPlanetSizingStep) this.ui.runPlanetSizingStep();
         if (typeof msg.satellitesCount === "number") this.satellitesCount = msg.satellitesCount;
         if (this.simDisplay) {
           this.simDisplay.updatePossibleLinks(msg.possibleLinks || []);
@@ -1663,44 +2306,30 @@ export class SimMain {
       const phase = !this.workerBusy ? "idle" : foreground ? this.recalcPhase : "prefetch";
       const label = recalcEl.querySelector(".recalc-label");
       const fill = recalcEl.querySelector(".recalc-bar-fill");
-      recalcEl.classList.remove("phase-idle", "phase-links", "phase-flow", "phase-prefetch", "phase-tuning", "indeterminate");
+      recalcEl.classList.remove("phase-idle", "phase-links", "phase-flow", "phase-prefetch", "indeterminate");
       const fmtS = (ms) => (ms / 1000).toFixed(1);
 
-      // The simple-config auto-sizer ("tuning") iteratively resizes the Earth/Mars
-      // rings to match the relay target. Surface what's converging so the repeated
-      // computes read as intentional convergence, not a stuck loop.
-      const tuning = this.ui?._simpleFeedbackState ? this.ui?._tuningStatus : null;
-      if (tuning && tuning.target > 0) {
-        recalcEl.classList.add("phase-tuning", "indeterminate");
-        const pct = (v) => Math.round((v / tuning.target) * 100);
-        label.textContent = `Tuning rings · E ${pct(tuning.earthMin)}% M ${pct(tuning.marsMin)}% · #${tuning.step}`;
-        recalcEl.title =
-          `Auto-sizing Earth & Mars rings to match relay throughput (${(tuning.target / 1000).toFixed(1)} Gbps). ` +
-          `E / M = each ring's capacity vs target (converges to ~103%); #${tuning.step} = step.`;
-        fill.style.width = "100%";
-      } else {
-        recalcEl.classList.add(`phase-${phase}`);
-        recalcEl.title = "Link & flow recalculation status";
-        if (phase === "links" || phase === "flow") {
-          const est = phase === "links" ? this._estLinksMs : this._estFlowMs;
-          const elapsed = performance.now() - this.recalcStart;
-          const name = phase === "links" ? "Computing links" : "Computing flow";
-          if (est > 0) {
-            label.textContent = `${name}… ${fmtS(elapsed)} / ~${fmtS(est)}s`;
-            fill.style.width = `${Math.min(99, (elapsed / est) * 100)}%`;
-          } else {
-            label.textContent = `${name}… ${fmtS(elapsed)}s`;
-            fill.style.width = "100%";
-            recalcEl.classList.add("indeterminate"); // unknown duration → animated bar
-          }
-        } else if (phase === "prefetch") {
-          label.textContent = "Prefetching…";
-          fill.style.width = "100%";
-          recalcEl.classList.add("indeterminate");
+      recalcEl.classList.add(`phase-${phase}`);
+      recalcEl.title = "Link & flow recalculation status";
+      if (phase === "links" || phase === "flow") {
+        const est = phase === "links" ? this._estLinksMs : this._estFlowMs;
+        const elapsed = performance.now() - this.recalcStart;
+        const name = phase === "links" ? "Computing links" : "Computing flow";
+        if (est > 0) {
+          label.textContent = `${name}… ${fmtS(elapsed)} / ~${fmtS(est)}s`;
+          fill.style.width = `${Math.min(99, (elapsed / est) * 100)}%`;
         } else {
-          label.textContent = "Idle";
-          fill.style.width = "0%";
+          label.textContent = `${name}… ${fmtS(elapsed)}s`;
+          fill.style.width = "100%";
+          recalcEl.classList.add("indeterminate"); // unknown duration → animated bar
         }
+      } else if (phase === "prefetch") {
+        label.textContent = "Prefetching…";
+        fill.style.width = "100%";
+        recalcEl.classList.add("indeterminate");
+      } else {
+        label.textContent = "Idle";
+        fill.style.width = "0%";
       }
     }
 
@@ -1944,6 +2573,66 @@ export class SimMain {
       this.pendingUpdates.delete("satellites_display");
     }
     if (this.simDisplay) this.simDisplay.updatePositions(planets, satellites);
+
+    // --- Phase 5b: Spacecraft-flight overlay (fleet transfers) ---
+    if (this.simDisplay && this.simFlight && this.simFlight.enabled && this.simDisplay.setFlightData) {
+      const earthEle = Array.isArray(planets) ? planets.find((p) => p && p.name === "Earth") : null;
+      const marsEle = Array.isArray(planets) ? planets.find((p) => p && p.name === "Mars") : null;
+      this.simFlight.ensureFleet(earthEle, marsEle);
+      const fd = this.simFlight.getRenderData(simDate);
+
+      // Extension links need the constellation backbone (BFS over the full link
+      // graph), so recompute periodically and reuse between refreshes.
+      const possibleLinks = this.simDisplay.possibleLinks;
+      this._flightExtFrame = (this._flightExtFrame || 0) + 1;
+      if (fd.count > 0 && possibleLinks && possibleLinks.length && this.simLinkBudget.maxDistanceAU > 0 && this._flightExtFrame % 20 === 0) {
+        try {
+          this._flightExt = this.simFlight.computeExtension({ planets, satellites, possibleLinks, simLinkBudget: this.simLinkBudget, simDate });
+          this._flightExtVersion++; // bump so the Fleet-link card rebuilds its charts with fresh data
+        } catch (e) { /* overlay is non-fatal */ }
+      }
+      if (this._flightExt && fd.count > 0 && this.simFlight.showShips) {
+        fd.links = this._flightExt.links || [];
+        const connectedSet = new Set((this._flightExt.perShip || []).filter((s) => s.connected).map((s) => s.shipId));
+        for (const sh of fd.ships) sh.connected = connectedSet.has(sh.id);
+      }
+      this.simDisplay.setFlightData(fd);
+      // Keep the right-panel Fleet card live as time animates (throttled).
+      if (this._flightExtFrame % 15 === 0) this.refreshFleetMetric();
+    }
+
+    // --- Phase 5c: Monte-Carlo coverage-field overlay (independent probes) ---
+    if (this.simDisplay && this.simProbe && this.simProbe.enabled && this.simDisplay.setProbeData) {
+      this.simProbe.ensureCloud(this.simSatellites.getEarth(), this.simSatellites.getMars());
+
+      // The probe cloud is STATIC and the backbone reach only changes when the
+      // worker delivers a new window (a new possibleLinks). So measure ONCE per
+      // window change (or when the cloud was resampled), NOT on a frame timer —
+      // the measurement (rooted-backbone extraction + four widest/shortest-path
+      // passes over ~10k+ links) is a heavy synchronous calc that, when run every
+      // N frames, stalls the render loop periodically. Event-driving it makes the
+      // steady-state per-frame cost ~zero.
+      const possibleLinks = this.simDisplay.possibleLinks;
+      const backboneReady = possibleLinks && possibleLinks.length && this.simLinkBudget.maxDistanceAU > 0;
+      if (backboneReady && (possibleLinks !== this._probeMeasdLinks || !this.simProbe.hasMeasurement())) {
+        try {
+          this._probeMeas = this.simProbe.measure({ planets, satellites, possibleLinks, simLinkBudget: this.simLinkBudget });
+          this._probeMeasdLinks = possibleLinks;
+          this._probeMeasVersion++;
+        } catch (e) { /* overlay is non-fatal */ }
+      }
+
+      // getRenderData is cached, so it returns the same object until the
+      // measurement/cloud changes — only re-push to the display when it actually
+      // changed (or the display instance switched 2D↔3D).
+      const rd = this.simProbe.getRenderData();
+      if (rd !== this._lastProbeRender || this.simDisplay !== this._lastProbeDisplay) {
+        this.simDisplay.setProbeData(rd);
+        this._lastProbeRender = rd;
+        this._lastProbeDisplay = this.simDisplay;
+      }
+      if (this._probeMeasVersion !== this._coverageDrawnVersion) this.refreshCoverageMetric();
+    }
 
     if (this.pendingUpdates.has("satellites_display")) {
       if (this.simDisplay) this.simDisplay.setSatellites(satellites);

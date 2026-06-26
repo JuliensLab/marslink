@@ -1,6 +1,6 @@
 // simTopology.js — Topology building logic extracted from SimNetwork.
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.6";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.28";
 
 export class TopologyBuilder {
   constructor(simLinkBudget, simSatellites) {
@@ -58,6 +58,18 @@ export class TopologyBuilder {
 
   // Active topology methods
 
+  /**
+   * Radial-backbone port budget for a ring. Adapted-concentric rings always use a FIXED
+   * radial budget (inward + outward = 2) regardless of the laser-port slider, so raising
+   * the port count never changes the backbone — the extra terminals become the circular
+   * lattice (intraRing, capped by the lattice setting) and spacecraft-accessible spare
+   * ports. Other families use their full port count for the radial pass as before.
+   */
+  _radialMaxLinks(ringName) {
+    const max = this.simLinkBudget.getMaxLinksPerRing(ringName);
+    return ringName.startsWith("ring_adapt") ? Math.min(2, max) : max;
+  }
+
   intraRing(rings, positions, linkCounts, finalLinks, existingLinks) {
     // Create neighbor links for all rings (including Mars and Earth)
     // existingLinks is a shared Set of "${fromId}-${toId}" keys, mutated here.
@@ -67,20 +79,35 @@ export class TopologyBuilder {
     let linksAdded = 0;
 
     const maxDistanceAU = this.simLinkBudget.maxDistanceAU;
+    // Per-satellite count of intra-ring (azimuthal) links, capped by circularCap below.
+    const circCount = {};
 
     // Iterate through each ring
     for (const [ringName, ringSatellites] of Object.entries(rings)) {
       // Cache the ring's max-links value once (was called 3× per inner iteration)
       const maxLinksPerRing = this.simLinkBudget.getMaxLinksPerRing(ringName);
-      if (maxLinksPerRing === 2) continue;
+      // Circular (azimuthal/lattice) link cap per satellite:
+      //  - Adapted concentric: the "Circular lattice" setting (0 none / 1 half / 2 full).
+      //    The radial backbone ran first (interAdaptedRings), so these fill spare ports up
+      //    to the cap; terminals left after radial + lattice are spacecraft-accessible.
+      //  - Other families: legacy behaviour — skip 2-port rings (all radial), else a full
+      //    azimuthal ring (≤2) from whatever ports the radial pass left.
+      let circularCap;
+      if (ringName.startsWith("ring_adapt")) {
+        circularCap = this.simLinkBudget.adaptedLattice || 0;
+        if (circularCap === 0) continue;
+      } else {
+        if (maxLinksPerRing === 2) continue;
+        circularCap = 2;
+      }
 
       // Pre-build name->satellite Map for O(1) neighbor lookup
       const satByName = new Map();
       for (const sat of ringSatellites) satByName.set(sat.name, sat);
 
       for (const satellite of ringSatellites) {
-        // Early termination if satellite has reached max links
-        if (linkCounts[satellite.name] >= maxLinksPerRing) continue;
+        // Early termination if satellite has reached its port budget or circular cap
+        if (linkCounts[satellite.name] >= maxLinksPerRing || (circCount[satellite.name] || 0) >= circularCap) continue;
 
         // Cache the satellite's position once
         const satPos = positions[satellite.name];
@@ -93,8 +120,8 @@ export class TopologyBuilder {
           const neighPos = positions[neighborName];
           if (!neighPos) continue;
 
-          // Early termination if neighbor has reached max links
-          if (linkCounts[neighborName] >= maxLinksPerRing) continue;
+          // Early termination if neighbor has reached its port budget or circular cap
+          if (linkCounts[neighborName] >= maxLinksPerRing || (circCount[neighborName] || 0) >= circularCap) continue;
 
           // Order the IDs lexicographically to avoid duplicate links
           const [fromId, toId] = satName < neighborName ? [satName, neighborName] : [neighborName, satName];
@@ -143,9 +170,11 @@ export class TopologyBuilder {
             gbpsCapacity,
           });
 
-          // Increment link counts
+          // Increment link counts (total ports + circular-lattice counters)
           linkCounts[satellite.name]++;
           linkCounts[neighborName]++;
+          circCount[satName] = (circCount[satName] || 0) + 1;
+          circCount[neighborName] = (circCount[neighborName] || 0) + 1;
 
           // Mark ports as used
           satellite[directionSat] = neighborSat.name;
@@ -156,8 +185,8 @@ export class TopologyBuilder {
 
           linksAdded++;
 
-          // Early termination if satellite has reached max links after adding
-          if (linkCounts[satName] >= maxLinksPerRing) {
+          // Early termination if satellite has reached its port budget or circular cap
+          if (linkCounts[satName] >= maxLinksPerRing || (circCount[satName] || 0) >= circularCap) {
             break; // Exit the neighbors loop for this satellite
           }
         }
@@ -174,9 +203,79 @@ export class TopologyBuilder {
   interAdaptedRings(rings, positions, linkCounts, finalLinks, targetDepartureAngle = 0, satellites, existingLinks) {
     const args = [rings, positions, linkCounts, finalLinks, targetDepartureAngle, satellites, existingLinks];
     const mode = (this.simLinkBudget && this.simLinkBudget.interRingMatcher) || "linear-merge";
+    if (mode === "max-throughput") return this._interAdaptedRings_maxThroughput(...args);
     if (mode === "greedy-nearest") return this._interAdaptedRings_greedyWindowed(...args);
+    if (mode === "greedy-merge") return this._interAdaptedRings_greedyMerge(...args);
     if (mode === "monotonic-wrap") return this._interAdaptedRings_monotonic(...args);
+    if (mode === "periapsis-chain") return this._interAdaptedRings_periapsisChain(...args);
+    if (mode === "periapsis-radial") return this._interAdaptedRings_periapsisRadial(...args);
     return this._interAdaptedRings_linearMerge(...args);
+  }
+
+  // Post-pass for the "Require inner link" / "Require outer link" toggles: strip radial chains
+  // that aren't a complete Earth↔Mars route. Runs AFTER planet-attach (so the Earth/Mars planet
+  // links are present and get removed as part of an island) and BEFORE the lattice (so freed
+  // terminals fall through to the lattice/spare). The radial graph is a union of simple chains
+  // (each sat has ≤1 inward + ≤1 outward radial link); walking inwards/outwards — across relay
+  // AND planet-ring sats — gives each chain and its two ends. A chain "reaches Earth" if its
+  // inner end is an Earth-ring sat OR an innermost-relay-ring sat (Earth-attachable); it "reaches
+  // Mars" symmetrically. By the user-chosen connectivity mapping:
+  //   • Require inner link  ⇒ remove any chain that does NOT reach Earth (Mars-stubs + floaters);
+  //   • Require outer link  ⇒ remove any chain that does NOT reach Mars  (Earth-stubs + floaters).
+  // Both on ⇒ only complete Earth↔Mars routes survive. (Inner is also enforced inline by greedy-
+  // nearest's radial continuity; this generalises the cleanup to every matcher and the planet
+  // links.) Island links carry no Earth↔Mars flow, so removing them never lowers throughput.
+  pruneIncompleteRadialChains(rings, linkCounts, finalLinks, existingLinks) {
+    const requireInner = this.simLinkBudget.greedyRadialContinuity;
+    const requireOuter = this.simLinkBudget.greedyRequireOuterLink;
+    if (!requireInner && !requireOuter) return;
+
+    const relayNames = Object.keys(rings).filter((n) => n.startsWith("ring_adapt_") || n.startsWith("ring_circ_"));
+    if (relayNames.length === 0) return;
+    const parseIndex = (name) => { const m = name.match(/_(\d+)$/); return m ? parseInt(m[1], 10) : -1; };
+    const relayIdx = new Map(relayNames.map((n) => [n, parseIndex(n)]));
+    const minIdx = Math.min(...relayIdx.values());
+    const maxIdx = Math.max(...relayIdx.values());
+
+    // Chains may run into the planet rings, so include their sats in the walk.
+    const satByName = new Map();
+    for (const n of [...relayNames, "ring_earth", "ring_mars"]) if (rings[n]) for (const s of rings[n]) satByName.set(s.name, s);
+    const isReal = (port) => port !== null && port !== "premarked" && satByName.has(port);
+    const reachesEarth = (s) => s.ringName === "ring_earth" || relayIdx.get(s.ringName) === minIdx;
+    const reachesMars = (s) => s.ringName === "ring_mars" || relayIdx.get(s.ringName) === maxIdx;
+
+    const visited = new Set();
+    const removedKeys = new Set();
+    for (const seed of satByName.values()) {
+      if (visited.has(seed.name)) continue;
+      // Walk to the inner end, then sweep outward collecting the whole chain.
+      let innerEnd = seed, guard = 0;
+      while (isReal(innerEnd.inwards) && guard++ < 1e6) innerEnd = satByName.get(innerEnd.inwards);
+      const chain = [innerEnd];
+      for (let cur = innerEnd; isReal(cur.outwards); ) { cur = satByName.get(cur.outwards); chain.push(cur); }
+      chain.forEach((s) => visited.add(s.name));
+      if (chain.length < 2) continue; // lone sat, no radial link
+
+      const outerEnd = chain[chain.length - 1];
+      const drop = (requireInner && !reachesEarth(innerEnd)) || (requireOuter && !reachesMars(outerEnd));
+      if (!drop) continue;
+
+      for (let k = 0; k + 1 < chain.length; k++) {
+        const a = chain[k], b = chain[k + 1];
+        const [f, t] = a.name < b.name ? [a.name, b.name] : [b.name, a.name];
+        removedKeys.add(`${f}-${t}`);
+        existingLinks.delete(`${f}-${t}`);
+        linkCounts[a.name]--; linkCounts[b.name]--;
+      }
+      chain.forEach((s) => { if (isReal(s.inwards)) s.inwards = null; if (isReal(s.outwards)) s.outwards = null; });
+    }
+
+    if (removedKeys.size) {
+      const keyOf = (l) => (l.fromId < l.toId ? `${l.fromId}-${l.toId}` : `${l.toId}-${l.fromId}`);
+      const kept = finalLinks.filter((l) => !removedKeys.has(keyOf(l)));
+      finalLinks.length = 0;
+      finalLinks.push(...kept);
+    }
   }
 
   _interAdaptedRings_linearMerge(rings, positions, linkCounts, finalLinks, targetDepartureAngle = 0, satellites, existingLinks) {
@@ -222,7 +321,7 @@ export class TopologyBuilder {
     // Cache max-links per ring once (avoids repeated lookups in hot loops)
     const ringMaxLinks = new Map();
     ringList.forEach((ring) => {
-      ringMaxLinks.set(ring.name, this.simLinkBudget.getMaxLinksPerRing(ring.name));
+      ringMaxLinks.set(ring.name, this._radialMaxLinks(ring.name));
     });
 
     // Pre-mark unavailable ports for 3-port rings
@@ -359,7 +458,7 @@ export class TopologyBuilder {
         .sort((a, b) => a.position.solarAngle - b.position.solarAngle);
     });
     const ringMaxLinks = new Map();
-    ringList.forEach((ring) => { ringMaxLinks.set(ring.name, this.simLinkBudget.getMaxLinksPerRing(ring.name)); });
+    ringList.forEach((ring) => { ringMaxLinks.set(ring.name, this._radialMaxLinks(ring.name)); });
     ringList.forEach((ring) => {
       const maxLinks = ringMaxLinks.get(ring.name);
       if (maxLinks !== 3) return;
@@ -438,10 +537,11 @@ export class TopologyBuilder {
     }
   }
 
-  // Matcher "greedy-nearest": binary-search to the radially-nearest outer sat, scan a ±20
-  // window, collect all candidates, sort by distance, and greedily assign shortest-first.
-  // The original matcher — simple and short-link-optimal locally, but can emit long
-  // cross-route links where rings are phase-shifted (what the monotonic matchers fixed).
+  // Matcher "greedy-nearest": for each inner sat, take the 2 nearest outer sats by solar
+  // angle that clear every filter (free port, range, solar-blinding cone), pool them, sort
+  // by distance, and greedily assign shortest-first. Capping each inner sat to its 2
+  // angular-nearest candidates keeps links local — it cannot emit the long cross-route
+  // links the earlier wide-window version produced on phase-shifted rings.
   _interAdaptedRings_greedyWindowed(rings, positions, linkCounts, finalLinks, targetDepartureAngle = 0, satellites, existingLinks) {
     const circularRingNames = Object.keys(rings).filter(
       (ringName) => ringName.startsWith("ring_adapt_") || ringName.startsWith("ring_circ_")
@@ -461,7 +561,7 @@ export class TopologyBuilder {
         .sort((a, b) => a.position.solarAngle - b.position.solarAngle);
     });
     const ringMaxLinks = new Map();
-    ringList.forEach((ring) => { ringMaxLinks.set(ring.name, this.simLinkBudget.getMaxLinksPerRing(ring.name)); });
+    ringList.forEach((ring) => { ringMaxLinks.set(ring.name, this._radialMaxLinks(ring.name)); });
     ringList.forEach((ring) => {
       const maxLinks = ringMaxLinks.get(ring.name);
       if (maxLinks !== 3) return;
@@ -490,6 +590,13 @@ export class TopologyBuilder {
         const innerSat = innerSats[idx];
         const canConnectOut = isFirstRing && innerMaxLinks === 3 ? idx % 2 === 1 : linkCounts[innerSat.name] < innerMaxLinks;
         if (!canConnectOut || innerSat.outwards !== null) continue;
+        // Radial continuity (Simulation → "Route continuity" → "Require inner link", default on): a sat may
+        // only reach outward to ring N+1 if it is already linked inward to ring N-1 (set in the
+        // previous inner/outer iteration). This prevents floating outward links from sats with no
+        // inner feed. The innermost ring is exempt — its inward feed is the planet (Earth), attached
+        // later in planetToCircularRings, so it has no ring N-1 yet at this point. (3-port rings
+        // pre-mark their inward port to a sentinel, so those sats stay eligible.)
+        if (this.simLinkBudget.greedyRadialContinuity !== false && !isFirstRing && innerSat.inwards === null) continue;
         const innerPos = positions[innerSat.name];
         if (!innerPos) continue;
         const distEst = rOuter - rInner;
@@ -498,10 +605,25 @@ export class TopologyBuilder {
         const idealTargetSolarAngle = normalizeAngle(innerPos.solarAngle + (angularOffsetRad * 180) / Math.PI);
         let oIdx = 0;
         while (oIdx < outerAngles.length && outerAngles[oIdx] < idealTargetSolarAngle) oIdx++;
-        const OUTER_WINDOW = 20;
+        // Collect up to 2 candidate outer sats — the nearest by solar-angle separation
+        // from the ideal target — that pass every filter (free inward port, link budget,
+        // range, and the solar-blinding cone). Walk outward from the insertion point in
+        // both angular directions, each step advancing whichever frontier is angularly
+        // closer. The radially-ideal sat is sun-aligned, so with a non-zero exclusion cone
+        // it is blinded and skipped (yielding the two sats flanking the cone); with the
+        // cone disabled (solar exclusion = 0) nothing is blinded, so this yields the radial
+        // sat plus its nearest neighbour. If fewer than 2 sats clear the filters, only
+        // those are kept — no link is forced over-range or through the Sun.
         const oLen = outerSats.length;
-        for (let w = -OUTER_WINDOW; w <= OUTER_WINDOW; w++) {
-          const outerSat = outerSats[(((oIdx + w) % oLen) + oLen) % oLen];
+        const MAX_OUTER_CANDIDATES = 2;
+        const angSep = (a) => { const d = Math.abs(normalizeAngle(a) - idealTargetSolarAngle); return Math.min(d, 360 - d); };
+        let hi = ((oIdx % oLen) + oLen) % oLen;        // first sat at/after the ideal angle
+        let lo = (((oIdx - 1) % oLen) + oLen) % oLen;  // first sat before it
+        let found = 0;
+        for (let step = 0; step < oLen && found < MAX_OUTER_CANDIDATES; step++) {
+          const useHi = angSep(outerAngles[hi]) <= angSep(outerAngles[lo]);
+          const outerSat = outerSats[useHi ? hi : lo];
+          if (useHi) hi = (hi + 1) % oLen; else lo = (((lo - 1) % oLen) + oLen) % oLen;
           if (outerSat.inwards !== null) continue;
           if (linkCounts[outerSat.name] >= outerMaxLinks) continue;
           const outerPos = positions[outerSat.name];
@@ -512,6 +634,7 @@ export class TopologyBuilder {
           const distanceKm = distanceAU * AU_IN_KM;
           const gbps = this.calculateGbps(distanceKm);
           candidates.push({ from: innerSat, to: outerSat, distanceAU, distanceKm, gbps });
+          found++;
         }
       }
 
@@ -536,6 +659,836 @@ export class TopologyBuilder {
         used.add(to.name);
       }
     }
+  }
+
+  // Matcher "greedy-merge": greedy-nearest, then a LOCAL island-merge repair that pairs a stalagmite
+  // (mite) with an overlapping stalactite (tite) and joins them at their BEST FORK RING — the ring in
+  // their shared (ZOPA) band where the two chains are most aligned in sun-angle, so the new link is as
+  // SHORT (= high capacity) as possible. This avoids the long diagonal "cross-over" link a radial walk
+  // would make by landing on a far/misaligned tite. Algorithm (per the user's spec):
+  //   1. list mites (Earth-rooted, free OUTWARD tip), tites (Mars-rooted, free INWARD tip), floaters.
+  //   2. shortlist (mite,tite) pairs within ±swapDeg (circular) that OVERLAP radially (tite tip ring
+  //      ≤ mite tip ring + 1 ⇒ they share a ring / are adjacent — a ZOPA).
+  //   3. sort pairs by sun-angle distance to the Mars-periapsis angle (nearest periapsis first).
+  //   4. for each pair, sequentially, swap at the fork ring r minimising the join-link length:
+  //      reconnect mite[r] → tite[r+1] (the short link), orphaning the small leftover stubs.
+  // Node-disjoint; premarked ports untouched; only short links are emitted (long ones are rejected).
+  // swapDeg = Simulation → "Island-merge swap" (degrees, default 3).
+  _interAdaptedRings_greedyMerge(rings, positions, linkCounts, finalLinks, targetDepartureAngle = 0, satellites, existingLinks) {
+    const relayNames = Object.keys(rings).filter((n) => n.startsWith("ring_adapt_") || n.startsWith("ring_circ_"));
+    if (relayNames.length === 0) return;
+    const parseIndex = (name) => { const m = name.match(/_(\d+)$/); return m ? parseInt(m[1], 10) : -1; };
+    const ringInfo = relayNames.map((name) => ({ name, index: parseIndex(name) })).filter((r) => r.index >= 0);
+    ringInfo.sort((a, b) => a.index - b.index);
+
+    // 1) greedy-nearest first (UNTOUCHED) — leaves the mite/tite/floater islands.
+    this._interAdaptedRings_greedyWindowed(rings, positions, linkCounts, finalLinks, targetDepartureAngle, satellites, existingLinks);
+    if (ringInfo.length < 2) return;
+
+    const minIdx = ringInfo[0].index, maxIdx = ringInfo[ringInfo.length - 1].index;
+    const idxByRing = new Map(ringInfo.map((r) => [r.name, r.index]));
+    const AU_IN_KM = this.AU_IN_KM;
+    const maxDistanceAU = this.simLinkBudget.maxDistanceAU;
+    const swapDegRaw = this.simLinkBudget.greedyMergeSwapDegrees;
+    const swapDeg = (typeof swapDegRaw === "number" && swapDegRaw >= 0) ? swapDegRaw : 3;
+
+    const satByName = new Map();
+    for (const r of ringInfo) for (const s of rings[r.name]) if (s.orbitalZone === "BETWEEN_EARTH_AND_MARS" && positions[s.name]) satByName.set(s.name, s);
+    const isReal = (p) => p !== null && p !== "premarked" && satByName.has(p);
+    const ringIndexOf = (s) => idxByRing.get(s.ringName);
+    const angleOf = (s) => s.position.solarAngle;
+    const angSep = (a, b) => { const d = Math.abs(((a - b) % 360 + 360) % 360); return d > 180 ? 360 - d : d; };
+    const reachesMars = (s) => { let cur = s, g = 0; while (g++ < ringInfo.length + 2) { if (ringIndexOf(cur) === maxIdx) return true; if (!isReal(cur.outwards)) return false; cur = satByName.get(cur.outwards); } return false; };
+    const reachesEarth = (s) => { let cur = s, g = 0; while (g++ < ringInfo.length + 2) { if (ringIndexOf(cur) === minIdx) return true; if (!isReal(cur.inwards)) return false; cur = satByName.get(cur.inwards); } return false; };
+    // ring index -> sat, walking a chain from a tip. dir = "in" (toward Earth) or "out" (toward Mars).
+    const chainMap = (tip, dir) => { const m = new Map(); let cur = tip, g = 0; while (cur && g++ < ringInfo.length + 2) { m.set(ringIndexOf(cur), cur); const nxt = dir === "in" ? cur.inwards : cur.outwards; if (!isReal(nxt)) break; cur = satByName.get(nxt); } return m; };
+
+    // Snapshot greedy's radial links BEFORE swapping (NAME PAIRS — never split a hyphenated key).
+    const greedyLinks = [];
+    for (const s of satByName.values()) if (isReal(s.outwards)) greedyLinks.push([s.name, s.outwards]);
+    // Short-link budget: a join may not exceed ~3× the median existing radial link (keeps joins near-radial).
+    const lens = greedyLinks.map(([a, b]) => this.calculateDistanceAU(positions[a], positions[b])).sort((x, y) => x - y);
+    const medLen = lens.length ? lens[lens.length >> 1] : 0.02;
+    const maxJoinAU = Math.min(maxDistanceAU, Math.max(3 * medLen, 1e-6));
+
+    // 2) ANALYSE: mite tips (chain to Earth) + tite tips (chain to Mars) + floater census.
+    const mites = [], tites = [];
+    let floaterTips = 0;
+    for (const s of satByName.values()) {
+      const ri = ringIndexOf(s);
+      const rE = reachesEarth(s), rM = reachesMars(s);
+      if (s.outwards === null && ri < maxIdx) { if (rE && !rM) mites.push(s); else if (!rE && !rM) floaterTips++; }
+      if (s.inwards === null && ri > minIdx && rM && !rE) tites.push(s);
+    }
+    const census = `mites=${mites.length} tites=${tites.length} floaters=${floaterTips}`;
+    if (!mites.length || !tites.length) {
+      this._greedyMergeRebuild(finalLinks, existingLinks, linkCounts, positions, satByName, isReal, greedyLinks, AU_IN_KM);
+      this._greedyMergeDiag = { mites: mites.length, tites: tites.length, floaters: floaterTips, pairs: 0, merged: 0, swapDeg };
+      console.info(`[greedy-merge] nothing to pair — ${census}; swapDeg=${swapDeg}`);
+      return;
+    }
+
+    // Mars periapsis sun angle (process the highest-value region first).
+    const mars = this.simSatellites && this.simSatellites.getMars ? this.simSatellites.getMars() : null;
+    const theta0 = ((((mars && mars.p) || 0) % 360) + 360) % 360;
+
+    // Bucket tite tips by 1° so each mite only scans a few buckets within ±swapDeg (circular). O(N·k).
+    const titeBuckets = new Map();
+    const bkt = (deg) => ((Math.floor(deg) % 360) + 360) % 360;
+    for (const t of tites) { const b = bkt(angleOf(t)); (titeBuckets.get(b) || titeBuckets.set(b, []).get(b)).push(t); }
+
+    // 3) SHORTLIST pairs: within ±swapDeg, overlapping radially (tite tip ring ≤ mite tip ring + 1), and
+    //    with a fork ring whose join-link is short. Record the BEST fork ring (min link length).
+    const pairs = [];
+    const span = Math.min(180, Math.ceil(swapDeg) + 1);
+    for (const mite of mites) {
+      const Nm = ringIndexOf(mite), aMite = angleOf(mite);
+      const miteChain = chainMap(mite, "in"); // ring -> mite sat, mite tip ring = Nm down to Earth
+      const center = bkt(aMite);
+      for (let off = -span; off <= span; off++) {
+        const arr = titeBuckets.get(((center + off) % 360 + 360) % 360);
+        if (!arr) continue;
+        for (const tite of arr) {
+          if (angSep(aMite, angleOf(tite)) > swapDeg) continue;
+          const Nt = ringIndexOf(tite);
+          if (Nt > Nm + 1) continue;                 // need overlap / adjacency (share a ring)
+          const titeChain = chainMap(tite, "out");   // ring -> tite sat, tite tip ring = Nt up to Mars
+          // Best fork ring r: mite has a sat at r, tite has a sat at r+1; minimise dist(mite[r],tite[r+1]).
+          let bestR = -1, bestCost = Infinity, bestKm = 0;
+          const lo = Math.max(minIdx, Nt - 1), hi = Math.min(Nm, maxIdx - 1);
+          for (let r = lo; r <= hi; r++) {
+            const a = miteChain.get(r), b = titeChain.get(r + 1);
+            if (!a || !b) continue;
+            const d = this.calculateDistanceAU(positions[a.name], positions[b.name]);
+            if (d > maxJoinAU || d >= bestCost) continue;
+            if (this.isSolarBlinded(positions[a.name], positions[b.name])) continue;
+            bestCost = d; bestR = r; bestKm = d * AU_IN_KM;
+          }
+          if (bestR < 0) continue;
+          pairs.push({ mite, tite, miteChain, titeChain, r: bestR, cost: bestCost, km: bestKm, mid: angleOf(mite) });
+        }
+      }
+    }
+    // Sort: nearest Mars periapsis first, then shortest join.
+    const periDist = (deg) => angSep(deg, theta0);
+    pairs.sort((p, q) => periDist(p.mid) - periDist(q.mid) || p.cost - q.cost);
+
+    // 4) SWAP each pair, sequentially, at its best fork ring r: reconnect mite[r] → tite[r+1], orphaning
+    //    the small leftover stubs (mite above r, tite below r). Re-validate against prior swaps first.
+    let merged = 0;
+    for (const { mite, tite, miteChain, titeChain, r, km } of pairs) {
+      const a = miteChain.get(r), b = titeChain.get(r + 1);
+      if (!a || !b) continue;
+      const aUp = miteChain.get(r + 1), bDown = titeChain.get(r);
+      // Pointers must still be exactly as greedy/the chains left them (a prior swap may have touched them).
+      if (a.outwards !== (aUp ? aUp.name : null)) continue;
+      if (b.inwards !== (bDown ? bDown.name : null)) continue;
+      if (!reachesEarth(a) || reachesMars(a)) continue;       // a must still feed Earth and not already reach Mars
+      if (!reachesMars(b) || reachesEarth(b)) continue;       // b must still reach Mars and not already feed Earth
+      // Apply the swap (pointer surgery).
+      a.outwards = b.name; b.inwards = a.name;                // the short join
+      if (aUp) aUp.inwards = null;                            // orphan the mite's stub above r
+      if (bDown) bDown.outwards = null;                       // orphan the tite's stub below r
+      merged++;
+    }
+
+    // 5) DECROSS by LOCAL 2-OPT on actual crossings. For each ring pair, look at the complete Earth→Mars
+    //    links and, whenever two of them physically cross (segment a→b intersects segment c→d in the
+    //    sun-plane), swap their outer ends: a→d, c→b. Uncrossing two segments STRICTLY shortens their total
+    //    length (triangle inequality), so links only get shorter and the pass is guaranteed to converge; it
+    //    is purely local — only the two crossing routes change, nothing else. A long join that crosses k
+    //    routes cascades neighbour-by-neighbour (8→12 over 9,10,11 ⇒ 8→9, 9→10, 10→11, 11→12). Both routes
+    //    stay complete (inner ends still reach Earth, outer ends still reach Mars), so completions and
+    //    node-disjointness are preserved. Pre-classify the complete-carrying inner sats once — 2-opt keeps
+    //    every route complete, so that set is invariant across passes; only the .outwards pointers move.
+    const cross2 = (p1, p2, p3, p4) => { // do open segments p1p2 and p3p4 properly intersect (x-y plane)?
+      const o = (a, b, c) => (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+      const d1 = o(p3, p4, p1), d2 = o(p3, p4, p2), d3 = o(p1, p2, p3), d4 = o(p1, p2, p4);
+      return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
+    };
+    const ccByPair = []; // per ring pair: complete-carrying inner sats (invariant under 2-opt)
+    for (let i = 0; i < ringInfo.length - 1; i++) {
+      const arr = [];
+      if (ringInfo[i + 1].index === ringInfo[i].index + 1) {
+        const rB = ringInfo[i + 1].index;
+        for (const s of rings[ringInfo[i].name]) {
+          if (!satByName.has(s.name) || !isReal(s.outwards)) continue;
+          const v = satByName.get(s.outwards);
+          if (ringIndexOf(v) !== rB) continue;
+          if (reachesEarth(s) && reachesMars(v)) arr.push(s);
+        }
+      }
+      ccByPair.push(arr);
+    }
+    let crossFixed = 0;
+    if (swapDeg > 0) {
+      for (let pass = 0; pass < 8; pass++) {
+        let fixed = 0;
+        for (const inn of ccByPair) {
+          if (inn.length < 2) continue;
+          const links = []; // current complete links {a inner, b outer}, sorted by inner sun-angle
+          for (const a of inn) { if (!isReal(a.outwards)) continue; links.push({ a, b: satByName.get(a.outwards) }); }
+          links.sort((p, q) => angleOf(p.a) - angleOf(q.a));
+          for (let x = 0; x < links.length; x++) {
+            for (let y = x + 1; y < links.length && y <= x + 10; y++) { // crossings are angularly local
+              const L1 = links[x], L2 = links[y];
+              if (L1.b === L2.b) continue;
+              if (!cross2(positions[L1.a.name], positions[L1.b.name], positions[L2.a.name], positions[L2.b.name])) continue;
+              // Candidate swap a→d, c→b — only if both new links stay in range and sun-clear.
+              if (this.calculateDistanceAU(positions[L1.a.name], positions[L2.b.name]) > maxDistanceAU) continue;
+              if (this.calculateDistanceAU(positions[L2.a.name], positions[L1.b.name]) > maxDistanceAU) continue;
+              if (this.isSolarBlinded(positions[L1.a.name], positions[L2.b.name]) || this.isSolarBlinded(positions[L2.a.name], positions[L1.b.name])) continue;
+              L1.a.outwards = L2.b.name; L2.b.inwards = L1.a.name;
+              L2.a.outwards = L1.b.name; L1.b.inwards = L2.a.name;
+              const t = L1.b; L1.b = L2.b; L2.b = t; // keep local view consistent for the rest of this pass
+              fixed++;
+            }
+          }
+        }
+        crossFixed += fixed;
+        if (!fixed) break; // converged: no crossing left to fix
+      }
+    }
+
+    // 6) REBUILD finalLinks / existingLinks / linkCounts from the FINAL pointer state.
+    this._greedyMergeRebuild(finalLinks, existingLinks, linkCounts, positions, satByName, isReal, greedyLinks, AU_IN_KM);
+    this._greedyMergeDiag = { mites: mites.length, tites: tites.length, floaters: floaterTips, pairs: pairs.length, merged, crossFixed, swapDeg };
+    console.info(`[greedy-merge] merged ${merged}/${pairs.length} pairs, 2-opt removed ${crossFixed} crossings (±${swapDeg}°); ${census}`);
+  }
+
+  // Shared rebuild for greedy-merge: drop greedy's snapshotted radial links and re-emit the FINAL pointer
+  // state (authoritative). Decrement/increment linkCounts via sat NAMES (never split a hyphenated key); keep
+  // the exact finalLinks element shape and sorted fId<tId convention used everywhere else in this file.
+  _greedyMergeRebuild(finalLinks, existingLinks, linkCounts, positions, satByName, isReal, greedyLinks, AU_IN_KM) {
+    const keyOf = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
+    const greedyKeys = new Set(greedyLinks.map(([a, b]) => keyOf(a, b)));
+    for (const [a, b] of greedyLinks) {
+      const k = keyOf(a, b);
+      if (existingLinks.has(k)) { existingLinks.delete(k); if (linkCounts[a] != null) linkCounts[a]--; if (linkCounts[b] != null) linkCounts[b]--; }
+    }
+    const kept = finalLinks.filter((l) => !greedyKeys.has(keyOf(l.fromId, l.toId)));
+    finalLinks.length = 0; finalLinks.push(...kept);
+    for (const s of satByName.values()) {
+      if (!isReal(s.outwards)) continue;
+      const a = s.name, b = s.outwards;
+      const [f, t] = a < b ? [a, b] : [b, a];
+      const k = `${f}-${t}`;
+      if (existingLinks.has(k)) continue;
+      const dAU = this.calculateDistanceAU(positions[a], positions[b]);
+      const km = dAU * AU_IN_KM;
+      finalLinks.push({ fromId: f, toId: t, distanceAU: dAU, distanceKm: km, latencySeconds: this.calculateLatency(km), gbpsCapacity: this.calculateGbps(km) });
+      existingLinks.add(k); linkCounts[f] = (linkCounts[f] || 0) + 1; linkCounts[t] = (linkCounts[t] || 0) + 1;
+    }
+  }
+
+  // Matcher "periapsis-radial": a seed route at the Mars-periapsis sun angle plus a PARALLEL
+  // sweep that pulls in every satellite.
+  //
+  // Seed route — starts on the INNER (Earth-side) ring at the Mars-periapsis angle and chains
+  // outward ring by ring; every outward hop picks the nearest available sat to the periapsis
+  // angle itself, so the route stays radial.
+  // Sweep — on every ring the seed sat's two angular NEIGHBOURS seed two parallel routes (one per
+  // side); each newly added sat hands its next free neighbour to the next route, expanding both
+  // ways to the anti-periapsis angle until every satellite is in a route. Trades per-route
+  // capacity for route count; pairs with "Sat count → routes" at 100% (equal counts ⇒ clean).
+  _interAdaptedRings_periapsisRadial(rings, positions, linkCounts, finalLinks, targetDepartureAngle, satellites, existingLinks) {
+    const circularRingNames = Object.keys(rings).filter(
+      (ringName) => ringName.startsWith("ring_adapt_") || ringName.startsWith("ring_circ_")
+    );
+    if (circularRingNames.length === 0) return;
+    const parseIndex = (name) => { const m = name.match(/_(\d+)$/); return m ? parseInt(m[1], 10) : -1; };
+    const ringList = circularRingNames
+      .map((name) => ({ name, index: parseIndex(name), radius: rings[name][0].a }))
+      .filter((r) => r.index >= 0);
+    ringList.sort((a, b) => a.index - b.index);
+    if (ringList.length < 2) return;
+    const AU_IN_KM = this.AU_IN_KM;
+    const maxDistanceAU = this.simLinkBudget.maxDistanceAU;
+
+    // Index-aligned per-ring structures: sats sorted by solar angle, their angles, max links.
+    const ringSats = ringList.map((ring) =>
+      rings[ring.name]
+        .filter((s) => s.orbitalZone === "BETWEEN_EARTH_AND_MARS")
+        .slice()
+        .sort((a, b) => a.position.solarAngle - b.position.solarAngle)
+    );
+    const ringAngles = ringSats.map((sats) => sats.map((s) => s.position.solarAngle));
+    const ringMax = ringList.map((ring) => this._radialMaxLinks(ring.name));
+    ringList.forEach((ring, ri) => {
+      if (ringMax[ri] !== 3) return; // pre-mark unavailable ports for 3-port rings
+      ringSats[ri].forEach((sat, i) => { if (i % 2 === 0) sat.outwards = "premarked"; else sat.inwards = "premarked"; });
+    });
+
+    // Sweep only a consecutive run of rings starting at ringList[0] (the chain breaks at any gap).
+    let K = ringList.length;
+    for (let i = 1; i < ringList.length; i++) { if (ringList[i].index !== ringList[i - 1].index + 1) { K = i; break; } }
+    if (K < 2 || !ringSats[0].length) return;
+
+    // Link ring-ri sat `a` (sends outward) to ring-(ri+1) sat `b` (receives inward).
+    const linkPair = (ri, a, aPos, b, bPos) => {
+      if (a.outwards !== null || b.inwards !== null) return false;
+      if (linkCounts[a.name] >= ringMax[ri] || linkCounts[b.name] >= ringMax[ri + 1]) return false;
+      const dAU = this.calculateDistanceAU(aPos, bPos);
+      if (dAU > maxDistanceAU || this.isSolarBlinded(aPos, bPos)) return false;
+      const [fId, tId] = a.name < b.name ? [a.name, b.name] : [b.name, a.name];
+      const key = `${fId}-${tId}`;
+      if (existingLinks.has(key)) return false;
+      const distanceKm = dAU * AU_IN_KM;
+      finalLinks.push({ fromId: fId, toId: tId, distanceAU: dAU, distanceKm, latencySeconds: this.calculateLatency(distanceKm), gbpsCapacity: this.calculateGbps(distanceKm) });
+      linkCounts[a.name]++; linkCounts[b.name]++;
+      a.outwards = b.name; b.inwards = a.name;
+      existingLinks.add(key);
+      return true;
+    };
+
+    // Insertion index of `angle` on ring ri (first sat at/after it).
+    const insertion = (ri, angle) => {
+      const angles = ringAngles[ri]; let lo = 0, hi = angles.length;
+      while (lo < hi) { const mid = (lo + hi) >> 1; if (angles[mid] < angle) lo = mid + 1; else hi = mid; }
+      return lo;
+    };
+    // Index on ring ri of the nearest sat to `angle` with a free inward port that forms a valid
+    // link to prevPos — expand outward from the insertion point (-1 if none).
+    const nearestAvailIndex = (ri, angle, prevPos) => {
+      const sats = ringSats[ri], n = sats.length, lo = insertion(ri, angle);
+      const ok = (idx) => {
+        const sat = sats[idx];
+        if (sat.inwards !== null || linkCounts[sat.name] >= ringMax[ri]) return false;
+        const pos = positions[sat.name];
+        if (!pos || this.isSolarBlinded(prevPos, pos)) return false;
+        return this.calculateDistanceAU(prevPos, pos) <= maxDistanceAU;
+      };
+      for (let step = 0; step <= n; step++) {
+        const a = (((lo + step) % n) + n) % n;
+        if (ok(a)) return a;
+        if (step > 0) { const b = (((lo - step) % n) + n) % n; if (ok(b)) return b; }
+      }
+      return -1;
+    };
+
+    // --- Seed route from the inner ring at the Mars-periapsis sun angle ---
+    const mars = this.simSatellites && this.simSatellites.getMars ? this.simSatellites.getMars() : null;
+    const theta0 = ((((mars && mars.p) || 0) % 360) + 360) % 360;
+    const route0Idx = new Array(K).fill(-1);
+
+    // Anchor: inner sat nearest theta0 with a free outward port.
+    {
+      const sats = ringSats[0], n = sats.length, lo = insertion(0, theta0);
+      for (let step = 0; step <= n && route0Idx[0] < 0; step++) {
+        for (const idx of (step === 0 ? [((lo % n) + n) % n] : [(((lo + step) % n) + n) % n, (((lo - step) % n) + n) % n])) {
+          const sat = sats[idx];
+          if (sat.outwards === null && linkCounts[sat.name] < ringMax[0]) { route0Idx[0] = idx; break; }
+        }
+      }
+    }
+    if (route0Idx[0] < 0) return;
+    {
+      let prev = ringSats[0][route0Idx[0]], prevPos = positions[prev.name];
+      for (let ri = 1; ri < K; ri++) {
+        const guide = theta0; // radial: every outward hop stays at the periapsis angle
+        const idx = nearestAvailIndex(ri, guide, prevPos);
+        if (idx < 0 || !linkPair(ri - 1, prev, prevPos, ringSats[ri][idx], positions[ringSats[ri][idx].name])) { K = ri; break; }
+        route0Idx[ri] = idx;
+        prev = ringSats[ri][idx]; prevPos = positions[prev.name];
+      }
+    }
+    if (K < 2) return;
+
+    // --- Parallel sweep: each ring's seed sat hands its two neighbours to two parallel routes;
+    //     each new sat's next free neighbour seeds the next route, both ways to anti-periapsis. ---
+    const portFree = (ri, sat) =>
+      (ri === 0 ? sat.outwards === null : sat.inwards === null) && linkCounts[sat.name] < ringMax[ri];
+    // Advance a per-ring frontier one step in direction d (+1 cw / -1 ccw) to the next free sat.
+    const advance = (ri, d, frontier) => {
+      const n = ringSats[ri].length;
+      let idx = frontier[ri];
+      for (let s = 0; s < n; s++) {
+        idx = (((idx + d) % n) + n) % n;
+        if (portFree(ri, ringSats[ri][idx])) { frontier[ri] = idx; return idx; }
+      }
+      return -1;
+    };
+    // Build one parallel route on side d (the neighbour-of-neighbour on every ring); link the chain.
+    const sweepRoute = (d, frontier) => {
+      const idxs = new Array(K);
+      for (let ri = 0; ri < K; ri++) idxs[ri] = advance(ri, d, frontier);
+      if (idxs[0] < 0) return false; // inner ring exhausted on this side
+      for (let ri = 0; ri < K - 1; ri++) {
+        if (idxs[ri] < 0 || idxs[ri + 1] < 0) continue;
+        const a = ringSats[ri][idxs[ri]], b = ringSats[ri + 1][idxs[ri + 1]];
+        linkPair(ri, a, positions[a.name], b, positions[b.name]);
+      }
+      return true;
+    };
+    const cw = route0Idx.slice(0, K), ccw = route0Idx.slice(0, K);
+    let cwGoing = true, ccwGoing = true, guard = 0;
+    const guardMax = ringSats[0].length * 2 + 10;
+    while ((cwGoing || ccwGoing) && guard++ < guardMax) {
+      if (cwGoing) cwGoing = sweepRoute(1, cw);
+      if (ccwGoing) ccwGoing = sweepRoute(-1, ccw);
+    }
+  }
+
+  // Matcher "periapsis-chain": identical to "periapsis-radial" except for how the seed route
+  // advances. The route still starts on the INNER (Earth-side) ring at the Mars-periapsis angle,
+  // but each outward hop picks the nearest available sat to the PREVIOUS sat's solar angle, so the
+  // route follows the path of least resistance and may drift away from the periapsis angle as it
+  // climbs outward. The parallel sweep is unchanged.
+  _interAdaptedRings_periapsisChain(rings, positions, linkCounts, finalLinks, targetDepartureAngle, satellites, existingLinks) {
+    const circularRingNames = Object.keys(rings).filter(
+      (ringName) => ringName.startsWith("ring_adapt_") || ringName.startsWith("ring_circ_")
+    );
+    if (circularRingNames.length === 0) return;
+    const parseIndex = (name) => { const m = name.match(/_(\d+)$/); return m ? parseInt(m[1], 10) : -1; };
+    const ringList = circularRingNames
+      .map((name) => ({ name, index: parseIndex(name), radius: rings[name][0].a }))
+      .filter((r) => r.index >= 0);
+    ringList.sort((a, b) => a.index - b.index);
+    if (ringList.length < 2) return;
+    const AU_IN_KM = this.AU_IN_KM;
+    const maxDistanceAU = this.simLinkBudget.maxDistanceAU;
+
+    // Index-aligned per-ring structures: sats sorted by solar angle, their angles, max links.
+    const ringSats = ringList.map((ring) =>
+      rings[ring.name]
+        .filter((s) => s.orbitalZone === "BETWEEN_EARTH_AND_MARS")
+        .slice()
+        .sort((a, b) => a.position.solarAngle - b.position.solarAngle)
+    );
+    const ringAngles = ringSats.map((sats) => sats.map((s) => s.position.solarAngle));
+    const ringMax = ringList.map((ring) => this._radialMaxLinks(ring.name));
+    ringList.forEach((ring, ri) => {
+      if (ringMax[ri] !== 3) return; // pre-mark unavailable ports for 3-port rings
+      ringSats[ri].forEach((sat, i) => { if (i % 2 === 0) sat.outwards = "premarked"; else sat.inwards = "premarked"; });
+    });
+
+    // Sweep only a consecutive run of rings starting at ringList[0] (the chain breaks at any gap).
+    let K = ringList.length;
+    for (let i = 1; i < ringList.length; i++) { if (ringList[i].index !== ringList[i - 1].index + 1) { K = i; break; } }
+    if (K < 2 || !ringSats[0].length) return;
+
+    // Link ring-ri sat `a` (sends outward) to ring-(ri+1) sat `b` (receives inward).
+    const linkPair = (ri, a, aPos, b, bPos) => {
+      if (a.outwards !== null || b.inwards !== null) return false;
+      if (linkCounts[a.name] >= ringMax[ri] || linkCounts[b.name] >= ringMax[ri + 1]) return false;
+      const dAU = this.calculateDistanceAU(aPos, bPos);
+      if (dAU > maxDistanceAU || this.isSolarBlinded(aPos, bPos)) return false;
+      const [fId, tId] = a.name < b.name ? [a.name, b.name] : [b.name, a.name];
+      const key = `${fId}-${tId}`;
+      if (existingLinks.has(key)) return false;
+      const distanceKm = dAU * AU_IN_KM;
+      finalLinks.push({ fromId: fId, toId: tId, distanceAU: dAU, distanceKm, latencySeconds: this.calculateLatency(distanceKm), gbpsCapacity: this.calculateGbps(distanceKm) });
+      linkCounts[a.name]++; linkCounts[b.name]++;
+      a.outwards = b.name; b.inwards = a.name;
+      existingLinks.add(key);
+      return true;
+    };
+
+    // Insertion index of `angle` on ring ri (first sat at/after it).
+    const insertion = (ri, angle) => {
+      const angles = ringAngles[ri]; let lo = 0, hi = angles.length;
+      while (lo < hi) { const mid = (lo + hi) >> 1; if (angles[mid] < angle) lo = mid + 1; else hi = mid; }
+      return lo;
+    };
+    // Index on ring ri of the nearest sat to `angle` with a free inward port that forms a valid
+    // link to prevPos — expand outward from the insertion point (-1 if none).
+    const nearestAvailIndex = (ri, angle, prevPos) => {
+      const sats = ringSats[ri], n = sats.length, lo = insertion(ri, angle);
+      const ok = (idx) => {
+        const sat = sats[idx];
+        if (sat.inwards !== null || linkCounts[sat.name] >= ringMax[ri]) return false;
+        const pos = positions[sat.name];
+        if (!pos || this.isSolarBlinded(prevPos, pos)) return false;
+        return this.calculateDistanceAU(prevPos, pos) <= maxDistanceAU;
+      };
+      for (let step = 0; step <= n; step++) {
+        const a = (((lo + step) % n) + n) % n;
+        if (ok(a)) return a;
+        if (step > 0) { const b = (((lo - step) % n) + n) % n; if (ok(b)) return b; }
+      }
+      return -1;
+    };
+
+    // --- Seed route from the inner ring at the Mars-periapsis sun angle ---
+    const mars = this.simSatellites && this.simSatellites.getMars ? this.simSatellites.getMars() : null;
+    const theta0 = ((((mars && mars.p) || 0) % 360) + 360) % 360;
+    const route0Idx = new Array(K).fill(-1);
+
+    // Anchor: inner sat nearest theta0 with a free outward port.
+    {
+      const sats = ringSats[0], n = sats.length, lo = insertion(0, theta0);
+      for (let step = 0; step <= n && route0Idx[0] < 0; step++) {
+        for (const idx of (step === 0 ? [((lo % n) + n) % n] : [(((lo + step) % n) + n) % n, (((lo - step) % n) + n) % n])) {
+          const sat = sats[idx];
+          if (sat.outwards === null && linkCounts[sat.name] < ringMax[0]) { route0Idx[0] = idx; break; }
+        }
+      }
+    }
+    if (route0Idx[0] < 0) return;
+    {
+      let prev = ringSats[0][route0Idx[0]], prevPos = positions[prev.name];
+      for (let ri = 1; ri < K; ri++) {
+        const guide = prevPos.solarAngle; // chain: each outward hop follows the previous sat's solar angle
+        const idx = nearestAvailIndex(ri, guide, prevPos);
+        if (idx < 0 || !linkPair(ri - 1, prev, prevPos, ringSats[ri][idx], positions[ringSats[ri][idx].name])) { K = ri; break; }
+        route0Idx[ri] = idx;
+        prev = ringSats[ri][idx]; prevPos = positions[prev.name];
+      }
+    }
+    if (K < 2) return;
+
+    // --- Sweep: every remaining inner-ring sat (expanding both ways from the periapsis seed) starts
+    //     its OWN route and chains outward to the NEAREST available sat at each hop — the same rule
+    //     as the seed route. Unlike a frontier-to-frontier sweep, this never pairs misaligned
+    //     frontiers, so it emits no long cross-links when adjacent rings have different sat counts;
+    //     surplus outer sats with no near inner partner are simply left for the intra-ring pass. ---
+    const portFree = (ri, sat) =>
+      (ri === 0 ? sat.outwards === null : sat.inwards === null) && linkCounts[sat.name] < ringMax[ri];
+    // Advance the inner-ring frontier one step in direction d (+1 cw / -1 ccw) to the next free sat.
+    const advanceInner = (d, frontier) => {
+      const n = ringSats[0].length;
+      let idx = frontier[0];
+      for (let s = 0; s < n; s++) {
+        idx = (((idx + d) % n) + n) % n;
+        if (portFree(0, ringSats[0][idx])) { frontier[0] = idx; return idx; }
+      }
+      return -1;
+    };
+    // Start a route at the next free inner-ring sat on side d, then chain it outward ring by ring,
+    // each hop linking to the nearest available sat on the next ring (nearestAvailIndex skips taken
+    // sats and any that would exceed range or hit the Sun, so every link stays as short as possible).
+    const sweepRoute = (d, frontier) => {
+      const i0 = advanceInner(d, frontier);
+      if (i0 < 0) return false; // inner ring exhausted on this side
+      let prev = ringSats[0][i0], prevPos = positions[prev.name];
+      for (let ri = 1; ri < K; ri++) {
+        const idx = nearestAvailIndex(ri, prevPos.solarAngle, prevPos);
+        if (idx < 0 || !linkPair(ri - 1, prev, prevPos, ringSats[ri][idx], positions[ringSats[ri][idx].name])) break;
+        prev = ringSats[ri][idx]; prevPos = positions[prev.name];
+      }
+      return true;
+    };
+    const cw = route0Idx.slice(0, K), ccw = route0Idx.slice(0, K);
+    let cwGoing = true, ccwGoing = true, guard = 0;
+    const guardMax = ringSats[0].length * 2 + 10;
+    while ((cwGoing || ccwGoing) && guard++ < guardMax) {
+      if (cwGoing) cwGoing = sweepRoute(1, cw);
+      if (ccwGoing) ccwGoing = sweepRoute(-1, ccw);
+    }
+  }
+
+  // ===========================================================================================
+  // Matcher "max-throughput": node-disjoint Earth→Mars relay chains that maximise AGGREGATE
+  // throughput = Σ over routes of calculateGbps(route's LONGEST segment). Because routes are
+  // node-disjoint series chains and calculateGbps ≈ 1/d², a route's value is set by its single
+  // longest hop and a SHORT route is worth quadratically more — so we pack the FATTEST routes
+  // (smallest bottleneck) first. Each round runs a lexicographic widest-path DP over the
+  // sun-distance DAG, commits the fattest complete route, marks its nodes used, and repeats.
+  //
+  // Robustness over the previous (removed) version is the whole point:
+  //   • Endpoints are decided by sat.suitable ("Earth" start / "Mars" sink), NOT by ring index —
+  //     eccentric/adapted rings are NOT monotonic in solar distance R, so a ring index says
+  //     nothing about where a sat sits radially. (R-extreme fallback only if suitable is absent.)
+  //   • Forward direction is strictly increasing R (real 3D sun distance); the graph is a DAG.
+  //   • Candidate next-hops come from a hashed uniform CARTESIAN grid (x,y,z), bounded to an
+  //     angular cone around the radial-outward direction — O(N·k), never O(N²), and no (R,θ) seam.
+  //   • Edge weight is REAL 3D distance, so a small radial gap between MISALIGNED sats is simply a
+  //     long edge; minimising the route's MAX edge finds the true bottleneck wherever it lies.
+  //   • Strict node-disjointness, meticulous free-port/"premarked" handling, complete routes only.
+  // targetDepartureAngle is UNUSED here (we route on real 3D distances, not an angular offset).
+  // No always-on upper bound: a normal build never computes one (the opt-in helper is separate).
+  _interAdaptedRings_maxThroughput(rings, positions, linkCounts, finalLinks, targetDepartureAngle = 0, satellites, existingLinks) {
+    const relayNames = Object.keys(rings).filter((n) => n.startsWith("ring_adapt_") || n.startsWith("ring_circ_"));
+    if (relayNames.length < 1) return;
+
+    const AU_IN_KM = this.AU_IN_KM;
+    // Geometric range cap only. routeRequiredGbps stays an OPTIONAL per-segment feasibility floor
+    // (not the objective): if set, no hop may exceed L(R)=calculateKm(R), so every route clears R.
+    const R = this.simLinkBudget.routeRequiredGbps || 0;
+    const Lkm = R > 0 ? this.simLinkBudget.calculateKm(R) : Infinity;
+    const maxAU = Math.min(this.simLinkBudget.maxDistanceAU, Lkm / AU_IN_KM);
+    if (!(maxAU > 0)) return;
+
+    // --- Relay pool. Tag each node with its real sun distance R and port availability snapshot.
+    //     We snapshot once: committing a route only consumes nodes we then mark `used`, so the
+    //     flags stay valid for every node still in play (3-port rings expose exactly one side). ---
+    const radialMax = (sat) => this._radialMaxLinks(sat.ringName);
+    const pool = []; // { sat, pos, R, outFree, inFree, suitEarth, suitMars }
+    for (const rn of relayNames) {
+      const ringSats = rings[rn];
+      if (!ringSats) continue;
+      for (const sat of ringSats) {
+        if (sat.orbitalZone !== "BETWEEN_EARTH_AND_MARS") continue; // backbone lives between the planets
+        const pos = positions[sat.name];
+        if (!pos) continue;
+        const budget = (linkCounts[sat.name] || 0) < radialMax(sat);
+        const outFree = budget && sat.outwards === null; // "premarked"/a name ⇒ TAKEN (non-null)
+        const inFree = budget && sat.inwards === null;
+        if (!outFree && !inFree) continue; // no usable radial port ⇒ can never be on a route
+        const suit = sat.suitable;
+        pool.push({
+          sat, pos, R: this.calculateDistanceToSunAU(pos), outFree, inFree,
+          suitEarth: !!(suit && suit.includes("Earth")),
+          suitMars: !!(suit && suit.includes("Mars")),
+        });
+      }
+    }
+    const m = pool.length;
+    if (m < 2) return;
+
+    // Sun-distance order = topological order of the forward DAG (forward = increasing R). The DP
+    // relaxes nodes in this order, so a single linear pass suffices. Stable index = sort position.
+    pool.sort((a, b) => a.R - b.R);
+    const Rsorted = pool.map((p) => p.R);
+
+    // --- Endpoints by SUITABILITY, with the documented R-extreme fallback. A start needs a free
+    //     OUTWARD port (it sends outward); a sink needs a free INWARD port (it receives inward). ---
+    const canStart = new Array(m), canEnd = new Array(m);
+    let anyStartSuit = false, anyEndSuit = false;
+    for (let i = 0; i < m; i++) {
+      if (pool[i].suitEarth) anyStartSuit = true;
+      if (pool[i].suitMars) anyEndSuit = true;
+    }
+    // Fallback thresholds: innermost 20% of R are Earth-side starts, outermost 20% Mars-side sinks.
+    // Only used for whichever endpoint class carries NO suitable marking at all (defensive).
+    const startCutR = Rsorted[Math.max(0, Math.floor(m * 0.2) - 1)];
+    const endCutR = Rsorted[Math.min(m - 1, Math.ceil(m * 0.8))];
+    for (let i = 0; i < m; i++) {
+      const p = pool[i];
+      const startOK = anyStartSuit ? p.suitEarth : p.R <= startCutR;
+      const endOK = anyEndSuit ? p.suitMars : p.R >= endCutR;
+      canStart[i] = startOK && p.outFree;
+      canEnd[i] = endOK && p.inFree;
+    }
+
+    // --- Cartesian spatial index for K-NEAREST-FORWARD candidate lookup. The cell is sized to the
+    //     LOCAL sat spacing (NOT maxAU): a widest-path route only ever wants SHORT hops — a long hop
+    //     would be its bottleneck — so each node keeps only its K nearest forward in-range partners.
+    //     Sizing the cell to maxAU (≈0.5 AU) was the O(N²) trap: one cell then held thousands of sats.
+    //     Here kNN by expanding cell-shells with early termination is O(N·K). ---
+    const K_CAND = 8; // nearest forward candidates kept per node
+    let rMin = Infinity, rMax = 0;
+    for (let i = 0; i < m; i++) { const R = pool[i].R; if (R < rMin) rMin = R; if (R > rMax) rMax = R; }
+    const annulusArea = Math.max(Math.PI * (rMax * rMax - rMin * rMin), 1e-6);
+    const spacing = Math.sqrt(annulusArea / m);          // ≈ inter-sat spacing ⇒ a few sats per cell
+    const cell = Math.min(maxAU, Math.max(spacing, 1e-9)); // never coarser than maxAU, never zero
+    // Cap the shell expansion low: the K nearest forward sats are within a couple of spacings, and
+    // a hop beyond ~6 spacings would be a ruinous bottleneck we'd never pick. Without this cap, a
+    // node with few forward partners (every outer-ring/Mars-sink sat) scans thousands of empty cells.
+    const maxRing = Math.min(Math.ceil(maxAU / cell), 6);
+    const cellOf = (v) => Math.floor(v / cell);
+    const grid = new Map();
+    for (let i = 0; i < m; i++) {
+      const pos = pool[i].pos, k = `${cellOf(pos.x)},${cellOf(pos.y)},${cellOf(pos.z)}`;
+      let bucket = grid.get(k);
+      if (!bucket) grid.set(k, (bucket = []));
+      bucket.push(i);
+    }
+
+    // --- Forward adjacency = the ≤K nearest valid forward hops. Edge i→j needs: j strictly farther
+    //     in R, real 3D distance ≤ maxAU, inside a 75° cone of i's radial-outward direction (rejects
+    //     sideways links; ring-SKIPS still allowed), not sun-blinded, both ports free, not already
+    //     linked. Expand cell-shells around i keeping the K smallest-distance candidates; stop once K
+    //     are held and no nearer one can lie in a farther shell. Secondary cost = angular deviation. ---
+    const CONE_COS = Math.cos((75 * Math.PI) / 180);
+    const adj = Array.from({ length: m }, () => []);
+    for (let i = 0; i < m; i++) {
+      const a = pool[i];
+      if (!a.outFree) continue; // a relays OUTWARD via its outward port
+      const ax = a.pos.x, ay = a.pos.y, az = a.pos.z, aR = a.R;
+      const cx = cellOf(ax), cy = cellOf(ay), cz = cellOf(az);
+      const kept = []; // {j, dAU, dev} — the K smallest-dAU candidates found so far
+      let worst = Infinity; // largest dAU in `kept` once it holds K (the displacement threshold)
+      for (let r = 0; r <= maxRing; r++) {
+        if (kept.length >= K_CAND && (r - 1) * cell > worst) break; // no nearer one can be farther out
+        for (let dx = -r; dx <= r; dx++)
+          for (let dy = -r; dy <= r; dy++)
+            for (let dz = -r; dz <= r; dz++) {
+              if (Math.max(Math.abs(dx), Math.abs(dy), Math.abs(dz)) !== r) continue; // shell only
+              const bucket = grid.get(`${cx + dx},${cy + dy},${cz + dz}`);
+              if (!bucket) continue;
+              for (let t = 0; t < bucket.length; t++) {
+                const j = bucket[t];
+                if (j === i) continue;
+                const b = pool[j];
+                if (b.R <= aR || !b.inFree) continue; // strictly outward; b receives inward
+                const ddx = b.pos.x - ax, ddy = b.pos.y - ay, ddz = b.pos.z - az;
+                const dAU = Math.sqrt(ddx * ddx + ddy * ddy + ddz * ddz);
+                if (dAU > maxAU || dAU <= 0) continue;
+                if (kept.length >= K_CAND && dAU >= worst) continue; // cannot displace a kept one
+                const radialCos = (ddx * ax + ddy * ay + ddz * az) / (dAU * (aR || 1e-12));
+                if (radialCos < CONE_COS) continue; // sideways ⇒ rejected
+                if (this.isSolarBlinded(a.pos, b.pos)) continue; // expensive checks last
+                const nm = a.sat.name < b.sat.name ? `${a.sat.name}-${b.sat.name}` : `${b.sat.name}-${a.sat.name}`;
+                if (existingLinks.has(nm)) continue;
+                const dev = Math.acos(Math.max(-1, Math.min(1, radialCos)));
+                kept.push({ j, dAU, dev });
+                if (kept.length > K_CAND) { // drop the current farthest, keep K
+                  let wi = 0; for (let q = 1; q < kept.length; q++) if (kept[q].dAU > kept[wi].dAU) wi = q;
+                  kept.splice(wi, 1);
+                }
+                if (kept.length >= K_CAND) { worst = 0; for (let q = 0; q < kept.length; q++) if (kept[q].dAU > worst) worst = kept[q].dAU; }
+              }
+            }
+      }
+      adj[i] = kept;
+    }
+
+    // --- Periapsis-outward sweep order for the START nodes. Build the highest-value routes near
+    //     the Mars-periapsis sun angle first (sweeping both angular directions), so the fattest
+    //     geometry is claimed before its nodes get consumed by lesser routes. solarAngle is in
+    //     degrees [0,360); angular distance is the wrapped separation from theta0. ---
+    const mars = this.simSatellites && this.simSatellites.getMars ? this.simSatellites.getMars() : null;
+    const theta0 = ((((mars && mars.p) || 0) % 360) + 360) % 360;
+    const angDist = (deg) => { const d = Math.abs((((deg - theta0) % 360) + 360) % 360); return d > 180 ? 360 - d : d; };
+    const startOrder = [];
+    for (let i = 0; i < m; i++) if (canStart[i]) startOrder.push(i);
+    startOrder.sort((a, b) => angDist(pool[a].pos.solarAngle) - angDist(pool[b].pos.solarAngle));
+
+    // --- Link emission. Match the canonical 6-field shape; from = lower-R (Earth-side) endpoint. ---
+    const emitLink = (fromIdx, toIdx, dAU) => {
+      const from = pool[fromIdx].sat, to = pool[toIdx].sat;
+      const distanceKm = dAU * AU_IN_KM;
+      const [fId, tId] = from.name < to.name ? [from.name, to.name] : [to.name, from.name];
+      const key = `${fId}-${tId}`;
+      if (existingLinks.has(key)) return; // belt-and-braces; adjacency already excluded these
+      finalLinks.push({
+        fromId: fId, toId: tId, distanceAU: dAU, distanceKm,
+        latencySeconds: this.calculateLatency(distanceKm), gbpsCapacity: this.calculateGbps(distanceKm),
+      });
+      linkCounts[from.name] = (linkCounts[from.name] || 0) + 1;
+      linkCounts[to.name] = (linkCounts[to.name] || 0) + 1;
+      existingLinks.add(key);
+      from.outwards = to.name; to.inwards = from.name; // from is nearer the Sun (Earth-side)
+    };
+
+    // --- Per-start lexicographic widest-path DP over not-yet-used nodes. Key per node =
+    //     (bottleneck = max edge AU so far, secondary = Σ angular deviation + anti-island drift).
+    //     We touch ONLY each start's reachable wedge: a forward DFS collects it, then we relax in
+    //     ascending-index (= topological) order. Persistent scratch + a generation stamp avoid the
+    //     per-start O(m) realloc/scan that made the naive version O(starts·m). ---
+    const used = new Array(m).fill(false);
+    const EPS = 1e-9; // two bottlenecks within EPS are a "tie" / decision point
+    const STRIP_DEG = 25; // max sun-angle drift of a route from its start (bounds each wedge size)
+    const angSep = (a, b) => { const d = Math.abs((((a - b) % 360) + 360) % 360); return d > 180 ? 360 - d : d; };
+    // Anti-island bias: prefer staying angularly near the PREVIOUS committed route's mean angle.
+    let prevRouteAngle = null;
+    const angleNear = (deg) => prevRouteAngle === null ? 0 : (() => {
+      const d = Math.abs((((deg - prevRouteAngle) % 360) + 360) % 360); return (d > 180 ? 360 - d : d) / 180;
+    })();
+
+    const diag = { routeCount: 0, islandCount: 0, forkCount: 0, totalGbps: 0, bottlenecksAU: [], forksPerRoute: [] };
+
+    // Persistent DP scratch reused across starts; stamp[i] === gen ⇒ i is in this start's wedge.
+    const bott = new Float64Array(m);
+    const sec = new Float64Array(m);
+    const pred = new Int32Array(m);
+    const stamp = new Int32Array(m);
+    let gen = 0;
+    const stack = [], touched = [];
+
+    for (let s = 0; s < startOrder.length; s++) {
+      const src = startOrder[s];
+      if (used[src] || !canStart[src]) continue;
+      gen++;
+
+      // Discover the reachable wedge (forward DFS over not-yet-used nodes), bounded to an angular
+      // STRIP around the start. The 75° per-hop cone alone lets the wedge balloon across the whole
+      // disc (so the "localized" DP degenerates to O(m) per start); a near-radial route never drifts
+      // far in sun angle, and any larger drift means long sideways hops = a worse bottleneck, so the
+      // strip discards no fat route while keeping each wedge a thin band.
+      const startAngle = pool[src].pos.solarAngle;
+      touched.length = 0; stack.length = 0;
+      stack.push(src); stamp[src] = gen;
+      while (stack.length) {
+        const u = stack.pop(); touched.push(u);
+        const list = adj[u];
+        for (let k = 0; k < list.length; k++) {
+          const j = list[k].j;
+          if (used[j] || stamp[j] === gen) continue;
+          if (angSep(pool[j].pos.solarAngle, startAngle) > STRIP_DEG) continue; // outside the strip
+          stamp[j] = gen; stack.push(j);
+        }
+      }
+      // Initialise only the wedge, then relax in topological (ascending-index) order.
+      for (let t = 0; t < touched.length; t++) { const u = touched[t]; bott[u] = Infinity; sec[u] = Infinity; pred[u] = -1; }
+      bott[src] = 0; sec[src] = 0;
+      touched.sort((a, b) => a - b);
+
+      let forks = 0;
+      for (let t = 0; t < touched.length; t++) {
+        const i = touched[t];
+        if (bott[i] === Infinity) continue;
+        const bi = bott[i], si = sec[i], list = adj[i];
+        // Best-two child bottlenecks ⇒ near-tied fork (decision point).
+        let best1 = Infinity, best2 = Infinity;
+        for (let k = 0; k < list.length; k++) {
+          const e = list[k], j = e.j;
+          if (used[j]) continue;
+          const cand = bi > e.dAU ? bi : e.dAU;          // bottleneck = max(parent, this edge)
+          const candSec = si + e.dev + angleNear(pool[j].pos.solarAngle);
+          if (cand < best1) { best2 = best1; best1 = cand; } else if (cand < best2) { best2 = cand; }
+          if (cand < bott[j] - EPS || (Math.abs(cand - bott[j]) <= EPS && candSec < sec[j])) {
+            bott[j] = cand; sec[j] = candSec; pred[j] = i;
+          }
+        }
+        if (best1 !== Infinity && best2 !== Infinity && Math.abs(best1 - best2) <= EPS) forks++;
+      }
+
+      // Best reachable Mars-suitable sink: smallest bottleneck, then smallest secondary cost.
+      // Exclude src itself — a dual-suitable ["Earth","Mars"] start (bott=0) must reach a REAL
+      // farther Mars-suitable sink, never form a zero-hop self-route.
+      let sink = -1, sinkB = Infinity, sinkS = Infinity;
+      for (let t = 0; t < touched.length; t++) {
+        const i = touched[t];
+        if (i === src || !canEnd[i] || bott[i] === Infinity) continue;
+        if (bott[i] < sinkB - EPS || (Math.abs(bott[i] - sinkB) <= EPS && sec[i] < sinkS)) {
+          sinkB = bott[i]; sinkS = sec[i]; sink = i;
+        }
+      }
+      if (sink === -1) { diag.islandCount++; continue; } // ISLAND: count it, commit nothing.
+
+      // Recover the route (pred chain stays inside the wedge, all not-used), commit, mark used.
+      const path = [];
+      for (let v = sink; v !== -1; v = pred[v]) path.push(v);
+      if (path.length < 2) { diag.islandCount++; continue; }
+      path.reverse(); // src … sink (ascending R)
+
+      let maxKm = 0, angleSum = 0;
+      for (let p = 0; p < path.length - 1; p++) {
+        const a = path[p], b = path[p + 1];
+        const dAU = this.calculateDistanceAU(pool[a].pos, pool[b].pos);
+        emitLink(a, b, dAU);
+        const km = dAU * AU_IN_KM; if (km > maxKm) maxKm = km;
+      }
+      for (let p = 0; p < path.length; p++) { used[path[p]] = true; angleSum += pool[path[p]].pos.solarAngle; }
+      prevRouteAngle = angleSum / path.length; // anti-island anchor for the next route
+
+      const gbps = this.calculateGbps(maxKm);
+      diag.totalGbps += gbps;
+      diag.routeCount++;
+      diag.forkCount += forks;
+      diag.bottlenecksAU.push(maxKm / AU_IN_KM);
+      diag.forksPerRoute.push(forks);
+    }
+
+    // --- Decision-point / island diagnostics. NO upper bound here (that is an opt-in helper). ---
+    this._maxThroughputDiag = {
+      routeCount: diag.routeCount,
+      islandCount: diag.islandCount,
+      forkCount: diag.forkCount,
+      totalGbps: diag.totalGbps,
+      nodeCount: m,
+      bottlenecksAU: diag.bottlenecksAU,
+      forksPerRoute: diag.forksPerRoute,
+      meanBottleneckAU: diag.bottlenecksAU.length
+        ? diag.bottlenecksAU.reduce((acc, x) => acc + x, 0) / diag.bottlenecksAU.length : 0,
+      maxBottleneckAU: diag.bottlenecksAU.length ? Math.max(...diag.bottlenecksAU) : 0,
+    };
+    console.info(
+      `[max-throughput] ${diag.totalGbps.toFixed(1)} Gbps over ${diag.routeCount} routes` +
+      ` (${diag.islandCount} islands, ${diag.forkCount} forks, ${m} relay nodes)`
+    );
   }
 
   planetToCircularRings(rings, positions, linkCounts, finalLinks, planetRingName, targetDepartureAngle = 0, existingLinks) {
@@ -1013,18 +1966,11 @@ export class TopologyBuilder {
   calculateEarthToMarsRoutes(finalLinks, rings) {
     // Build routes from Earth to Mars through adapted rings
     const routes = [];
-    const linkMap = new Map();
 
     // Create a map from satellite name to satellite object
     const satMap = new Map();
     Object.values(rings).forEach((ringSats) => {
       ringSats.forEach((sat) => satMap.set(sat.name, sat));
-    });
-
-    // Create a map from satellite to its outward links
-    finalLinks.forEach((link) => {
-      if (!linkMap.has(link.fromId)) linkMap.set(link.fromId, []);
-      linkMap.get(link.fromId).push(link);
     });
 
     // Undirected link lookup by endpoint pair, plus a helper that returns the
@@ -1085,9 +2031,12 @@ export class TopologyBuilder {
           if (currentSat.outwards !== null) {
             const nextSatName = currentSat.outwards;
             route.path.push(nextSatName);
-            // Find the link to get metrics
-            const links = linkMap.get(currentSat.name) || [];
-            const outwardLink = links.find((link) => link.toId === nextSatName);
+            // Find the link to get metrics. Links are keyed lexicographically
+            // (fromId < toId) regardless of the outward walk direction, so look the
+            // segment up UNDIRECTED. A directed lookup (linkMap by fromId) silently
+            // missed every reverse-stored hop, dropping it from the route's min and
+            // inflating per-route throughput (and understating latency).
+            const outwardLink = linkByPair.get(currentSat.name + "|" + nextSatName);
             if (outwardLink) {
               route.throughputMbps = Math.min(route.throughputMbps, outwardLink.gbpsCapacity * 1000); // convert to Mbps
               route.latencySeconds += outwardLink.latencySeconds;
@@ -1427,7 +2376,7 @@ export class TopologyBuilder {
 
     // Pre-mark unavailable ports for 3-port rings
     ringList.forEach((ring) => {
-      const maxLinks = this.simLinkBudget.getMaxLinksPerRing(ring.name);
+      const maxLinks = this._radialMaxLinks(ring.name);
       if (maxLinks !== 3) return;
       ringSatellites[ring.name].forEach((sat, i) => {
         if (i % 2 === 0) sat.outwards = "premarked";
@@ -1732,28 +2681,36 @@ export class TopologyBuilder {
     // planetToEccentricRings (one entry per eccentric relay ring).
     this.eccRingDetail = new Map();
 
-    // Concentric relay rings (circular / adapted concentric) take their radial
-    // backbone FIRST so the first two terminals go inward/outward to neighbour
-    // rings. intraRing then fills any spare terminals with azimuthal neighbour
-    // links. (For 2-port adapted concentric there is nothing left over, so it
-    // stays radial-only; 4-port circular gets a radial+azimuthal grid.)
+    // Concentric relay rings (circular / adapted concentric) take their radial backbone
+    // FIRST (interAdaptedRings), THEN their planet-ring connections, and only THEN the
+    // azimuthal lattice (intraRing) fills any spare terminals. Ordering the planet links
+    // BEFORE the lattice is essential: a dense lattice would otherwise consume the spare
+    // terminals the planet-ring links need, leaving the relay disconnected from Earth/Mars.
+    // What remains after radial + planet + lattice is the spacecraft-accessible spare.
     t = performance.now();
     this.interAdaptedRings(rings, positions, linkCounts, finalLinks, targetDepartureAngle, satellites, existingLinks);
     mark("interAdaptedRings", t);
+
+    t = performance.now();
+    this.planetToCircularRings(rings, positions, linkCounts, finalLinks, "ring_mars", targetDepartureAngle, existingLinks);
+    this.planetToCircularRings(rings, positions, linkCounts, finalLinks, "ring_earth", targetDepartureAngle, existingLinks);
+    // Strip incomplete radial chains (incl. their planet links) once both planet rings are
+    // attached — "Require inner link" drops chains not reaching Earth, "Require outer link" those
+    // not reaching Mars. No-op unless a toggle is set. Before intraRing so freed ports feed the lattice.
+    this.pruneIncompleteRadialChains(rings, linkCounts, finalLinks, existingLinks);
+    mark("planetToCircularRings", t);
 
     t = performance.now();
     this.intraRing(rings, positions, linkCounts, finalLinks, existingLinks);
     mark("intraRing", t);
 
     t = performance.now();
-    this.planetToCircularRings(rings, positions, linkCounts, finalLinks, "ring_mars", targetDepartureAngle, existingLinks);
-    this.planetToCircularRings(rings, positions, linkCounts, finalLinks, "ring_earth", targetDepartureAngle, existingLinks);
     // Eccentric relay families attach to both planet rings by proximity (each ellipse
     // touches Earth at perihelion and Mars at aphelion), not via the concentric
-    // `suitable` flag.
+    // `suitable` flag. (Kept after intraRing so eccentric azimuthal ordering is unchanged.)
     this.planetToEccentricRings(rings, positions, linkCounts, finalLinks, "ring_mars", existingLinks);
     this.planetToEccentricRings(rings, positions, linkCounts, finalLinks, "ring_earth", existingLinks);
-    mark("planetToRings", t);
+    mark("planetToEccentricRings", t);
 
     // Cross-link eccentric rings where their tracks intersect in the xy plane, using
     // each closest sat's spare radial ("3rd") laser. Runs after the planet junctions

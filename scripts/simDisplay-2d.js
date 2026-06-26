@@ -5,10 +5,19 @@
  * with pan and zoom (mouse & touch).
  ***********************************************/
 
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.6";
-import { createCarModel } from "./modelCar.js?v=4.6";
-import { positionFromSolarAngle } from "./simOrbits.js?v=4.6";
-import { stationKeepingAccel, GM, sampleThrustField, marchingSquares, satSchemeT, rampRGB, OVER_BUDGET_RGB, isThrustScheme, satStationKeeping, satTotalProp, G0, SECONDS_PER_YEAR } from "./simStationKeeping.js?v=4.6";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.28";
+import { createCarModel } from "./modelCar.js?v=4.28";
+import { positionFromSolarAngle } from "./simOrbits.js?v=4.28";
+import { stationKeepingAccel, GM, sampleThrustField, marchingSquares, satSchemeT, rampRGB, OVER_BUDGET_RGB, isThrustScheme, satStationKeeping, satTotalProp, G0, SECONDS_PER_YEAR } from "./simStationKeeping.js?v=4.28";
+
+// Per-option style for the Display "Reference lines". tag===null → label both endpoints
+// with their angle (a symmetric node line); otherwise label only the n1 end with the tag.
+const REFERENCE_LINE_STYLES = {
+  "Closest approach": { color: "#5dd6a0", tag: "closest" },
+  "Mars apsides": { color: "#4fc3d8", tag: "peri" },
+  "Plane nodes": { color: "#d8b85a", tag: null },
+  "Earth apsides": { color: "#e0795a", tag: "E peri" },
+};
 
 /**
  * Converts astronomical units (AU) to 3D units using a scale factor.
@@ -358,9 +367,11 @@ export class SimDisplay {
     this.drawSolarSystem();
   }
 
-  setPlaneNodes(value, n1, n2) {
-    this.showPlaneNodes = Array.isArray(value) ? value.length > 0 : !!(value && String(value).length);
-    this.planeNodeAngles = [n1, n2];
+  // Reference lines: a comma-list (or array) of enabled option labels + an angles map
+  // { "<label>": {n1, n2} } for all options. Draws only the enabled ones.
+  setReferenceLines(value, angles) {
+    this.referenceLines = Array.isArray(value) ? value : String(value || "").split(",").map((s) => s.trim()).filter(Boolean);
+    this.referenceLineAngles = angles || {};
     this.drawSolarSystem();
   }
 
@@ -720,28 +731,34 @@ export class SimDisplay {
       this.ctx.restore();
     }
 
-    // === Draw Earth↔Mars line of nodes (through the Sun, ending on Mars's orbit) ===
-    if (this.showPlaneNodes && this.planeNodeAngles) {
+    // === Draw reference lines (through the Sun, ending on Mars's orbit) ===
+    if (this.referenceLines && this.referenceLines.length && this.referenceLineAngles) {
       const mars = this.solarSystemData.planets.find((p) => p.name === "Mars");
       if (mars) {
-        const [n1, n2] = this.planeNodeAngles;
         const proj = (ang) => {
           const p = positionFromSolarAngle(mars, ang);
           return [centerX - auTo3D(p.x) * scaleAUtoPX, centerY + auTo3D(p.y) * scaleAUtoPX];
         };
-        const [x1, y1] = proj(n1), [x2, y2] = proj(n2);
+        // tag === null → label both endpoints with their angle (a symmetric node line).
+        const STYLES = REFERENCE_LINE_STYLES;
         this.ctx.save();
-        this.ctx.strokeStyle = "#d8b85a";
         this.ctx.lineWidth = 1.5;
-        this.ctx.beginPath();
-        this.ctx.moveTo(x1, y1);
-        this.ctx.lineTo(x2, y2);
-        this.ctx.stroke();
-        this.ctx.fillStyle = "#d8b85a";
         this.ctx.font = "11px ui-monospace, monospace";
         this.ctx.textAlign = "center";
-        this.ctx.fillText(`${Math.round(n1)}°`, x1, y1 - 5);
-        this.ctx.fillText(`${Math.round(n2)}°`, x2, y2 - 5);
+        for (const key of this.referenceLines) {
+          const ang = this.referenceLineAngles[key], st = STYLES[key];
+          if (!ang || !st) continue;
+          const [x1, y1] = proj(ang.n1), [x2, y2] = proj(ang.n2);
+          this.ctx.strokeStyle = st.color;
+          this.ctx.beginPath(); this.ctx.moveTo(x1, y1); this.ctx.lineTo(x2, y2); this.ctx.stroke();
+          this.ctx.fillStyle = st.color;
+          if (st.tag === null) {
+            this.ctx.fillText(`${Math.round(ang.n1)}°`, x1, y1 - 5);
+            this.ctx.fillText(`${Math.round(ang.n2)}°`, x2, y2 - 5);
+          } else {
+            this.ctx.fillText(`${st.tag} ${Math.round(ang.n1)}°`, x1, y1 - 5);
+          }
+        }
         this.ctx.restore();
       }
     }
@@ -940,6 +957,118 @@ export class SimDisplay {
         this.ctx.stroke();
         this.ctx.restore();
       }
+    }
+
+    // === Draw spacecraft transfer flights (arcs + extension links + ship markers) ===
+    this.drawFlights(centerX, centerY, scaleAUtoPX);
+
+    // === Draw Monte-Carlo coverage probes (independent point cloud + access links) ===
+    this.drawProbes(centerX, centerY, scaleAUtoPX);
+  }
+
+  /** Receive per-frame flight overlay data from SimMain. */
+  setFlightData(data) {
+    this.flightData = data || { ships: [], arcs: [], links: [] };
+  }
+
+  /**
+   * Draw the spacecraft-flight overlay: transfer arcs (dashed orange), ship
+   * extension links (teal), and ship markers (cyan = →Mars, magenta = →Earth,
+   * grey = unconnected).
+   */
+  drawFlights(centerX, centerY, scale) {
+    const fd = this.flightData;
+    if (!fd) return;
+    const X = (x) => centerX - auTo3D(x) * scale;
+    const Y = (y) => centerY + auTo3D(y) * scale;
+
+    if (fd.arcs && fd.arcs.length) {
+      this.ctx.save();
+      this.ctx.strokeStyle = "rgba(255,160,60,0.7)";
+      this.ctx.lineWidth = 1;
+      this.ctx.setLineDash([4, 3]);
+      for (const arc of fd.arcs) {
+        if (!arc || arc.length < 2) continue;
+        this.ctx.beginPath();
+        this.ctx.moveTo(X(arc[0].x), Y(arc[0].y));
+        for (let i = 1; i < arc.length; i++) this.ctx.lineTo(X(arc[i].x), Y(arc[i].y));
+        this.ctx.stroke();
+      }
+      this.ctx.restore();
+    }
+
+    if (fd.links && fd.links.length) {
+      this.ctx.save();
+      this.ctx.strokeStyle = "rgba(0,200,170,0.9)";
+      this.ctx.lineWidth = 1.2;
+      for (const l of fd.links) {
+        if (!l.from || !l.to) continue;
+        this.ctx.beginPath();
+        this.ctx.moveTo(X(l.from.x), Y(l.from.y));
+        this.ctx.lineTo(X(l.to.x), Y(l.to.y));
+        this.ctx.stroke();
+      }
+      this.ctx.restore();
+    }
+
+    if (fd.ships && fd.ships.length) {
+      this.ctx.save();
+      this.ctx.lineWidth = 0.8;
+      this.ctx.strokeStyle = "#001018";
+      for (const s of fd.ships) {
+        const sx = X(s.x), sy = Y(s.y);
+        this.ctx.fillStyle = s.connected === false ? "#888888" : (s.direction === "EM" ? "#12c8ff" : "#ff4fd8");
+        this.ctx.beginPath();
+        this.ctx.arc(sx, sy, 3.4, 0, 2 * Math.PI);
+        this.ctx.fill();
+        this.ctx.stroke();
+      }
+      this.ctx.restore();
+    }
+  }
+
+  /** Receive per-frame coverage-probe overlay data from SimMain. */
+  setProbeData(data) {
+    this.probeData = data || { probes: [], links: [] };
+  }
+
+  /**
+   * Draw the Monte-Carlo coverage field: faint access links (probe → backbone
+   * node) and the probe markers (green = linked, grey = no link, pale = not yet
+   * measured). Probes are independent samples — drawn together but measured alone.
+   */
+  drawProbes(centerX, centerY, scale) {
+    const pd = this.probeData;
+    if (!pd) return;
+    const X = (x) => centerX - auTo3D(x) * scale;
+    const Y = (y) => centerY + auTo3D(y) * scale;
+
+    if (pd.links && pd.links.length) {
+      this.ctx.save();
+      this.ctx.strokeStyle = "rgba(120,200,255,0.30)";
+      this.ctx.lineWidth = 0.6;
+      for (const l of pd.links) {
+        if (!l.from || !l.to) continue;
+        this.ctx.beginPath();
+        this.ctx.moveTo(X(l.from.x), Y(l.from.y));
+        this.ctx.lineTo(X(l.to.x), Y(l.to.y));
+        this.ctx.stroke();
+      }
+      this.ctx.restore();
+    }
+
+    if (pd.probes && pd.probes.length) {
+      this.ctx.save();
+      for (const p of pd.probes) {
+        const px = X(p.x), py = Y(p.y);
+        this.ctx.fillStyle = p.connected === false ? "rgba(150,150,160,0.7)"
+          : p.connected ? "rgba(90,230,170,0.92)"
+          : "rgba(205,205,215,0.6)";
+        this.ctx.beginPath();
+        this.ctx.arc(px, py, 1.7, 0, 2 * Math.PI);
+        this.ctx.fill();
+      }
+      this.ctx.restore();
     }
   }
 }

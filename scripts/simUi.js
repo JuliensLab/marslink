@@ -1,9 +1,10 @@
 // simUi.js
-import { slidersData } from "./slidersData.js?v=4.6";
-import { LukashianClock } from "./lukashianTime.js?v=4.6";
-import { wireAuthUi } from "./auth.js?v=4.6";
-import { SensitivityPool } from "./sensitivityPool.js?v=4.6";
-import { minOf } from "./simMath.js?v=4.6";
+import { slidersData } from "./slidersData.js?v=4.28";
+import { LukashianClock } from "./lukashianTime.js?v=4.28";
+import { wireAuthUi } from "./auth.js?v=4.28";
+import { SensitivityPool } from "./sensitivityPool.js?v=4.28";
+import { minOf } from "./simMath.js?v=4.28";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.28";
 
 export class SimUi {
   constructor(simMain) {
@@ -21,7 +22,6 @@ export class SimUi {
     this.initializeSimMain();
     this.setupModeNavigation();
     this.setupSliderSearch();
-    this.setupPresets();
     this.setupSimpleConfig();
     this.setupReportPanel();
     this.setupHelpPopup();
@@ -231,8 +231,8 @@ export class SimUi {
     this.simMain.setThrustBodies(thrustBodies);
     const planetOrbits = this.slidersData.display["planet-orbits"].value;
     this.simMain.setPlanetOrbits(planetOrbits);
-    const planeNodes = this.slidersData.display["plane-nodes"].value;
-    this.simMain.setPlaneNodes(planeNodes);
+    const referenceLines = this.slidersData.display["reference-lines"].value;
+    this.simMain.setReferenceLines(referenceLines);
     const geoOrbits = this.slidersData.display["geostationary-orbits"].value;
     this.simMain.setGeostationaryOrbits(geoOrbits);
 
@@ -279,10 +279,13 @@ export class SimUi {
     const simplePane = document.getElementById("simple-pane");
     const configurePane = document.getElementById("configure-pane");
     const sensitivityPane = document.getElementById("sensitivity-pane");
+    const archivePane = document.getElementById("archive-pane");
     const reportPanel = document.getElementById("report-panel");
 
     const setActiveButtons = (mode) => {
-      document.querySelectorAll("[data-mode]").forEach((btn) => {
+      // Only the mode tabs — NOT the .kbd-toggle link-label buttons, which also carry
+      // data-mode (mbps/latency) and are managed separately by setupLinkLabelToggles.
+      document.querySelectorAll(".mode-tab[data-mode]").forEach((btn) => {
         btn.classList.toggle("active", btn.dataset.mode === mode);
       });
     };
@@ -293,6 +296,7 @@ export class SimUi {
       simplePane.hidden = true;
       configurePane.hidden = true;
       sensitivityPane.hidden = true;
+      if (archivePane) archivePane.hidden = true;
     };
 
     const closeReportPanel = () => {
@@ -312,13 +316,14 @@ export class SimUi {
       this.activeMode = mode;
       setActiveButtons(mode);
 
-      if (mode === "simple" || mode === "configure" || mode === "sensitivity") {
+      if (mode === "simple" || mode === "configure" || mode === "sensitivity" || mode === "archive") {
         closeReportPanel();
         modeDrawer.hidden = false;
         modeDrawer.setAttribute("aria-hidden", "false");
         simplePane.hidden = mode !== "simple";
         configurePane.hidden = mode !== "configure";
         sensitivityPane.hidden = mode !== "sensitivity";
+        if (archivePane) archivePane.hidden = mode !== "archive";
         // The expand mode is sensitivity-only; collapse the drawer for other panes.
         if (mode !== "sensitivity") {
           modeDrawer.classList.remove("sens-expanded");
@@ -337,7 +342,7 @@ export class SimUi {
       }
     };
 
-    document.querySelectorAll("[data-mode]").forEach((btn) => {
+    document.querySelectorAll(".mode-tab[data-mode]").forEach((btn) => {
       btn.addEventListener("click", () => openMode(btn.dataset.mode));
     });
 
@@ -609,19 +614,6 @@ export class SimUi {
       return Math.sign(v) * (Math.round(Math.log2(Math.abs(v))) + 1);
     };
 
-    // Required-throughput master (pow10 Gbps) — the general-design driver. It sizes
-    // the Earth/Mars rings (worst case = half) and, per relay type, either the ring
-    // count (concentric) or the in-ring rate (eccentric). Drives via the advanced
-    // relay_type.requiredgbps slider so a single switch case does the sizing.
-    const gbpsData = this.slidersData.relay_type.requiredgbps;
-    const throughputRow = makeSliderRow("Required throughput",
-      { min: gbpsData.min, max: gbpsData.max, step: gbpsData.step, unit: gbpsData.unit, value: gbpsData.value },
-      "simple-throughput",
-      (internal) => { this.applySliderValues({ "relay_type.requiredgbps": internal }); },
-      { toDisplay: (v) => Math.round(Math.pow(10, v) * 100) / 100, toInternal: (v) => Math.log10(v) }
-    );
-    const currentReqGbps = () => Math.pow(10, parseFloat(throughputRow.slider.value));
-
     // Time acceleration slider — signedPow2 scale (continuous, step 0.1)
     const timeData = this.slidersData.simulation["time-acceleration-slider"];
     const timeRow = makeSliderRow("Time acceleration",
@@ -631,40 +623,31 @@ export class SimUi {
       { toDisplay: signedPow2, toInternal: signedPow2Inv }
     );
 
-    // Laser tech improvement slider — pow2 scale.
-    // Changing the laser tech rescales per-link capacity (and therefore the
-    // adapted-rings aggregate target), so we re-run the same defaults-and-
-    // feedback-loop the ring-count slider uses, keeping the Earth/Mars in-ring
-    // mbps locked to the new adapted capacity.
+    const currentRingCount = () => parseFloat(this.sliders.relay_type?.ringcount?.value ?? ringData.value);
+
+    // Laser tech improvement slider — pow2 scale. Changing the laser tech rescales
+    // per-link capacity, so the relay aggregate capacity shifts; the Earth/Mars auto-size
+    // re-tracks the new relay capacity on the next build (when set to 'auto').
     const techRow = makeSliderRow("Laser tech improvement",
       { min: techData.min, max: techData.max, step: 1, unit: "x", value: techData.value },
       "simple-techfactor",
       (val) => {
         this.applySliderValues({ "laser_technology.improvement-factor": val });
-        // Tech change rescales the link budget → re-size for the same throughput
-        // (concentric ring count or eccentric in-ring rate shifts accordingly).
-        this.applyDesignFromThroughput(currentReqGbps());
       },
       { toDisplay: (v) => Math.pow(2, v), toInternal: (v) => Math.round(Math.log2(v)) }
     );
 
-    // Ring count slider — linear. Passing `{ startFeedback: true }` arms a
-    // 2-iteration feedback loop that rescales the earth / mars in-ring mbps
-    // to match the actual adapted-ring aggregate capacity once the worker
-    // delivers a fresh capacityInfo. The feedback only fires on slider moves,
-    // not on the initial applySimpleDefaults call at the bottom of this
-    // method (line 638), so the direct formula alone seeds the defaults.
-    // For eccentric families this is the coverage/latency knob (held while the in-ring
-    // rate carries throughput); for concentric it is derived from throughput and shown
-    // read-only (disabled below, so this handler only fires for eccentric).
+    // Relay ring count — the single main design input. Setting it rebuilds the relay
+    // (which recomputes the relay capacity); the Earth/Mars auto-size then sizes each
+    // planet ring's worst-case in-ring rate to half that capacity on the next build.
+    // Editable for every family (concentric and eccentric alike).
     const ringRow = makeSliderRow("Relay ring count", ringData, "simple-ringcount", (val) => {
       this.applySliderValues({ "relay_type.ringcount": val });
-      this.applyDesignFromThroughput(currentReqGbps());
     });
 
-    // Relay-type selector (position 3, above the ring-count row). Switching family
-    // updates section visibility + the active builder, then re-applies defaults so the
-    // ring-count slider drives the newly selected family.
+    // Relay-type selector (above the ring-count row). Switching family updates section
+    // visibility + the active builder, then re-applies that family's structural defaults
+    // and re-sizes Earth/Mars against the new relay capacity.
     const relayTypeData = this.slidersData.relay_type.selected;
     const relayRow = (() => {
       const wrap = document.createElement("div");
@@ -687,20 +670,15 @@ export class SimUi {
       });
       sel.addEventListener("change", () => {
         this.applySliderValues({ "relay_type.selected": sel.value });
-        // Ring count is an input for eccentric families (coverage) and derived for
-        // concentric ones — toggle the row, then re-size for the new family at the
-        // current required throughput.
-        const ecc = this._isEccentricSection(SimUi.RELAY_TYPE_SECTIONS[sel.value]);
-        ringRow.slider.disabled = !ecc;
-        ringRow.valInput.disabled = !ecc;
-        ringRow.wrap.style.opacity = ecc ? "1" : "0.6";
-        this.applyDesignFromThroughput(currentReqGbps());
+        this.applySimpleDefaults(currentRingCount(), { startFeedback: this._planetSizingMode() !== "off" });
       });
       header.appendChild(lbl);
       header.appendChild(sel);
       wrap.appendChild(header);
       return { wrap, sel };
     })();
+
+    // (Earth/Mars auto-size lives in the Advanced panel only — removed from Simple.)
 
     // Sync from advanced panel
     const advTime = this.sliders.simulation?.["time-acceleration-slider"];
@@ -726,17 +704,8 @@ export class SimUi {
         ringRow.valInput.value = advRing.value;
       });
     }
-    // Keep the simple throughput row synced when relay_type.requiredgbps changes
-    // elsewhere (advanced panel, or our own applyDesignFromThroughput writes).
-    const advGbps = this.sliders.relay_type?.requiredgbps;
-    if (advGbps) {
-      advGbps.addEventListener("input", () => {
-        throughputRow.slider.value = advGbps.value;
-        throughputRow.valInput.value = Math.round(Math.pow(10, parseFloat(advGbps.value)) * 100) / 100;
-      });
-    }
 
-    // Keep the simple selector in sync when the relay type changes in the advanced panel.
+    // Keep the simple selectors synced when they change in the advanced panel.
     const advRelay = this.sliders.relay_type?.selected;
     if (advRelay) {
       advRelay.addEventListener("change", () => {
@@ -744,102 +713,118 @@ export class SimUi {
         if (checked) relayRow.sel.value = checked.value;
       });
     }
-
+    // Laser tech is a deprioritized scalar — append it LAST.
     container.appendChild(timeRow.wrap);
-    container.appendChild(techRow.wrap);
     container.appendChild(relayRow.wrap);
-    container.appendChild(throughputRow.wrap);
     container.appendChild(ringRow.wrap);
+    container.appendChild(techRow.wrap);
 
-    // Initialize from the current config: show the throughput the current ring setup
-    // delivers, set the ring-count row's editability for the active family, then size
-    // both ends from that throughput. The inversion round-trips to the same ring count
-    // (concentric) / in-ring rate (eccentric), so nothing jumps on load.
+    // Initialize: ring count is the input. Apply the active family's structural defaults
+    // + the current ring count and seed Earth/Mars; the first links-ready then sizes the
+    // planet rings to half the live relay capacity (per the Earth/Mars auto-size mode).
     const R0 = parseFloat(this.sliders.relay_type?.ringcount?.value ?? ringData.value);
     try {
-      const selKey0 = SimUi.RELAY_TYPE_SECTIONS[this.getSelectedRelayType()] || "adapted_rings";
-      const ecc0 = this._isEccentricSection(selKey0);
-      ringRow.slider.disabled = !ecc0;
-      ringRow.valInput.disabled = !ecc0;
-      ringRow.wrap.style.opacity = ecc0 ? "1" : "0.6";
-      const t0Gbps = this._relayThroughputMbps(R0, selKey0) / 1000;
-      this.applySliderValues({ "relay_type.requiredgbps": this.mapUserFacingToSliderValue(gbpsData, t0Gbps) });
+      this.applySimpleDefaults(R0, { startFeedback: this._planetSizingMode() !== "off" });
     } catch (err) {
-      // Never let throughput-driven init block app load — fall back to the known-good
-      // ring-count seed so the page always finishes loading.
-      console.error("[Marslink] throughput-driven init failed, falling back:", err);
+      console.error("[Marslink] ring-count-driven init failed:", err);
       this.applySimpleDefaults(R0);
     }
-  }
-
-  /**
-   * Applies the simple-mode defaults for a given ring count.
-   */
-  /**
-   * Estimates min planet-to-ring capacity (Mbps) for a given requiredmbpsbetweensats.
-   * Returns the worst-case (apoapsis) total capacity of both planet-to-satellite links.
-   */
-  /**
-   * Direct formula: given a target planet-to-ring min capacity (Mbps),
-   * compute the `requiredmbpsbetweensats` slider value that achieves it.
-   *
-   * Works backwards through the chain:
-   *   targetMbps → worst-case distance → sat count → inter-sat distance → mbpsBetweenSats
-   */
-  _mbpsBetweenSatsForTargetCapacity(targetMbps, ringType) {
-    const lb = this.simMain.simLinkBudget;
-    const sats = this.simMain.simSatellites;
-    const AU_IN_KM = 149597870.7;
-    const { a } = sats.getParams_a_n(ringType);
-    const e = ringType === "Mars" ? 0.0934231 : 0.0166967;
-    const apo = a * (1 + e);
-
-    // Step 1: target capacity per link (2 planet links, one per side).
-    // This is just a seed — the feedback loop corrects to the exact target.
-    const targetPerLinkGbps = targetMbps / 2 / 1000;
-    if (targetPerLinkGbps <= 0) return 50;
-
-    // Step 2: worst-case distance that gives this capacity
-    // calculateGbps(d) = _gbpsFactor / d², so d = sqrt(_gbpsFactor / gbps)
-    const gbpsFactor = lb._gbpsFactor;
-    const worstDistKm = Math.sqrt(gbpsFactor / targetPerLinkGbps);
-    const worstDistAu = worstDistKm / AU_IN_KM;
-
-    // Step 3: satellite count from worst-case chord distance
-    // chord = 2 * apo * sin(halfSpacing), so halfSpacing = asin(chord / (2 * apo))
-    const sinHalf = worstDistAu / (2 * apo);
-    if (sinHalf >= 1) return 50; // can't achieve this capacity
-    const halfSpacingRad = Math.asin(sinHalf);
-    let satCount = Math.ceil(Math.PI / halfSpacingRad);
-
-    // Connectivity floor: never let adjacent spacing exceed the link range, or
-    // the ring fragments into disconnected arcs (measured: flow collapses
-    // nonlinearly once spacing > maxDistanceAU). Bump the count so the
-    // worst-case chord stays within range regardless of the throughput target.
-    const maxDistanceAU = lb.maxDistanceAU;
-    if (maxDistanceAU > 0) {
-      const sinConnect = maxDistanceAU / (2 * apo);
-      if (sinConnect > 0 && sinConnect < 1) {
-        const nConnect = Math.ceil(Math.PI / Math.asin(sinConnect));
-        if (nConnect > satCount) satCount = nConnect;
-      }
-    }
-    if (satCount < 2) return 50;
-
-    // Step 4: inter-satellite distance from satellite count
-    const circumferenceAu = 2 * Math.PI * a;
-    const distAuBetweenSats = circumferenceAu / satCount;
-    const distKmBetweenSats = distAuBetweenSats * AU_IN_KM;
-
-    // Step 5: convert distance to mbps (inverse of calculateKm)
-    // calculateGbps(d) = _gbpsFactor / d²
-    const gbps = gbpsFactor / (distKmBetweenSats * distKmBetweenSats);
-    return Math.max(1, Math.round(gbps * 1000));
   }
 
   /** True when the given relay-section key is one of the eccentric families. */
   _isEccentricSection(selKey) {
     return selKey === "eccentric_rings" || selKey === "adapted_eccentric_rings";
+  }
+
+  /**
+   * Earth/Mars auto-size mode — read live from the "Earth/Mars auto-size" selector:
+   * "off" | "auto". Defaults to "auto" if the control is missing.
+   */
+  _planetSizingMode() {
+    const container = this.sliders.relay_type?.planet_sizing;
+    const checked = container && container.querySelector ? container.querySelector("input[type=radio]:checked") : null;
+    return checked ? checked.value : this.slidersData.relay_type?.planet_sizing?.value || "auto";
+  }
+
+  /**
+   * Earth/Mars auto-size — called by simMain on every links-ready, but only acts once per
+   * design change (when ARMED) and only in 'auto'. Plugs HALF the live relay capacity
+   * (routeSummary.totalThroughput — the Capacity card's relay number, computed independently
+   * of the planet rings) into each planet ring's worst-case in-ring rate
+   * (ring_earth/ring_mars.requiredmbpsbetweensats). A planet injects at one gateway and its
+   * ring carries the traffic two ways, so half the relay capacity per side sizes the ring to
+   * deliver the full relay capacity. 'off' leaves the rings to the user.
+   * This is a single direct write, NOT a goal-seek. Two things keep it from looping: (1) the
+   * armed flag — the auto-write doesn't re-arm, so it can't chase the geometry-driven relay
+   * drift while time runs; (2) a step-resolution idempotency guard — a range <input> snaps a
+   * written value to its step, so comparing raw values would rewrite every frame.
+   */
+  runPlanetSizingStep() {
+    // 'auto' only, and only when ARMED by a design change (ring count / tech / relay type /
+    // switching to auto). The auto-write below does NOT re-arm, so it can't loop. Without
+    // this gate, sizing on every links-ready chases the geometry-driven relay drift while
+    // time runs (each write re-dirties the window, the clock advances, the relay shifts).
+    if (this._planetSizingMode() !== "auto" || !this._planetSizeArmed) return;
+
+    const rs = this.simMain?.routeSummary;
+    if (!rs || !(rs.totalThroughput > 0)) return; // capacity not ready → stay armed, retry next
+    this._planetSizeArmed = false;                // consume the arm: one re-size per design change
+    this._writePlanetSizing(rs.totalThroughput);
+  }
+
+  /**
+   * Size both planet rings' worst-case in-ring rate from a relay capacity (Mbps):
+   * each planet ring carries half (a planet injects at one gateway, two paths), so the
+   * target is relayMbps/2, rounded UP to the next slider step. Shared by the auto-sizer
+   * (runPlanetSizingStep, with the live relay capacity) and the optimized sweep (with the
+   * optimizer's converged capacity). Pure write — the caller owns the arm/selector gating.
+   * Returns true if it changed the sliders, false if they already matched (idempotent).
+   */
+  _writePlanetSizing(relayMbps) {
+    const planetMbps = Math.max(1, relayMbps / 2); // relay capacity ÷ 2 (two paths per planet)
+    const eSd = this.slidersData.ring_earth.requiredmbpsbetweensats;
+    const mSd = this.slidersData.ring_mars.requiredmbpsbetweensats;
+    // Round UP to the next slider step (these are log10 axes, so the rungs are ~12%
+    // apart). Rounding to nearest could land a rung BELOW half-capacity, making 2× the
+    // in-ring rate < relay capacity — the planet ring would bottleneck the relay. Ceiling
+    // guarantees 2 × (worst-case in-ring rate) ≥ relay capacity. The 1e-9 epsilon keeps a
+    // value already sitting on a step from being bumped up an extra rung by float noise.
+    const ceilToStep = (sd, mbps) => {
+      const step = parseFloat(sd.step) || 1;
+      const min = sd.min ?? 0;
+      const raw = this.mapUserFacingToSliderValue(sd, mbps);
+      return min + Math.ceil((raw - min) / step - 1e-9) * step;
+    };
+    const eInt = ceilToStep(eSd, planetMbps);
+    const mInt = ceilToStep(mSd, planetMbps);
+    const eCur = parseFloat(this.sliders.ring_earth?.requiredmbpsbetweensats?.value);
+    const mCur = parseFloat(this.sliders.ring_mars?.requiredmbpsbetweensats?.value);
+
+    // Skip when the computed value lands on the step the slider already holds. Comparing at
+    // step resolution (not raw value) is what stops the per-frame rebuild loop.
+    const stepIdx = (sd, v) => Math.round((v - (sd.min ?? 0)) / (parseFloat(sd.step) || 1));
+    if (stepIdx(eSd, eInt) === stepIdx(eSd, eCur) && stepIdx(mSd, mInt) === stepIdx(mSd, mCur)) return false;
+
+    this.applySliderValues({
+      "ring_earth.requiredmbpsbetweensats": eInt,
+      "ring_mars.requiredmbpsbetweensats": mInt,
+    });
+    return true;
+  }
+
+  /**
+   * The ceil-snapped USER-FACING worst-case in-ring rate (Mbps) a planet ring should use
+   * for a given relay capacity — same ½-capacity + round-up rule as _writePlanetSizing, but
+   * pure (no slider writes). Used to keep a previewed layout's Earth/Mars rings consistent
+   * with the solution being shown. Both planet rings share one slider config.
+   */
+  _planetRingMbps(relayMbps) {
+    const sd = this.slidersData.ring_earth.requiredmbpsbetweensats;
+    const planetMbps = Math.max(1, relayMbps / 2);
+    const step = parseFloat(sd.step) || 1, min = sd.min ?? 0;
+    const raw = this.mapUserFacingToSliderValue(sd, planetMbps);
+    const internal = min + Math.ceil((raw - min) / step - 1e-9) * step;
+    return this.mapSliderValueToUserFacing(sd, internal);
   }
 
   /**
@@ -849,7 +834,7 @@ export class SimUi {
    *     each ≈ one inter-ring link → routeCount · perRouteMbps  (∝ ringCount³)
    *   • eccentric (adapted-eccentric / eccentric): each ring is one azimuthal loop
    *     carrying both arcs → 2 · ringCount · (worst-case in-ring rate)
-   * This is the forward law; applyDesignFromThroughput inverts it.
+   * Used only to seed the Earth/Mars rings before the live relay capacity is known.
    */
   _relayThroughputMbps(ringCount, selKey) {
     if (ringCount <= 0) return 0;
@@ -867,29 +852,17 @@ export class SimUi {
     return routeCount * perRouteMbps;
   }
 
-  /**
-   * Smallest concentric ring count whose forward throughput meets targetMbps.
-   * Monotonic in ring count, so a scan up to the slider max is exact (and cheap).
-   */
-  _ringCountForThroughput(targetMbps, selKey) {
-    const maxR = this.slidersData.relay_type.ringcount.max || 100;
-    for (let R = 1; R <= maxR; R++) {
-      if (this._relayThroughputMbps(R, selKey) >= targetMbps) return R;
-    }
-    return maxR;
-  }
-
   applySimpleDefaults(ringCount, options = {}) {
     const selKey = SimUi.RELAY_TYPE_SECTIONS[this.getSelectedRelayType()] || "adapted_rings";
 
-    // Seed the relay aggregate throughput from the SELECTED family's own routing model so
-    // the Earth/Mars rings start near the right size; the feedback loop then refines
-    // against the live routeSummary (exact for whichever family is active).
+    // Seed the Earth/Mars in-ring worst-case rate at half the analytic relay capacity
+    // (a planet injects at one gateway → its ring carries half). This is only a starting
+    // estimate; runPlanetSizingStep refines it to half the LIVE relay capacity (the
+    // Capacity card number) on the next links-ready, per the Earth/Mars auto-size mode.
     const targetMbps = this._relayThroughputMbps(ringCount, selKey);
-
-    // Direct formula: find requiredmbpsbetweensats that yields min capacity = targetMbps
-    const earthMbps = this._mbpsBetweenSatsForTargetCapacity(targetMbps, "Earth");
-    const marsMbps = this._mbpsBetweenSatsForTargetCapacity(targetMbps, "Mars");
+    const planetMbps = Math.max(1, targetMbps / 2);
+    const earthMbps = planetMbps;
+    const marsMbps = planetMbps;
 
     // The Simple "Relay ring count" is the single shared relay_type.ringcount, used by
     // whichever family is active (selKey, from the seed block above).
@@ -897,8 +870,8 @@ export class SimUi {
       "relay_type.ringcount": ringCount,
       // Adapted-concentric tuning (only consumed when that family is the active one).
       "adapted_rings.auto_route_count": "yes",
-      "adapted_rings.laser-ports-per-satellite": 2,
-      "adapted_rings.linear_satcount_increase": 0.18,
+      "adapted_rings.laser-ports-per-satellite": 5,
+      "adapted_rings.satcount-density-routes": 100,
       // Earth ring — sized to match relay capacity
       "ring_earth.laser-ports-per-satellite": 3,
       "ring_earth.side-extension-degrees-slider": 180,
@@ -910,180 +883,8 @@ export class SimUi {
       "ring_mars.match-circular-rings": "no",
       "ring_mars.requiredmbpsbetweensats": this.mapUserFacingToSliderValue(this.slidersData.ring_mars.requiredmbpsbetweensats, marsMbps),
     });
-
-    // Arm the feedback loop. Target is read live from routeSummary each
-    // iteration, so we only store the iteration counter.  Max 100 reps;
-    // stops early when both rings land within 5% of halfTarget.
-    if (options.startFeedback && ringCount > 0) {
-      this._simpleFeedbackState = { iterationsLeft: 100 };
-    } else {
-      this._simpleFeedbackState = null;
-    }
-  }
-
-  /**
-   * Throughput-driven design — the inverse of applySimpleDefaults. The designer sets
-   * the required Earth↔Mars throughput (Gbps); this sizes the constellation to deliver
-   * it, both ends from the same number, so no goal-seek loop:
-   *   • Earth/Mars rings: worst-case in-ring rate = half the throughput (the busiest
-   *     planet-ring link carries half, the gateway splitting the ring two ways).
-   *   • Concentric (adapted / circular): ring count is DERIVED from throughput
-   *     (throughput ∝ ring count³); the per-ring sat density follows from the lattice.
-   *   • Eccentric (adapted-eccentric / eccentric): ring count is the user's coverage/
-   *     latency knob (held); the worst-case in-ring rate is derived = throughput/(2·R).
-   */
-  applyDesignFromThroughput(reqGbps) {
-    // Re-entrancy guard: applySliderValues below dispatches slider events that run
-    // their own handlers synchronously; should any path lead back here, bail rather
-    // than recurse. Legitimate callers (init, the requiredgbps slider, the simple
-    // tech/relay/ring rows) are always top-level, never nested.
-    if (this._applyingDesign) return;
-    this._applyingDesign = true;
-    try {
-      this._applyDesignFromThroughput(reqGbps);
-    } finally {
-      this._applyingDesign = false;
-    }
-  }
-
-  _applyDesignFromThroughput(reqGbps) {
-    const selKey = SimUi.RELAY_TYPE_SECTIONS[this.getSelectedRelayType()] || "adapted_rings";
-    const isEccentric = this._isEccentricSection(selKey);
-    const T_mbps = Math.max(0, reqGbps * 1000);
-    const values = {};
-
-    if (isEccentric) {
-      // Ring count is the coverage input; derive the worst-case in-ring rate from it.
-      const R = Math.max(1, Math.round(parseFloat(
-        this.sliders.relay_type?.ringcount?.value ?? this.slidersData.relay_type.ringcount.value
-      )));
-      const sd = this.slidersData[selKey].requiredmbpsbetweensats;
-      // Clamp at the per-terminal line rate (the slider max ≈ the terminal ceiling):
-      // past it, densifying one ring saturates and more throughput needs more rings.
-      const cTermMbps = (this.simMain.simLinkBudget.cTermGbps || Infinity) * 1000;
-      const m = Math.max(sd.min, Math.min(sd.max, cTermMbps, T_mbps / (2 * R)));
-      values[`${selKey}.requiredmbpsbetweensats`] = this.mapUserFacingToSliderValue(sd, m);
-    } else {
-      // Concentric: ring count is derived from throughput.
-      values["relay_type.ringcount"] = this._ringCountForThroughput(T_mbps, selKey);
-      values["adapted_rings.auto_route_count"] = "yes";
-      values["adapted_rings.laser-ports-per-satellite"] = 2;
-      values["adapted_rings.linear_satcount_increase"] = 0.18;
-    }
-
-    // Earth/Mars planet rings: worst-case in-ring rate = half the total throughput.
-    // The planet injects at one point and the ring splits two ways, so the busiest
-    // in-ring link carries T/2 — set that directly as each planet ring's worst-case
-    // rate (requiredmbpsbetweensats is exactly that target). Both planet rings are
-    // sized to deliver the full throughput, so neither becomes the bottleneck.
-    const planetMbps = T_mbps / 2;
-    const eSd = this.slidersData.ring_earth.requiredmbpsbetweensats;
-    const mSd = this.slidersData.ring_mars.requiredmbpsbetweensats;
-    Object.assign(values, {
-      "ring_earth.laser-ports-per-satellite": 3,
-      "ring_earth.side-extension-degrees-slider": 180,
-      "ring_earth.match-circular-rings": "no",
-      "ring_earth.requiredmbpsbetweensats": this.mapUserFacingToSliderValue(eSd, planetMbps),
-      "ring_mars.laser-ports-per-satellite": 3,
-      "ring_mars.side-extension-degrees-slider": 180,
-      "ring_mars.match-circular-rings": "no",
-      "ring_mars.requiredmbpsbetweensats": this.mapUserFacingToSliderValue(mSd, planetMbps),
-    });
-
-    this.applySliderValues(values);
-    // Both ends sized analytically from the same throughput — no feedback loop.
-    this._simpleFeedbackState = null;
-  }
-
-  /**
-   * Single step of the in-ring mbps feedback loop. Reads capacity data,
-   * checks convergence, and applies a proportional correction if needed.
-   *
-   * @param {object} capInfo - { ringCapacities } from calculateCapacityInfo
-   * @param {number} target  - relay aggregate throughput (Mbps)
-   * @returns {"converged"|"adjusted"|"skip"} outcome of this step
-   */
-  _feedbackStep(capInfo, target) {
-    const earthInring = capInfo.ringCapacities?.["ring_earth"]?.inring || [];
-    const marsInring = capInfo.ringCapacities?.["ring_mars"]?.inring || [];
-    if (earthInring.length === 0 || marsInring.length === 0) {
-      console.log(`[Feedback] skip: earthInring=${earthInring.length}, marsInring=${marsInring.length}`);
-      return "skip";
-    }
-
-    const earthMin = 2 * minOf(earthInring);
-    const marsMin = 2 * minOf(marsInring);
-    const lo = target * 1.02, hi = target * 1.04;
-    console.log(`[Feedback] target=${target.toFixed(0)} earthMin=${earthMin.toFixed(0)} marsMin=${marsMin.toFixed(0)} band=[${lo.toFixed(0)},${hi.toFixed(0)}]`);
-    if (earthMin >= lo && earthMin <= hi && marsMin >= lo && marsMin <= hi) return "converged";
-
-    const earthInput = this.sliders.ring_earth?.requiredmbpsbetweensats;
-    const marsInput = this.sliders.ring_mars?.requiredmbpsbetweensats;
-    if (!earthInput || !marsInput) return "skip";
-    const earthSD = this.slidersData.ring_earth?.requiredmbpsbetweensats;
-    const marsSD = this.slidersData.ring_mars?.requiredmbpsbetweensats;
-    const oldEarthMbps = this.mapSliderValueToUserFacing(earthSD, parseFloat(earthInput.value));
-    const oldMarsMbps = this.mapSliderValueToUserFacing(marsSD, parseFloat(marsInput.value));
-    if (!oldEarthMbps || !oldMarsMbps) return "skip";
-
-    const aim = target * 1.03;
-    const newEarthMbps = earthMin > 0 ? Math.max(1, Math.round(oldEarthMbps * aim / earthMin)) : oldEarthMbps;
-    const newMarsMbps = marsMin > 0 ? Math.max(1, Math.round(oldMarsMbps * aim / marsMin)) : oldMarsMbps;
-    const newEarthInt = this.mapUserFacingToSliderValue(earthSD, newEarthMbps);
-    const newMarsInt = this.mapUserFacingToSliderValue(marsSD, newMarsMbps);
-    if (newEarthInt === parseFloat(earthInput.value) && newMarsInt === parseFloat(marsInput.value)) return "converged";
-
-    this.applySliderValues({
-      "ring_earth.requiredmbpsbetweensats": newEarthInt,
-      "ring_mars.requiredmbpsbetweensats": newMarsInt,
-    });
-    return "adjusted";
-  }
-
-  /**
-   * Interactive feedback step — called by simMain on links-ready.
-   * Delegates to _feedbackStep using the live capacityInfo + routeSummary.
-   */
-  runSimpleFeedbackStep() {
-    const state = this._simpleFeedbackState;
-    if (!state || state.iterationsLeft <= 0) return;
-
-    const rs = this.simMain?.routeSummary;
-    if (!rs || !rs.totalThroughput || rs.totalThroughput <= 0) return;
-    const capacityInfo = this.simMain?.capacityInfo;
-    if (!capacityInfo || !capacityInfo.ringCapacities) return;
-
-    // No-progress / unreachable-target guard (mirrors the sensitivity loop):
-    // if the realized in-ring capacities are unchanged from the previous step,
-    // the slider granularity or ring geometry can't move them any closer to the
-    // target (e.g. the Mars ring is saturated below target). Stop instead of
-    // re-applying the same config every frame and recomputing forever.
-    const eInring = capacityInfo.ringCapacities?.["ring_earth"]?.inring || [];
-    const mInring = capacityInfo.ringCapacities?.["ring_mars"]?.inring || [];
-    const curEarth = eInring.length ? Math.round(2 * minOf(eInring)) : 0;
-    const curMars = mInring.length ? Math.round(2 * minOf(mInring)) : 0;
-
-    // Surface the live tuning state for the status bar. Each step adjusts the
-    // Earth/Mars requiredmbpsbetweensats (→ their satellite counts) to bring their
-    // in-ring capacity toward the relay target; expose target + both ring values
-    // so users see the convergence rather than a seemingly stuck recompute.
-    state.step = (state.step || 0) + 1;
-    this._tuningStatus = { step: state.step, target: rs.totalThroughput, earthMin: curEarth, marsMin: curMars };
-
-    if (state.prevEarth === curEarth && state.prevMars === curMars) {
-      this._simpleFeedbackState = null;
-      this._tuningStatus = null;
-      return;
-    }
-    state.prevEarth = curEarth;
-    state.prevMars = curMars;
-
-    const outcome = this._feedbackStep(capacityInfo, rs.totalThroughput);
-    state.iterationsLeft--;
-    if (outcome !== "adjusted" || state.iterationsLeft <= 0) {
-      this._simpleFeedbackState = null;
-      this._tuningStatus = null;
-    }
+    // The Earth/Mars rings are seeded analytically above; on the next links-ready the
+    // 'auto' sizer refines them to half the live relay capacity (idempotent, no-op for 'off').
   }
 
   saveToJson(object, fileName) {
@@ -1174,34 +975,47 @@ export class SimUi {
       else { for (let t = s; t <= e; t += linStep) vals.push(t); }
       return vals.length ? vals : [null];
     };
-    const buildDateValues = () => {
-      // When the date dimension is off (or its inputs are invalid), sweep at the
-      // current sim date — the same date shown in the "Fixed:" label and used
-      // everywhere else in the app — rather than a hardcoded value.
-      const currentDate = () => {
-        const d = this.simMain?.simTime?.getDate?.();
-        return d ? d.toISOString().slice(0, 10) : "2030-01-01";
-      };
-      if (!document.getElementById("sens-date-enable").checked) return [currentDate()];
-      const startMs = new Date(document.getElementById("sens-date-start").value).getTime();
-      const endMs = new Date(document.getElementById("sens-date-end").value).getTime();
-      const stepDays = parseInt(document.getElementById("sens-date-step").value) || 1;
-      if (isNaN(startMs) || isNaN(endMs) || endMs < startMs) return [currentDate()];
-      const vals = [];
-      const dayMs = 86400 * 1000;
-      for (let t = startMs; t <= endMs; t += stepDays * dayMs) {
-        vals.push(new Date(t).toISOString().slice(0, 10));
-      }
-      return vals.length ? vals : [currentDate()];
+    const currentDateIso = () => {
+      const d = this.simMain?.simTime?.getDate?.();
+      return d ? d.toISOString() : new Date(Date.UTC(2030, 0, 1)).toISOString();
     };
+
+    // Planet-placement axis. "current" = a single scenario at the current sim date (real
+    // ephemeris). "geometry-4/16" = geometry samples (shared with the optimizer via
+    // _buildGeometries): the relay sats stay at FIXED_GEOM_DATE and each sample passes
+    // angle offsets measured from the Earth–Mars closest-approach reference (worker-side).
+    const FIXED_GEOM_DATE = new Date(Date.UTC(2000, 0, 1)).toISOString();
+    const geomModeVal = () => document.getElementById("sens-geom-mode")?.value || "current";
+    const buildPlacements = () => {
+      if (geomModeVal() === "current") {
+        const iso = currentDateIso();
+        return [{ label: iso.slice(0, 10), simDate: iso, earthAngleOffset: null, marsAngleOffset: null }];
+      }
+      const count = geomModeVal() === "geometry-16" ? 16 : 4;
+      return this._buildGeometries(count).map((g) => ({
+        label: `E${g.earthOffset}/M${g.marsOffset}`,
+        simDate: FIXED_GEOM_DATE,
+        earthAngleOffset: g.earthOffset,
+        marsAngleOffset: g.marsOffset,
+      }));
+    };
+    // The placement dimension is a real swept axis only in the geometry modes (>1 sample);
+    // "current" is a single fixed point. Drives chart dims + the "Fixed:" label.
+    const placementIsDim = () => geomModeVal() !== "current";
+    let placementAxisLabel = "Date"; // set per run; "Geometry" in geometry modes
 
     // --- Estimate display (iteration count + time) ---
     const updateEstimate = () => {
-      const total = buildRingValues().length * buildTechValues().length * buildDateValues().length;
+      const total = buildRingValues().length * buildTechValues().length * buildPlacements().length;
+      const optimized = (this._sensMode || "simple") === "optimized";
       const wt = this.simMain?.lastWorkerTimings;
       const perIterMs = wt?.totalMs || wt?.links || 0;
       let timeStr = "";
-      if (perIterMs > 0) {
+      if (optimized) {
+        // Each scenario runs a full optimization (its own worker pool); per-scenario time
+        // is dominated by the optimizer's eval count, not a single sim — don't pretend.
+        timeStr = " · optimizes each, runs serially (slow)";
+      } else if (perIterMs > 0) {
         // Rough upper bound; the worker pool runs several scenarios concurrently.
         const totalSec = Math.round(total * (perIterMs / 1000));
         if (totalSec < 60) timeStr = ` ~${totalSec} seconds`;
@@ -1243,11 +1057,39 @@ export class SimUi {
       document.getElementById("sens-tech-progression"),
       document.getElementById("sens-tech-step"),
     ]);
-    wireEnable("sens-date-enable", () => [
-      document.getElementById("sens-date-start"),
-      document.getElementById("sens-date-end"),
-      document.getElementById("sens-date-step"),
-    ]);
+
+    // --- Simple / Optimized sub-mode toggle ---
+    this._sensMode = this._sensMode || "simple";
+    const optControls = document.getElementById("sens-opt-controls");
+    const workerGroup = document.getElementById("sens-worker-group");
+    const modeBtns = [...document.querySelectorAll(".sens-mode-btn")];
+    const syncMode = () => {
+      const optimized = this._sensMode === "optimized";
+      for (const b of modeBtns) b.classList.toggle("active", b.dataset.mode === this._sensMode);
+      if (optControls) optControls.style.display = optimized ? "" : "none";
+      if (workerGroup) workerGroup.style.display = optimized ? "none" : "";
+      if (startBtn) startBtn.textContent = optimized ? "Run Optimized Sweep" : "Run Sensitivity";
+      updateEstimate();
+    };
+    for (const b of modeBtns) b.addEventListener("click", () => { this._sensMode = b.dataset.mode; syncMode(); });
+
+    // --- Geometry explainer popover (ⓘ): renders what the selected mode samples,
+    //     and re-renders live when the mode changes while open. ---
+    const geomInfoBtn = document.getElementById("sens-geom-info");
+    const geomHelp = document.getElementById("sens-geom-help");
+    const geomSel = document.getElementById("sens-geom-mode");
+    const renderGeomHelp = () => { if (geomHelp) geomHelp.innerHTML = this._geometryHelp(geomModeVal()); };
+    if (geomInfoBtn && geomHelp) {
+      geomInfoBtn.addEventListener("click", () => {
+        const show = geomHelp.hidden;
+        if (show) renderGeomHelp();
+        geomHelp.hidden = !show;
+        geomInfoBtn.setAttribute("aria-expanded", String(show));
+      });
+    }
+    if (geomSel) geomSel.addEventListener("change", () => { if (geomHelp && !geomHelp.hidden) renderGeomHelp(); });
+
+    syncMode();
 
     // Update estimate on any input change
     const sensInputs = document.querySelectorAll("#sensitivity-pane input, #sensitivity-pane select");
@@ -1443,7 +1285,7 @@ export class SimUi {
             layout: { padding: { top: 4, right: 4, bottom: 0, left: 0 } },
             scales: {
               x: {
-                title: { display: true, text: xDim === "rings" ? "Relay rings" : xDim === "tech" ? "Laser tech" : "Date", color: textMuted, font: { size: 10 } },
+                title: { display: true, text: xDim === "rings" ? "Relay rings" : xDim === "tech" ? "Laser tech" : placementAxisLabel, color: textMuted, font: { size: 10 } },
                 ticks: { color: textDim, font: { size: 9 }, maxRotation: 45, autoSkip: true, maxTicksLimit: 12 },
                 grid: { display: false },
                 border: { color: gridColor },
@@ -1465,7 +1307,7 @@ export class SimUi {
                 titleFont: { size: 11 }, bodyFont: { size: 11 }, padding: 8,
                 callbacks: {
                   title: (items) => {
-                    const xName = xDim === "rings" ? "Relay rings" : xDim === "tech" ? "Laser tech" : "Date";
+                    const xName = xDim === "rings" ? "Relay rings" : xDim === "tech" ? "Laser tech" : placementAxisLabel;
                     return items.length ? `${xName}: ${items[0].label}` : "";
                   },
                   label: (ctx) => {
@@ -1552,25 +1394,30 @@ export class SimUi {
       progressText.textContent = "0%";
 
       try {
+        const optimizedMode = (this._sensMode || "simple") === "optimized";
         const ringEnabled = document.getElementById("sens-ring-enable").checked;
         const techEnabled = document.getElementById("sens-tech-enable").checked;
-        const dateEnabled = document.getElementById("sens-date-enable").checked;
-        // Suppress the reactive updateLoop during the sweep so it doesn't waste the
-        // main thread rebuilding/rendering constellations the worker path computes.
-        this.simMain._sensitivityRunning = true;
+        const placementEnabled = placementIsDim();
+        placementAxisLabel = "Geometry"; // only used when the placement axis is a swept dim (geometry modes)
+        // Simple (parallel) mode: suppress the reactive updateLoop so it doesn't waste the
+        // main thread rebuilding/rendering constellations the worker path computes. Optimized
+        // mode is serial and SHOULD render — the user watches the layout evolve per scenario
+        // (initial conditions + each accepted SA solution), so leave the loop live.
+        this.simMain._sensitivityRunning = !optimizedMode;
         const ringValues = buildRingValues();
         const techValues = buildTechValues();
-        const dateValues = buildDateValues();
-        const totalScenarios = ringValues.length * techValues.length * dateValues.length;
+        const placements = buildPlacements();
+        const totalScenarios = ringValues.length * techValues.length * placements.length;
         let completed = 0;
-        console.log(`[Sensitivity] START: ${totalScenarios} scenarios, rings=[${ringValues}], tech=[${techValues}], dates=[${dateValues}]`);
+        console.log(`[Sensitivity] START (${this._sensMode}): ${totalScenarios} scenarios, rings=[${ringValues}], tech=[${techValues}], placements=[${placements.map((p) => p.label)}]`);
 
-        // Build chart dimension info
+        // Build chart dimension info. The placement axis ("date") carries either date
+        // strings or geometry-sample labels (E…/M…), so the chart infra is unchanged.
         const enabledDims = [];
         const dimValues = {};
         if (ringEnabled) { enabledDims.push("rings"); dimValues.rings = ringValues.filter(v => v != null); }
         if (techEnabled) { enabledDims.push("tech"); dimValues.tech = techValues.filter(v => v != null); }
-        if (dateEnabled) { enabledDims.push("date"); dimValues.date = dateValues; }
+        if (placementEnabled) { enabledDims.push("date"); dimValues.date = placements.map((p) => p.label); }
         // If no dims enabled, use rings as a single-point x-axis
         if (enabledDims.length === 0) { enabledDims.push("rings"); dimValues.rings = ["(current)"]; }
 
@@ -1585,7 +1432,7 @@ export class SimUi {
           const cur = this.simMain?.simLinkBudget?.techImprovementFactor ?? "?";
           fixedParts.push(`Laser tech: ${cur}x`);
         }
-        if (!dateEnabled) {
+        if (!placementEnabled) {
           const cur = this.simMain?.simTime?.getDate();
           fixedParts.push(`Date: ${cur ? cur.toISOString().slice(0, 10) : "?"}`);
         }
@@ -1617,6 +1464,9 @@ export class SimUi {
           }
         }
         const originalSimTime = this.simMain.simTime.getDate();
+        // Optimized mode mutates the adapted-ring curves; snapshot them to restore after.
+        const baseCurves = {};
+        for (const [k, d] of SimUi.ADAPTED_CURVES) baseCurves[k] = this._getCurve(k, d);
 
         const resultArray = [];
 
@@ -1660,21 +1510,28 @@ export class SimUi {
           return { scenario, metrics, costs, capacityInfo, rs };
         };
 
-        // ── Fan scenarios out across a worker pool. This is the only mode —
-        //    per-step animation isn't possible while scenarios run in workers. ──
-        {
+        const allCats = [
+          "economics", "simulation", "laser_technology",
+          "ring_mars", "circular_rings", "eccentric_rings", "ring_earth", "adapted_rings", "adapted_eccentric_rings", "launch_vehicle", "satellite",
+        ];
+        // Make sure simMain's cost state matches the (unswept) baseline economics
+        // so calculateCosts on returned results is consistent for every scenario.
+        this.simMain.setCosts(this.getGroupsConfig(["economics"]));
+        this.simMain.satellitePowerKw = baseConfig["satellite.satellite-power-kw"];
+
+        // Heap estimate (cheap, no topology) for the pool's memory-admission budget.
+        const estMBfor = (cfg) => {
+          const seedCfg = this.simMain.simSatellites.buildConfigFromUi(cfg);
+          const estSats = seedCfg.reduce((sum, c) => sum + (c.satCount || 0), 0);
+          const maxSat = cfg["simulation.maxSatCount"] || Infinity;
+          return estSats > maxSat ? 20 : Math.max(20, estSats * 0.016);
+        };
+
+        if (!optimizedMode) {
+          // ── Simple: fan scenarios out across a worker pool (parallel). ──
           // Generate every scenario's uiConfig synchronously, in a stable nested
           // order so simLinkBudget (tech) evolves deterministically and the seed
           // requiredmbps values are reproducible. No topology here.
-          const allCats = [
-            "economics", "simulation", "laser_technology",
-            "ring_mars", "circular_rings", "eccentric_rings", "ring_earth", "adapted_rings", "adapted_eccentric_rings", "launch_vehicle", "satellite",
-          ];
-          // Make sure simMain's cost state matches the (unswept) baseline economics
-          // so calculateCosts on returned results is consistent for every scenario.
-          this.simMain.setCosts(this.getGroupsConfig(["economics"]));
-          this.simMain.satellitePowerKw = baseConfig["satellite.satellite-power-kw"];
-
           const scenarios = [];
           let scenarioId = 0;
           for (const techUserVal of techValues) {
@@ -1686,16 +1543,9 @@ export class SimUi {
               }
               const scenarioConfig = this.getGroupsConfig(allCats);
               scenarioConfig["simulation.calctimeSec"] = 100;
-              // Estimate this scenario's peak worker heap from its (seed) satellite
-              // count — cheap, no topology. Drives the pool's cumulative memory
-              // budget so big constellations don't run so many-wide they overflow
-              // the shared V8 heap cage. Over-cap scenarios build nothing (~0).
-              const seedCfg = this.simMain.simSatellites.buildConfigFromUi(scenarioConfig);
-              const estSats = seedCfg.reduce((sum, c) => sum + (c.satCount || 0), 0);
-              const maxSat = scenarioConfig["simulation.maxSatCount"] || Infinity;
-              const estMB = estSats > maxSat ? 20 : Math.max(20, estSats * 0.016);
-              for (const dateStr of dateValues) {
-                scenarios.push({ scenarioId: scenarioId++, ringCount, techUserVal, dateStr, uiConfig: scenarioConfig, estMB });
+              const estMB = estMBfor(scenarioConfig);
+              for (const placement of placements) {
+                scenarios.push({ scenarioId: scenarioId++, ringCount, techUserVal, placement, uiConfig: scenarioConfig, estMB });
               }
             }
           }
@@ -1726,12 +1576,14 @@ export class SimUi {
               pool.submit({
                 scenarioId: s.scenarioId,
                 uiConfig: s.uiConfig,
-                simDate: s.dateStr,
-                sizingDate: dateValues[0] || s.dateStr,
+                simDate: s.placement.simDate,
+                sizingDate: placements[0].simDate,
+                earthAngleOffset: s.placement.earthAngleOffset,
+                marsAngleOffset: s.placement.marsAngleOffset,
                 flowCalctimeMs: 20000,
               }, s.estMB).then((res) => {
                 if (stopRequested || !res) return;
-                const { scenario, metrics, costs, capacityInfo, rs } = buildScenarioMetrics(res, s.ringCount, s.techUserVal, s.dateStr);
+                const { scenario, metrics, costs, capacityInfo, rs } = buildScenarioMetrics(res, s.ringCount, s.techUserVal, s.placement.label);
                 resultArray.push({
                   scenario,
                   liveMetrics: {
@@ -1754,21 +1606,119 @@ export class SimUi {
             pool.terminate();
             this._sensPool = null;
           }
+        } else {
+          // ── Optimized: SERIAL. Per scenario, set the config live, run the curve
+          //    optimizer (its own worker pool), resize Earth/Mars from the optimized
+          //    relay capacity, capture metrics via one worker submit, and archive. ──
+          const resetCurves = document.getElementById("opt-reset")?.checked !== false;
+          const doArchive = document.getElementById("opt-archive")?.checked !== false;
+          const pool = new SensitivityPool(1); // one final metric submit per scenario
+          this._sensPool = pool;
+          const renderProgress = () => {
+            const pct = Math.round((completed / totalScenarios) * 100);
+            progressBar.style.width = `${pct}%`;
+            progressText.textContent = `${pct}% (${completed}/${totalScenarios}) · optimizing…`;
+          };
+          renderProgress();
+
+          try {
+            let scenarioId = 0;
+            for (const techUserVal of techValues) {
+              for (const ringCount of ringValues) {
+                for (const placement of placements) {
+                  if (stopRequested) break;
+                  // 1. Apply this scenario's design live (the optimizer reads the live UI).
+                  if (ringCount != null) this.applySimpleDefaults(ringCount);
+                  if (techUserVal != null) this.applySliderValues({ "laser_technology.improvement-factor": Math.round(Math.log2(techUserVal)) });
+                  // 2. Reset only the SELECTED curves (any part checked) to their default shape.
+                  if (resetCurves) {
+                    for (const c of this._getOptimizeCurves()) {
+                      const def = Array.isArray(c.defaultY) ? c.defaultY : [{ x: 0, y: c.defaultY }, { x: 1, y: c.defaultY }];
+                      this._setCurve(c.key, def); this._curveRefresh?.[c.key]?.();
+                    }
+                  }
+                  // 3. Optimize headless — applies the winning curves to the live UI.
+                  const opt = await this._runBandSolver({ silent: true });
+                  if (stopRequested) break;
+                  // 4. Resize Earth/Mars from the optimized relay capacity (respect the selector).
+                  if (this._planetSizingMode() === "auto" && opt?.capacity > 0) this._writePlanetSizing(opt.capacity);
+                  // 5. Final metrics: one worker submit of the fully-optimized live config.
+                  const cfg = this.getGroupsConfig(allCats);
+                  cfg["simulation.calctimeSec"] = 100;
+                  const res = await pool.submit({
+                    scenarioId: scenarioId++, uiConfig: cfg,
+                    simDate: placement.simDate, sizingDate: placements[0].simDate,
+                    earthAngleOffset: placement.earthAngleOffset, marsAngleOffset: placement.marsAngleOffset,
+                    flowCalctimeMs: 20000,
+                  }, estMBfor(cfg));
+                  if (stopRequested || !res) { completed++; renderProgress(); continue; }
+                  const { scenario, metrics, costs, capacityInfo, rs } = buildScenarioMetrics(res, ringCount, techUserVal, placement.label);
+                  resultArray.push({
+                    scenario,
+                    liveMetrics: {
+                      satellites: res.satellitesCount,
+                      costs, metrics,
+                      capacityInfo: capacityInfo ? JSON.parse(JSON.stringify(capacityInfo)) : null,
+                      routeSummary: rs ? { ...rs } : null,
+                    },
+                    data: [{ maxFlowGbps: res.maxFlowGbps }],
+                  });
+                  pushChartPoint(scenario, metrics);
+                  // 6. Archive the optimized config + its metrics.
+                  if (doArchive && this._archiveAppend) {
+                    const gbpsVal = rs && rs.totalThroughput > 0 ? rs.totalThroughput / 1000 : (res.maxFlowGbps || 0);
+                    const m = {
+                      relayType: this.getSelectedRelayType(),
+                      ringCount: typeof ringCount === "number" ? ringCount : (parseFloat(this.sliders.relay_type?.ringcount?.value) || 0),
+                      satCount: res.satellitesCount || 0,
+                      gbps: Math.round(gbpsVal * 1000) / 1000,
+                      latMinMin: metrics.latMin != null ? Math.round(metrics.latMin * 10) / 10 : null,
+                      latP50Min: metrics.latP50 != null ? Math.round(metrics.latP50 * 10) / 10 : null,
+                      totalCostM: Number.isFinite(costs?.totalCosts) ? Math.round(costs.totalCosts / 1e6) : null,
+                      costPerMbps: Number.isFinite(costs?.costPerMbps) ? costs.costPerMbps : null,
+                      launches: costs?.launchCount ?? null,
+                      lasers: costs?.laserCount ?? null,
+                    };
+                    const tag = `opt: ${ringCount ?? "cur"} rings${techUserVal != null ? " · " + techUserVal + "x" : ""} · ${placement.label}`;
+                    this._archiveAppend({ id: Date.now() + scenarioId, name: tag, ts: new Date().toISOString(), config: this._archiveSnapshotConfig?.() || {}, metrics: m });
+                  }
+                  completed++;
+                  renderProgress();
+                }
+                if (stopRequested) break;
+              }
+              if (stopRequested) break;
+            }
+          } finally {
+            pool.terminate();
+            this._sensPool = null;
+          }
         }
 
         // Restore original config from the raw slider snapshot (exact internal
         // positions — never the user-facing baseConfig values, which corrupt
-        // nonlinear sliders).
+        // nonlinear sliders). Skip sliders whose value is unchanged: the sweep only
+        // touches config sliders, so re-dispatching unchanged ones is wasted work — and
+        // for display.display-type it would needlessly tear down & rebuild the whole 3D
+        // display mid-restore (which dropped the roadster's size, among other state).
         for (const s of baseSliderState) {
           if (s.radio !== undefined) {
+            const cur = s.input.querySelector("input[type=radio]:checked");
+            if ((cur ? cur.value : null) === s.radio) continue; // unchanged
             if (s.radio != null) {
               const radio = s.input.querySelector(`input[type=radio][value="${CSS.escape(String(s.radio))}"]`);
               if (radio) { radio.checked = true; radio.dispatchEvent(new Event("change", { bubbles: true })); }
             }
           } else {
+            if (s.input.value === s.value) continue; // unchanged
             s.input.value = s.value;
             s.input.dispatchEvent(new Event("input", { bubbles: true }));
           }
+        }
+        // Restore the adapted-ring curves (optimized mode mutates them).
+        for (const [k, anchors] of Object.entries(baseCurves)) {
+          this._setCurve(k, anchors);
+          this._curveRefresh?.[k]?.();
         }
         // Restore sim time
         this.simMain.simTime.simMsSinceStart = originalSimTime.getTime() - this.simMain.simTime.initDate.getTime();
@@ -1793,6 +1743,7 @@ export class SimUi {
 
     stopBtn.addEventListener("click", () => {
       stopRequested = true;
+      this._bandSolverStop = true; // also abort an in-flight optimization (optimized mode)
       // Drop not-yet-started scenarios from the pool queue (in-flight ones finish).
       if (this._sensPool) this._sensPool.stop();
       stopBtn.disabled = true;
@@ -2343,7 +2294,383 @@ export class SimUi {
       }
     });
 
+    this._updatePlanetSizingLock();
     this._injectBandSolverUI();
+    this._injectFlightUI();
+    this._injectProbeUI();
+    this._injectConfigArchive();
+  }
+
+  /**
+   * Local config archive: save the current config (all sliders + the adapted-ring
+   * curves) together with a snapshot of the latest computed results (relay type, ring
+   * count, sat count, Gbps capacity, cost), list them with those headline details, and
+   * load any entry back (re-applies sliders + curves and rebuilds). Stored in
+   * localStorage under "marslinkArchive"; injected at the top of the advanced panel.
+   */
+  _injectConfigArchive() {
+    const host = document.getElementById("archive-pane-body");
+    if (!host || host.dataset.wired) return;
+    host.dataset.wired = "1";
+
+    const KEY = "marslinkArchive";
+    const load = () => { try { const a = JSON.parse(localStorage.getItem(KEY)); return Array.isArray(a) ? a : []; } catch { return []; } };
+    const save = (arr) => { try { localStorage.setItem(KEY, JSON.stringify(arr)); } catch (e) { console.error("[Archive] save failed", e); } };
+    const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    const fmtInt = (n) => (Number.isFinite(n) ? Math.round(n) : 0).toLocaleString();
+
+    // --- capture: sliders + curves + live result metrics ---------------------
+    // Sections that actually affect the constellation, costs & performance (the same set
+    // sent to the worker on rebuild). Deliberately EXCLUDES "display" (pure visualization)
+    // plus a couple of playback/overlay-only controls — those are not saved.
+    const BUILD_CATS = ["economics", "simulation", "laser_technology", "ring_mars", "relay_type", "circular_rings", "eccentric_rings", "ring_earth", "adapted_rings", "adapted_eccentric_rings", "launch_schedule", "launch_vehicle", "satellite"];
+    const VIZ_SLIDERS = new Set(["simulation.time-acceleration-slider"]);
+    const snapshotSliders = () => {
+      const snap = {};
+      for (const section of BUILD_CATS) {
+        const group = this.slidersData[section];
+        if (!group) continue;
+        for (const sliderId in group) {
+          const fullId = `${section}.${sliderId}`;
+          if (VIZ_SLIDERS.has(fullId)) continue;
+          const input = this.sliders[section]?.[sliderId];
+          if (!input) continue;
+          if (input.classList && input.classList.contains("radio-container")) {
+            const checked = input.querySelector("input[type=radio]:checked");
+            snap[fullId] = checked ? checked.value : group[sliderId].value;
+          } else snap[fullId] = input.value;
+        }
+      }
+      return snap;
+    };
+    const snapshotCurves = () => {
+      const out = {};
+      for (const [k, dflt] of SimUi.ADAPTED_CURVES) out[k] = this._getCurve(k, dflt);
+      return out;
+    };
+    const captureMetrics = () => {
+      const sm = this.simMain;
+      let costs = null;
+      try { costs = sm.calculateCosts(sm.maxFlowGbps, sm.resultTrees); } catch {}
+      const rs = sm.routeSummary;
+      const gbps = rs && rs.totalThroughput > 0 ? rs.totalThroughput / 1000 : (sm.maxFlowGbps || 0);
+      const lat = sm.lastLatencyData;
+      return {
+        relayType: this.getSelectedRelayType(),
+        ringCount: parseFloat(this.sliders.relay_type?.ringcount?.value ?? this.slidersData.relay_type.ringcount.value) || 0,
+        satCount: sm.satellitesCount || costs?.satellitesCount || 0,
+        gbps: Math.round(gbps * 1000) / 1000,
+        latMinMin: lat && Number.isFinite(lat.bestLatency) ? Math.round((lat.bestLatency / 60) * 10) / 10 : null,
+        latP50Min: lat && Number.isFinite(lat.medianLatency) ? Math.round((lat.medianLatency / 60) * 10) / 10 : null,
+        totalCostM: costs && Number.isFinite(costs.totalCosts) ? Math.round(costs.totalCosts / 1e6) : null,
+        costPerMbps: costs && Number.isFinite(costs.costPerMbps) ? costs.costPerMbps : null,
+        launches: costs?.launchCount ?? null,
+        lasers: costs?.laserCount ?? null,
+      };
+    };
+
+    // --- load: re-apply sliders + curves, then rebuild -----------------------
+    const applySliders = (snap) => {
+      for (const [fullId, value] of Object.entries(snap)) {
+        const [section, sliderId] = fullId.split(".");
+        const input = this.sliders[section]?.[sliderId];
+        if (!input) continue;
+        if (input.classList && input.classList.contains("radio-container")) {
+          const radio = input.querySelector(`input[type=radio][value="${CSS.escape(String(value))}"]`);
+          if (radio) { radio.checked = true; radio.dispatchEvent(new Event("change", { bubbles: true })); }
+        } else {
+          input.value = value;
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+          input.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      }
+    };
+    const loadEntry = (entry) => {
+      const cfg = entry.config || {};
+      if (cfg.sliders) applySliders(cfg.sliders);
+      if (cfg.curves) for (const [k, anchors] of Object.entries(cfg.curves)) {
+        if (Array.isArray(anchors)) { this._setCurve(k, anchors); this._curveRefresh?.[k]?.(); }
+      }
+      // Final rebuild so the curves (read inline by getGroupsConfig) take effect.
+      try { this.simMain.setSatellitesConfig(this.getGroupsConfig(BUILD_CATS)); } catch (e) { console.error("[Archive] load failed", e); }
+    };
+
+    // One-time migration of legacy "presets" (sliders-only) into the archive, then
+    // retire the old store so there is a single source of truth.
+    (() => {
+      let presets = null;
+      try { presets = JSON.parse(localStorage.getItem("marslinkPresets") || "null"); } catch {}
+      if (!presets || typeof presets !== "object") return;
+      const arr = load();
+      const have = new Set(arr.map((e) => e.name));
+      let i = 0, added = false;
+      for (const name of Object.keys(presets)) {
+        if (have.has(name)) continue;
+        const sliders = {};
+        for (const [k, v] of Object.entries(presets[name] || {})) {
+          const sec = k.split(".")[0];
+          if (BUILD_CATS.includes(sec) && !VIZ_SLIDERS.has(k)) sliders[k] = v;
+        }
+        arr.push({ id: Date.now() + (i++), name, ts: new Date().toISOString(), config: { sliders, curves: {} }, metrics: {}, legacy: true });
+        added = true;
+      }
+      if (added) save(arr);
+      try { localStorage.removeItem("marslinkPresets"); } catch {}
+    })();
+
+    // --- UI: full archive in its own tab — Save + per-metric charts + saved list ------
+    const wrap = document.createElement("div");
+    wrap.id = "config-archive";
+    wrap.style.cssText = "display:flex; flex-direction:column; gap:14px; max-width:1100px;";
+
+    const saveBtn = document.createElement("button");
+    saveBtn.type = "button"; saveBtn.className = "btn btn-primary";
+    saveBtn.style.cssText = "width:100%;";
+    saveBtn.textContent = "💾 Save current config + results";
+
+    // One scatter per metric, colored by relay family. The x-axis is switchable
+    // between ring count and satellite count via the toggle below (xMode).
+    const ECC = (t) => /eccentric/i.test(t || "");
+    const C_CONC = "#4a90e2", C_ECC = "#ffb454";
+    // Eccentric points are shaded by ring count along a warm gradient (gold → deep
+    // orange), so within the eccentric family the ring count is readable while the
+    // whole family stays distinct from the single-color concentric blue. C_ECC is the
+    // fallback when there is no ring-count spread to map.
+    const ECC_LO = [45, 92, 66], ECC_HI = [12, 90, 48]; // [h,s,l] gradient endpoints
+    const eccColorFor = (t) => {
+      const u = Math.max(0, Math.min(1, t));
+      const c = (a, b) => a + (b - a) * u;
+      return `hsl(${c(ECC_LO[0], ECC_HI[0]).toFixed(1)}, ${c(ECC_LO[1], ECC_HI[1]).toFixed(1)}%, ${c(ECC_LO[2], ECC_HI[2]).toFixed(1)}%)`;
+    };
+    const ECC_GRAD_CSS = `linear-gradient(90deg, ${eccColorFor(0)}, ${eccColorFor(1)})`;
+    const X_MODES = {
+      ring: { label: "ring count", unit: "rings", get: (m) => +m.ringCount },
+      sat: { label: "satellite count", unit: "sats", get: (m) => +m.satCount },
+    };
+    let xMode = "ring"; // "ring" | "sat" — current x-axis (toggle below)
+    const METRICS = [
+      { label: "Gbps capacity", unit: "Gbps", get: (m) => +m.gbps },
+      { label: "Latency min", unit: "min", get: (m) => +m.latMinMin },
+      { label: "Latency p50", unit: "min", get: (m) => +m.latP50Min },
+      { label: "Cost", unit: "$M", get: (m) => +m.totalCostM },
+      { label: "Cost / Mbps", unit: "$/Mbps", get: (m) => +m.costPerMbps },
+    ];
+    const buildChart = (arr, metric, xm) => {
+      const pts = arr.map((e) => { const m = e.metrics || {}; return { x: xm.get(m), y: metric.get(m), ecc: ECC(m.relayType), rc: +m.ringCount, name: e.name }; })
+        .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y) && p.x > 0);
+      if (!pts.length) return `<div class="muted" style="font-size:11px; padding:8px;">No data yet.</div>`;
+      // Ring-count range across ALL eccentric entries (not just this chart's valid
+      // points), so the gradient scale is identical across every chart.
+      const eccRings = arr.filter((e) => ECC((e.metrics || {}).relayType)).map((e) => +(e.metrics || {}).ringCount).filter(Number.isFinite);
+      const rMin = eccRings.length ? Math.min(...eccRings) : 0;
+      const rMax = eccRings.length ? Math.max(...eccRings) : 0;
+      const eccColor = (rc) => (rMax > rMin && Number.isFinite(rc)) ? eccColorFor((rc - rMin) / (rMax - rMin)) : C_ECC;
+      const W = 300, H = 180, padL = 48, padR = 8, padT = 10, padB = 26;
+      const plotW = W - padL - padR, plotH = H - padT - padB;
+      const nice = (v) => { if (!(v > 0)) return 1; const e = Math.pow(10, Math.floor(Math.log10(v))); const f = v / e; return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * e; };
+      const xTop = nice(Math.max(1, ...pts.map((p) => p.x)));
+      const yTop = nice(Math.max(1e-9, ...pts.map((p) => p.y)));
+      const X = (x) => padL + (x / xTop) * plotW;
+      const Y = (y) => padT + (1 - y / yTop) * plotH;
+      const yLab = (v) => (yTop >= 1000 ? Math.round(v).toLocaleString() : yTop >= 10 ? String(Math.round(v)) : String(+v.toFixed(2)));
+      const xLab = (v) => (xTop >= 1000 ? Math.round(v).toLocaleString() : String(Math.round(v)));
+      let s = `<rect x="${padL}" y="${padT}" width="${plotW}" height="${plotH}" fill="var(--accent-dim,rgba(255,255,255,0.02))" stroke="var(--border-2,#333)" stroke-width="0.6"/>`;
+      for (const f of [0, 0.5, 1]) {
+        const gx = padL + f * plotW, gy = padT + f * plotH;
+        s += `<line x1="${gx}" y1="${padT}" x2="${gx}" y2="${padT + plotH}" stroke="var(--border-2,#333)" stroke-width="0.4" stroke-dasharray="2 3"/>`;
+        s += `<line x1="${padL}" y1="${gy}" x2="${padL + plotW}" y2="${gy}" stroke="var(--border-2,#333)" stroke-width="0.4" stroke-dasharray="2 3"/>`;
+        s += `<text x="${gx}" y="${padT + plotH + 11}" font-size="8" text-anchor="middle" fill="var(--text-2,#aaa)">${xLab(f * xTop)}</text>`;
+        s += `<text x="${padL - 4}" y="${padT + (1 - f) * plotH + 3}" font-size="8" text-anchor="end" fill="var(--text-2,#aaa)">${yLab(f * yTop)}</text>`;
+      }
+      s += `<text x="${padL + plotW / 2}" y="${H - 2}" font-size="8" text-anchor="middle" fill="var(--text-2,#aaa)">${xm.label}</text>`;
+      for (const p of pts) s += `<circle cx="${X(p.x).toFixed(1)}" cy="${Y(p.y).toFixed(1)}" r="3.5" fill="${p.ecc ? eccColor(p.rc) : C_CONC}" fill-opacity="0.85" stroke="rgba(0,0,0,0.45)" stroke-width="0.5"><title>${esc(p.name)} — ${xLab(p.x)} ${xm.unit} · ${yLab(p.y)} ${metric.unit}${p.ecc && Number.isFinite(p.rc) && xm.unit !== "rings" ? ` · ${Math.round(p.rc)} rings` : ""}</title></circle>`;
+      return `<svg viewBox="0 0 ${W} ${H}" style="width:100%; height:auto; display:block; font-family:ui-monospace,monospace;">${s}</svg>`;
+    };
+
+    const legend = document.createElement("div");
+    legend.className = "muted";
+    legend.style.cssText = "font-size:11px; display:flex; gap:14px; align-items:center;";
+    legend.innerHTML =
+      `<span style="display:inline-flex;align-items:center;gap:5px;"><span style="width:9px;height:9px;border-radius:50%;background:${C_CONC};display:inline-block;"></span>concentric</span>` +
+      `<span style="display:inline-flex;align-items:center;gap:5px;">eccentric<span id="ecc-rmin" style="font-variant-numeric:tabular-nums;"></span><span style="width:42px;height:9px;border-radius:5px;background:${ECC_GRAD_CSS};display:inline-block;"></span><span id="ecc-rmax" style="font-variant-numeric:tabular-nums;"></span><span class="muted">rings</span></span>` +
+      `<span class="muted" style="margin-left:auto;" id="archive-count"></span>`;
+
+    const chartsWrap = document.createElement("div");
+    chartsWrap.style.cssText = "display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:10px;";
+    const renderCharts = () => {
+      const arr = load();
+      const xm = X_MODES[xMode] || X_MODES.ring;
+      // Reflect the eccentric ring-count span in the legend's gradient labels.
+      const eccRings = arr.filter((e) => ECC((e.metrics || {}).relayType)).map((e) => +(e.metrics || {}).ringCount).filter(Number.isFinite);
+      const rminEl = legend.querySelector("#ecc-rmin"), rmaxEl = legend.querySelector("#ecc-rmax");
+      if (rminEl && rmaxEl) {
+        rminEl.textContent = eccRings.length ? String(Math.min(...eccRings)) : "";
+        rmaxEl.textContent = eccRings.length ? String(Math.max(...eccRings)) : "";
+      }
+      chartsWrap.innerHTML = "";
+      for (const metric of METRICS) {
+        const card = document.createElement("div");
+        card.style.cssText = "border:1px solid var(--border-2,#333); border-radius:8px; padding:6px 8px;";
+        card.innerHTML = `<div style="font-size:12px; font-weight:600; margin-bottom:2px;">${metric.label} <span class="muted" style="font-weight:400;">(${metric.unit})</span></div>` + buildChart(arr, metric, xm);
+        chartsWrap.appendChild(card);
+      }
+    };
+
+    // Standalone cost-vs-capacity chart: x = Mbps, y = total cost. Unlike the grid
+    // above, this is keyed off capacity itself, so the ring/sat x-axis toggle does
+    // not affect it.
+    const X_MBPS = { label: "capacity (Mbps)", unit: "Mbps", get: (m) => +m.gbps * 1000 };
+    const COST_METRIC = { label: "Cost", unit: "$M", get: (m) => +m.totalCostM };
+    const costVsMbpsWrap = document.createElement("div");
+    costVsMbpsWrap.style.cssText = "display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:10px;";
+    const renderCostVsMbps = () => {
+      const arr = load();
+      costVsMbpsWrap.innerHTML = "";
+      const card = document.createElement("div");
+      card.style.cssText = "border:1px solid var(--border-2,#333); border-radius:8px; padding:6px 8px;";
+      card.innerHTML = `<div style="font-size:12px; font-weight:600; margin-bottom:2px;">${COST_METRIC.label} <span class="muted" style="font-weight:400;">(${COST_METRIC.unit}) vs ${X_MBPS.label}</span></div>` + buildChart(arr, COST_METRIC, X_MBPS);
+      costVsMbpsWrap.appendChild(card);
+    };
+
+    const listEl = document.createElement("div");
+    listEl.style.cssText = "display:flex; flex-direction:column; gap:6px;";
+    const renderList = () => {
+      const arr = load();
+      const cEl = legend.querySelector("#archive-count"); if (cEl) cEl.textContent = arr.length ? `${arr.length} saved` : "";
+      if (!arr.length) { listEl.innerHTML = `<div class="muted" style="font-size:12px; padding:4px 2px;">No saved configs yet — click Save.</div>`; return; }
+      listEl.innerHTML = "";
+      for (const e of arr) {
+        const m = e.metrics || {};
+        const hasM = m.relayType || m.ringCount || m.satCount;
+        const cost = m.totalCostM != null ? `$${fmtInt(m.totalCostM)}M` : "—";
+        const cpm = m.costPerMbps != null && isFinite(m.costPerMbps) ? `$${fmtInt(m.costPerMbps)}/Mbps` : "—";
+        let date = ""; try { date = new Date(e.ts).toLocaleString(); } catch {}
+        const row = document.createElement("div");
+        row.style.cssText = "border:1px solid var(--border-2,#333); border-radius:6px; padding:6px 8px;";
+        row.innerHTML =
+          `<div style="display:flex; justify-content:space-between; gap:8px; align-items:flex-start;">` +
+          `<div style="min-width:0;">` +
+          `<div style="font-weight:600; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(e.name)}${e.legacy ? ' <span class="muted" style="font-weight:400;">· preset</span>' : ""}</div>` +
+          (hasM
+            ? `<div class="muted" style="font-size:11px;">${esc(m.relayType || "?")} · ${fmtInt(m.ringCount)} rings · ${fmtInt(m.satCount)} sats</div><div class="muted" style="font-size:11px;">${m.gbps ?? "?"} Gbps · ${cost} · ${cpm}</div>`
+            : `<div class="muted" style="font-size:11px;">imported preset — load to apply</div>`) +
+          `<div class="muted" style="font-size:10px; opacity:0.65;">${esc(date)}</div>` +
+          `</div>` +
+          `<div style="display:flex; flex-direction:column; gap:4px; flex:none;">` +
+          `<button class="btn archive-load" data-id="${esc(e.id)}" style="font-size:11px; padding:2px 8px;">Load</button>` +
+          `<button class="btn archive-del" data-id="${esc(e.id)}" title="Delete" style="font-size:11px; padding:2px 8px;">✕</button>` +
+          `</div></div>`;
+        listEl.appendChild(row);
+      }
+      listEl.querySelectorAll(".archive-load").forEach((b) => b.addEventListener("click", () => {
+        const e = load().find((x) => String(x.id) === b.dataset.id);
+        if (e) loadEntry(e);
+      }));
+      listEl.querySelectorAll(".archive-del").forEach((b) => b.addEventListener("click", () => {
+        if (!confirm("Delete this saved config?")) return;
+        save(load().filter((x) => String(x.id) !== b.dataset.id));
+        renderAll();
+      }));
+    };
+    const renderAll = () => { renderCharts(); renderCostVsMbps(); renderList(); };
+
+    // Hooks so other features (the optimized sensitivity sweep) can capture the current
+    // config and append archive entries without going through the Save button/prompt.
+    this._archiveSnapshotConfig = () => ({ sliders: snapshotSliders(), curves: snapshotCurves() });
+    this._archiveAppend = (entry) => { const arr = load(); arr.unshift(entry); save(arr); renderAll(); };
+
+    saveBtn.addEventListener("click", () => {
+      const m = captureMetrics();
+      const def = `${m.relayType} · ${m.gbps} Gbps · ${fmtInt(m.satCount)} sats`;
+      const name = prompt("Name this saved config:", def);
+      if (name === null) return;
+      const arr = load();
+      arr.unshift({ id: Date.now(), name: name.trim() || def, ts: new Date().toISOString(), config: { sliders: snapshotSliders(), curves: snapshotCurves() }, metrics: m });
+      save(arr);
+      renderAll();
+    });
+
+    // Copy the full archive (all saved configs + their metrics) to the clipboard as JSON.
+    const copyBtn = document.createElement("button");
+    copyBtn.type = "button"; copyBtn.className = "btn";
+    copyBtn.style.cssText = "width:100%;";
+    copyBtn.textContent = "📋 Copy results JSON";
+    copyBtn.title = "Copy every saved config and its results to the clipboard as a JSON array.";
+    copyBtn.addEventListener("click", async () => {
+      const json = JSON.stringify(load(), null, 2);
+      const done = (ok) => { copyBtn.textContent = ok ? "✓ Copied" : "✕ Copy failed"; setTimeout(() => { copyBtn.textContent = "📋 Copy results JSON"; }, 1500); };
+      try {
+        await navigator.clipboard.writeText(json);
+        done(true);
+      } catch (e) {
+        // Fallback for non-secure contexts where the async Clipboard API is unavailable.
+        try {
+          const ta = document.createElement("textarea");
+          ta.value = json; ta.style.cssText = "position:fixed; opacity:0;";
+          document.body.appendChild(ta); ta.select();
+          const ok = document.execCommand("copy");
+          document.body.removeChild(ta);
+          done(ok);
+        } catch (e2) { console.error("[Archive] copy failed", e2); done(false); }
+      }
+    });
+
+    // x-axis toggle: express the charts against ring count or satellite count.
+    const mkLabel = (t) => { const d = document.createElement("div"); d.style.cssText = "font-size:13px; font-weight:600;"; d.textContent = t; return d; };
+    const xToggle = document.createElement("div");
+    xToggle.className = "muted";
+    xToggle.style.cssText = "font-size:11px; display:flex; gap:6px; align-items:center;";
+    const chartsLabel = mkLabel("Saved configs by ring count");
+    const setXMode = (mode) => {
+      xMode = mode;
+      xToggle.querySelectorAll("button").forEach((b) => {
+        const on = b.dataset.mode === xMode;
+        b.classList.toggle("btn-primary", on);
+        b.setAttribute("aria-pressed", on ? "true" : "false");
+      });
+      chartsLabel.textContent = `Saved configs by ${X_MODES[xMode].label}`;
+      renderCharts();
+    };
+    xToggle.append(document.createTextNode("x-axis:"));
+    for (const [mode, def] of Object.entries(X_MODES)) {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "btn"; b.dataset.mode = mode;
+      b.style.cssText = "font-size:11px; padding:2px 10px;";
+      b.textContent = def.label;
+      b.addEventListener("click", () => setXMode(mode));
+      xToggle.appendChild(b);
+    }
+
+    wrap.append(saveBtn, copyBtn, chartsLabel, xToggle, legend, chartsWrap, mkLabel("Cost vs capacity"), costVsMbpsWrap, mkLabel("Saved configs"), listEl);
+    host.appendChild(wrap);
+    setXMode(xMode);
+    renderAll();
+  }
+
+  /**
+   * Lock or unlock the Earth/Mars "Throughput in ring (worst case)" fields based on the
+   * Earth/Mars auto-size mode. In 'auto' the value is derived (half the live relay
+   * capacity, written by runPlanetSizingStep) so the rows are read-only + greyed; in
+   * 'off' the user may edit them, so they're enabled with their plain label.
+   */
+  _updatePlanetSizingLock() {
+    const locked = this._planetSizingMode() === "auto";
+    for (const section of ["ring_earth", "ring_mars"]) {
+      const input = this.sliders[section]?.requiredmbpsbetweensats;
+      const container = this.sliderContainers[section]?.requiredmbpsbetweensats;
+      if (!input || !container) continue;
+      input.disabled = locked;
+      const numericInput = document.getElementById(`${section}.requiredmbpsbetweensats-value`);
+      if (numericInput) numericInput.disabled = locked;
+      container.style.opacity = locked ? "0.6" : "1";
+      const label = container.querySelector(".slider-label");
+      if (label) {
+        label.textContent = locked ? "Throughput in ring (worst case) · ½ relay capacity" : "Throughput in ring (worst case)";
+        label.title = locked
+          ? "Derived: half the live relay capacity (the Capacity card's relay number). Each planet injects at a single gateway and its ring carries the traffic two ways, so the worst-case (periapsis) in-ring link carries half. Switch 'Earth/Mars auto-size' to 'off' to edit."
+          : "Worst-case (periapsis) in-ring link rate; sets the planet ring's satellite count.";
+      }
+    }
   }
 
   /**
@@ -2378,14 +2705,14 @@ export class SimUi {
       chartWrap.style.cssText = "padding:4px 2px 2px;";
       chartWrap.innerHTML = `<div class="muted" style="font-size:11px;margin:0 2px 3px;">Drag to shape ring density · click to add a point · double-click to remove · right-click to type</div>`;
       eqBody.appendChild(chartWrap);
-      this._buildCurveChart(chartWrap, { key: "adapted_rings.density-anchors", defaultY: 50 });
+      this._buildCurveChart(chartWrap, { key: "adapted_rings.density-anchors", defaultY: 50, titleEl: eqLabel });
     }
 
     // Replace the 4 Earth↔Mars blend sliders with the same curve chart: x = ring
     // position (Earth→Mars), y = blend % (0 = Earth value, 50 = natural, 100 = Mars).
     const BLEND_CHARTS = [
       { slider: "earth-mars-raan-pct", key: "adapted_rings.raan-curve", defaultY: 100, label: "Earth↔Mars RAAN" },
-      { slider: "earth-mars-argperi-pct", key: "adapted_rings.argperi-curve", defaultY: [{ x: 0, y: 0 }, { x: 1, y: 100 }], label: "Earth↔Mars arg. perigee" },
+      { slider: "earth-mars-argperi-pct", key: "adapted_rings.argperi-curve", defaultY: [{ x: 0, y: 0 }, { x: 0.1, y: 45 }, { x: 0.2, y: 64 }, { x: 0.3, y: 84 }, { x: 0.4, y: 100 }, { x: 1, y: 100 }], label: "Earth↔Mars arg. perigee" },
       { slider: "earth-mars-eccentricity-pct", key: "adapted_rings.eccentricity-curve", defaultY: [{ x: 0, y: 0 }, { x: 1, y: 100 }], label: "Earth↔Mars eccentricity" },
       { slider: "earth-mars-orbit-inclination-pct", key: "adapted_rings.inclination-curve", defaultY: [{ x: 0, y: 0 }, { x: 1, y: 100 }], label: "Earth↔Mars inclination" },
     ];
@@ -2407,7 +2734,7 @@ export class SimUi {
       cw.appendChild(chartHost);
       row.parentNode.insertBefore(cw, row);
       row.style.display = "none";
-      this._buildCurveChart(chartHost, { key: bc.key, defaultY: bc.defaultY });
+      this._buildCurveChart(chartHost, { key: bc.key, defaultY: bc.defaultY, titleEl: lab });
     }
     // Place the inclination chart directly below RAAN (the two plane orientations
     // belong together), ahead of arg-perigee and eccentricity.
@@ -2422,30 +2749,39 @@ export class SimUi {
     wrap.className = "slider-container";
     wrap.style.cssText = "margin-top:8px; padding-top:8px; border-top:1px solid var(--border, #333);";
     const cores = (typeof navigator !== "undefined" && navigator.hardwareConcurrency) || 4;
-    const defThreads = Math.max(1, Math.floor(cores / 2));
+    const defThreads = Math.max(1, Math.floor((cores * 2) / 3));
     wrap.innerHTML = `
       <div style="display:flex; gap:6px; align-items:center;">
         <button id="band-solver-btn" class="btn btn-primary" type="button" style="flex:1;" title="Search every checked curve (ring density + blends) for the shapes that best meet the capacity/latency goal (uses the worker pool).">⚙ Optimize checked</button>
         <button id="band-solver-stop" class="btn" type="button" style="display:none;">Stop</button>
       </div>
       <div class="muted" style="display:flex; gap:10px; align-items:center; margin-top:6px; font-size:12px; flex-wrap:wrap;">
-        <label title="Evaluation budget (more = better search, slower).">evals <input type="number" id="band-solver-evals" value="240" min="20" max="4000" step="20" style="width:60px;"></label>
-        <label title="Number of control points the optimizer places on each checked curve (evenly spaced Earth→Mars). More = finer shaping but a larger search; the result is applied as this many anchors.">points <input type="number" id="band-solver-bands" value="10" min="2" max="40" step="1" style="width:48px;"></label>
-        <label title="Parallel worker threads. Capped at the logical core count; the renderer needs some headroom, so ~half the cores is a good default.">threads <input type="number" id="band-solver-threads" value="${defThreads}" min="1" max="${cores}" step="1" style="width:48px;">/${cores}</label>
+        <label title="Evaluation budget (more = better search, slower).">evals <input type="number" id="band-solver-evals" value="500" min="20" max="20000" step="20" style="width:60px;"></label>
+        <label title="Number of control points the optimizer places on each checked curve (evenly spaced Earth→Mars). More = finer shaping but a larger search; the result is applied as this many anchors.">points <input type="number" id="band-solver-bands" value="30" min="2" max="40" step="1" style="width:48px;"></label>
+        <label title="Parallel worker threads. Capped at the logical core count; the renderer needs some headroom, so ~two-thirds of the cores is a good default.">threads <input type="number" id="band-solver-threads" value="${defThreads}" min="1" max="${cores}" step="1" style="width:48px;">/${cores}</label>
+        <label title="Hard memory cap, as a % of this tab's JS heap limit. Workers share one ~4GB V8 cage with the main thread, so their heaps add up — the optimizer only starts a job while the running total stays under this cap, so a sweep won't crash the tab ('Aw, Snap! Out of Memory'). Lower it if you hit crashes; raise it to admit more jobs at once. Default 75%.">mem <input type="number" id="band-solver-mem" value="75" min="10" max="95" step="5" style="width:48px;">%</label>
+        <label title="Scale factor on the size of each proposed change (the Gaussian step). 1× = unscaled; below 1 = smaller, smoother moves (less abrupt); above 1 = bolder jumps. Applies to the annealing perturbations, not the random restarts.">step <input type="number" id="band-solver-step" value="0.3" min="0.05" max="2" step="0.05" style="width:52px;">×</label>
+      </div>
+      <div class="muted" style="display:flex; gap:10px; align-items:center; margin-top:6px; font-size:12px; flex-wrap:wrap;">
+        <span title="Each generation picks ONE of the checked move types at random and applies it to the whole batch. 'all charts' touches every checked chart; '1 chart' picks one random chart for the batch. 'all dims' jitters every value in scope; '1 dim' jitters one random value of the chosen chart. Check several to mix strategies.">moves <span class="muted" style="font-weight:400;">(random each step):</span></span>
+        <label style="display:inline-flex; align-items:center; gap:3px;"><input type="checkbox" class="band-solver-move" value="all"> all dims · all charts</label>
+        <label style="display:inline-flex; align-items:center; gap:3px;"><input type="checkbox" class="band-solver-move" value="all-1chart"> all dims · 1 chart</label>
+        <label style="display:inline-flex; align-items:center; gap:3px;"><input type="checkbox" class="band-solver-move" value="single-1chart" checked> 1 dim · 1 chart</label>
+        <label style="display:inline-flex; align-items:center; gap:3px;"><input type="checkbox" class="band-solver-move" value="samex"> 1 dim (same x) · all charts</label>
       </div>
       <div style="display:flex; align-items:center; gap:6px; margin-top:8px; font-size:12px;">
         <span class="muted" title="Optimize purely for relay capacity.">Capacity</span>
-        <input type="range" id="band-solver-alpha" class="slider" min="0" max="100" value="50" step="5" style="flex:1; width:auto;" title="Goal blend: left = maximize capacity, right = minimize latency, middle = range-normalized trade-off between the two.">
+        <input type="range" id="band-solver-alpha" class="slider" min="0" max="100" value="0" step="5" style="flex:1; width:auto;" title="Goal blend: left = maximize capacity, right = minimize latency, middle = range-normalized trade-off between the two.">
         <span class="muted" title="Optimize purely for latency.">Latency</span>
       </div>
       <div class="muted" style="display:flex; gap:10px; align-items:center; margin-top:6px; font-size:12px; flex-wrap:wrap;">
-        <label title="How many Earth/Mars geometries each layout is scored at (sampled across years via a low-discrepancy time step). More = more robust, slower.">geoms
-          <select id="band-solver-geom" style="width:52px;">
-            <option value="1">1</option>
-            <option value="4" selected>4</option>
+        <label title="Earth/Mars geometries each layout is scored at. 'current' = the live layout at the current sim date. 4 / 16 place Earth & Mars on their orbits by geometry, measured from the Earth–Mars closest-approach direction, date-independent: 4 = Earth fixed +90° × Mars at {0,90,180,270}°; 16 = both at {0,90,180,270}° (4×4). Scores combine per the aggregate setting.">geoms
+          <select id="band-solver-geom" style="width:72px;">
+            <option value="1" selected>current</option>
+            <option value="4">4</option>
             <option value="16">16</option>
-            <option value="64">64</option>
           </select></label>
+        <button type="button" id="band-solver-geom-info" class="icon-btn" aria-expanded="false" title="Show what these geometries sample" style="line-height:1; padding:2px 6px;">&#9432;</button>
         <label title="How the per-geometry scores combine. Mean = best lifetime average; Worst = robust to the hardest geometry (e.g. conjunction).">aggregate
           <select id="band-solver-agg" style="width:64px;">
             <option value="mean" selected>Mean</option>
@@ -2453,6 +2789,7 @@ export class SimUi {
           </select></label>
         <label title="Fast-lane emphasis inside the latency goal: latency = this%·(fastest route) + rest·(traffic-weighted average). 0 = pure average.">fast-lane <input type="number" id="band-solver-fast" value="25" min="0" max="100" step="5" style="width:48px;">%</label>
       </div>
+      <div id="band-solver-geom-help" hidden style="margin:6px 0; padding:8px; border:1px solid var(--border-2,#333); border-radius:6px; background:var(--accent-dim,rgba(255,255,255,0.02));"></div>
       <label class="muted" style="display:flex; gap:6px; align-items:center; margin-top:6px; font-size:12px;" title="Reject any layout with satellites inside Earth's orbit or outside Mars's — keep the whole relay strictly between the two planet orbits.">
         <input type="checkbox" id="band-solver-keep-between" checked style="margin:0; cursor:pointer; flex:none;">
         Keep all rings between Earth &amp; Mars orbits (no inside-Earth / outside-Mars sats)
@@ -2462,6 +2799,263 @@ export class SimUi {
 
     wrap.querySelector("#band-solver-btn").addEventListener("click", () => this._runBandSolver());
     wrap.querySelector("#band-solver-stop").addEventListener("click", () => { this._bandSolverStop = true; });
+
+    // Geometry explainer popover (ⓘ) next to the optimizer's "geoms" selector. Maps the
+    // geom count (1/4/16) to the shared diagram mode and re-renders on change while open.
+    const bsGeomSel = wrap.querySelector("#band-solver-geom");
+    const bsGeomInfo = wrap.querySelector("#band-solver-geom-info");
+    const bsGeomHelp = wrap.querySelector("#band-solver-geom-help");
+    const bsMode = () => (bsGeomSel?.value === "16" ? "geometry-16" : bsGeomSel?.value === "4" ? "geometry-4" : "current");
+    const bsRender = () => { if (bsGeomHelp) bsGeomHelp.innerHTML = this._geometryHelp(bsMode()); };
+    if (bsGeomInfo && bsGeomHelp) {
+      bsGeomInfo.addEventListener("click", () => {
+        const show = bsGeomHelp.hidden;
+        if (show) bsRender();
+        bsGeomHelp.hidden = !show;
+        bsGeomInfo.setAttribute("aria-expanded", String(show));
+      });
+    }
+    if (bsGeomSel) bsGeomSel.addEventListener("change", () => { if (bsGeomHelp && !bsGeomHelp.hidden) bsRender(); });
+  }
+
+  /**
+   * Spacecraft-flight controls (self-contained section, like the band solver). Drives
+   * the SimFlightController directly — NOT the constellation rebuild path — so changing
+   * fleet params never re-sizes the relay. Persists to localStorage under
+   * "spacecraft_flights.*"; the manufacturing rate uses the shared anchor-curve editor.
+   */
+  _injectFlightUI() {
+    const container = document.getElementById("sliders-container");
+    if (!container || document.getElementById("slider-section-content-spacecraft_flights")) return;
+    const flight = this.simMain.simFlight;
+    if (!flight) return;
+
+    // Section scaffold (mirrors the generated sections so styling/search/collapse match).
+    const wrapper = document.createElement("div");
+    wrapper.className = "slider-section";
+    const header = document.createElement("h3");
+    header.className = "slider-section-header";
+    header.textContent = "Spacecraft flights";
+    wrapper.appendChild(header);
+    const content = document.createElement("div");
+    content.className = "slider-section-content";
+    content.id = "slider-section-content-spacecraft_flights";
+    wrapper.appendChild(content);
+    container.appendChild(wrapper);
+    header.addEventListener("click", () => {
+      const expanded = content.classList.toggle("active");
+      header.classList.toggle("expanded", expanded);
+    });
+
+    const LS = (k, d) => { const v = localStorage.getItem("spacecraft_flights." + k); return v === null ? d : v; };
+    const saveLS = (k, v) => localStorage.setItem("spacecraft_flights." + k, String(v));
+
+    // Visibility toggles: ship markers and transfer arcs independently.
+    const mkChk = (id, label, dflt) => {
+      const row = document.createElement("label");
+      row.className = "slider-container";
+      row.style.cssText = "display:flex;align-items:center;gap:8px;cursor:pointer;";
+      const chk = document.createElement("input");
+      chk.type = "checkbox";
+      chk.checked = LS(id, dflt ? "1" : "0") !== "0";
+      chk.style.cssText = "margin:0;cursor:pointer;flex:none;";
+      row.appendChild(chk);
+      row.appendChild(document.createTextNode(label));
+      content.appendChild(row);
+      return chk;
+    };
+    const shipsChk = mkChk("showShips", "Show spacecrafts", false);
+    const pathsChk = mkChk("showPaths", "Show flight paths", false);
+
+    // Range-row factory (matches the app's .slider-container markup).
+    const sliders = {};
+    const mk = (id, label, min, max, step, def, unit, fmt) => {
+      const c = document.createElement("div");
+      c.className = "slider-container";
+      c.dataset.search = (label + " spacecraft flights").toLowerCase();
+      const top = document.createElement("div");
+      top.className = "slider-row-top";
+      const lab = document.createElement("span");
+      lab.className = "slider-label";
+      lab.textContent = label;
+      const val = document.createElement("span");
+      val.className = "slider-value-input";
+      val.style.cssText = "margin-left:auto;font-variant-numeric:tabular-nums;";
+      top.appendChild(lab); top.appendChild(val);
+      if (unit) { const u = document.createElement("span"); u.className = "slider-unit"; u.textContent = unit; top.appendChild(u); }
+      const inp = document.createElement("input");
+      inp.type = "range"; inp.className = "slider";
+      inp.min = min; inp.max = max; inp.step = step; inp.value = LS(id, def);
+      const show = () => { val.textContent = fmt ? fmt(parseFloat(inp.value)) : inp.value; };
+      show();
+      inp.addEventListener("input", () => { show(); saveLS(id, inp.value); apply(); });
+      c.appendChild(top); c.appendChild(inp);
+      content.appendChild(c);
+      sliders[id] = inp;
+      return inp;
+    };
+
+    const portsInp = mk("ports", "Laser terminals per ship", 1, 3, 1, "2", " ports");
+    const sigmaInp = mk("sigma", "Departure spread (σ)", 0, 60, 1, "10", " days");
+    const retInp = mk("return", "Mars→Earth return", 0, 100, 1, "50", " %");
+    const capInp = mk("cap", "Flight count cap", 1, 1000, 1, "1000", " legs", (v) => (v >= 1000 ? "∞" : String(v)));
+
+    // Manufacturing-rate curve (ships/yr across 2025→2050) — reuses the anchor editor.
+    const mfgLabel = document.createElement("div");
+    mfgLabel.className = "slider-label";
+    mfgLabel.style.cssText = "margin-top:var(--s-2);font-weight:600;";
+    mfgLabel.innerHTML = `Starship manufacturing <span class="muted" style="font-weight:400;">· ships/yr, 2025→2050</span>`;
+    content.appendChild(mfgLabel);
+    const chartNote = document.createElement("div");
+    chartNote.className = "muted";
+    chartNote.style.cssText = "font-size:11px;margin:0 2px 3px;";
+    chartNote.textContent = "Drag to shape yearly build rate · click to add · double-click to remove · right-click to type";
+    content.appendChild(chartNote);
+    const chartHost = document.createElement("div");
+    chartHost.style.cssText = "padding:2px;";
+    content.appendChild(chartHost);
+
+    const MFG_KEY = "spacecraft_flights.manufacturing-curve";
+    const MFG_DEFAULT = [{ x: 0, y: 8 }, { x: 1, y: 60 }];
+    const Y0 = 2025, Y1 = 2050;
+    const buildManufacturing = () => {
+      const anchors = this._getCurve(MFG_KEY, MFG_DEFAULT);
+      const out = {};
+      for (let y = Y0; y <= Y1; y++) out[y] = Math.round(this.simMain.simSatellites.densityFromAnchors(anchors, (y - Y0) / (Y1 - Y0)));
+      return out;
+    };
+    const apply = () => {
+      const f = this.simMain.simFlight;
+      f.showShips = shipsChk.checked;
+      f.showPaths = pathsChk.checked;
+      f.setEnabled(shipsChk.checked || pathsChk.checked);
+      f.setConfig({
+        portsPerShip: parseInt(portsInp.value, 10),
+        sigmaDays: parseFloat(sigmaInp.value),
+        returnFraction: parseFloat(retInp.value) / 100,
+        flightCap: parseInt(capInp.value, 10),
+        manufacturingByYear: buildManufacturing(),
+      });
+      if (!f.enabled && this.simMain.simDisplay && this.simMain.simDisplay.setFlightData) {
+        this.simMain.simDisplay.setFlightData(null);
+      }
+      this.simMain.refreshFleetMetric();
+    };
+
+    this._buildCurveChart(chartHost, {
+      key: MFG_KEY, defaultY: MFG_DEFAULT, xLabels: [String(Y0), String(Y1)], yTopLabel: "100/yr",
+      onCommit: () => apply(), titleEl: mfgLabel,
+    });
+
+    shipsChk.addEventListener("change", () => { saveLS("showShips", shipsChk.checked ? "1" : "0"); apply(); });
+    pathsChk.addEventListener("change", () => { saveLS("showPaths", pathsChk.checked ? "1" : "0"); apply(); });
+
+    apply(); // push initial (saved/default) config into the controller
+  }
+
+  /**
+   * Inject the "Coverage probes" section (Monte-Carlo coverage field — the
+   * alternative to spacecraft flights). Self-contained, persisted under
+   * "coverage_probes.*", wired straight to simMain.simProbe (NO constellation
+   * rebuild). Advanced-mode only, like the flight section.
+   */
+  _injectProbeUI() {
+    const container = document.getElementById("sliders-container");
+    if (!container || document.getElementById("slider-section-content-coverage_probes")) return;
+    const probe = this.simMain.simProbe;
+    if (!probe) return;
+
+    const wrapper = document.createElement("div");
+    wrapper.className = "slider-section";
+    const header = document.createElement("h3");
+    header.className = "slider-section-header";
+    header.textContent = "Coverage probes";
+    wrapper.appendChild(header);
+    const content = document.createElement("div");
+    content.className = "slider-section-content";
+    content.id = "slider-section-content-coverage_probes";
+    wrapper.appendChild(content);
+    container.appendChild(wrapper);
+    header.addEventListener("click", () => {
+      const expanded = content.classList.toggle("active");
+      header.classList.toggle("expanded", expanded);
+    });
+
+    const LS = (k, d) => { const v = localStorage.getItem("coverage_probes." + k); return v === null ? d : v; };
+    const saveLS = (k, v) => localStorage.setItem("coverage_probes." + k, String(v));
+
+    // Enable / show toggle (off by default — the flight overlay is the default view).
+    const row = document.createElement("label");
+    row.className = "slider-container";
+    row.style.cssText = "display:flex;align-items:center;gap:8px;cursor:pointer;";
+    const enableChk = document.createElement("input");
+    enableChk.type = "checkbox";
+    enableChk.checked = LS("enabled", "0") !== "0";
+    enableChk.style.cssText = "margin:0;cursor:pointer;flex:none;";
+    row.appendChild(enableChk);
+    row.appendChild(document.createTextNode("Show coverage probes"));
+    content.appendChild(row);
+
+    const note = document.createElement("div");
+    note.className = "muted";
+    note.style.cssText = "font-size:11px;margin:2px 2px 4px;";
+    note.textContent = "Random spacecraft scattered between Earth & Mars orbits — each measured independently against the relay.";
+    content.appendChild(note);
+
+    // Range-row factory (matches the app's .slider-container markup).
+    const sliders = {};
+    const mk = (id, label, min, max, step, def, unit, fmt) => {
+      const c = document.createElement("div");
+      c.className = "slider-container";
+      c.dataset.search = (label + " coverage probes").toLowerCase();
+      const top = document.createElement("div");
+      top.className = "slider-row-top";
+      const lab = document.createElement("span");
+      lab.className = "slider-label";
+      lab.textContent = label;
+      const val = document.createElement("span");
+      val.className = "slider-value-input";
+      val.style.cssText = "margin-left:auto;font-variant-numeric:tabular-nums;";
+      top.appendChild(lab); top.appendChild(val);
+      if (unit) { const u = document.createElement("span"); u.className = "slider-unit"; u.textContent = unit; top.appendChild(u); }
+      const inp = document.createElement("input");
+      inp.type = "range"; inp.className = "slider";
+      inp.min = min; inp.max = max; inp.step = step; inp.value = LS(id, def);
+      const show = () => { val.textContent = fmt ? fmt(parseFloat(inp.value)) : inp.value; };
+      show();
+      inp.addEventListener("input", () => { show(); saveLS(id, inp.value); apply(); });
+      c.appendChild(top); c.appendChild(inp);
+      content.appendChild(c);
+      sliders[id] = inp;
+      return inp;
+    };
+
+    const countInp = mk("count", "Number of probes", 50, 3000, 50, "500", "");
+    const seedInp = mk("seed", "Random seed", 1, 50, 1, "1", "");
+    const portsInp = mk("ports", "Laser terminals per probe", 1, 3, 1, "1", " ports");
+
+    const apply = () => {
+      const p = this.simMain.simProbe;
+      p.showProbes = enableChk.checked;
+      p.setEnabled(enableChk.checked);
+      p.setConfig({
+        count: parseInt(countInp.value, 10),
+        seed: parseInt(seedInp.value, 10),
+        portsPerProbe: parseInt(portsInp.value, 10),
+      });
+      if (!p.enabled && this.simMain.simDisplay && this.simMain.simDisplay.setProbeData) {
+        this.simMain.simDisplay.setProbeData(null);
+      }
+      // The overlay is event-driven (measures only on window/cloud change), so a
+      // UI change must force one re-push + card refresh on the next frame.
+      this.simMain._lastProbeRender = null;
+      this.simMain._coverageDrawnVersion = -1;
+      this.simMain.refreshCoverageMetric();
+    };
+
+    enableChk.addEventListener("change", () => { saveLS("enabled", enableChk.checked ? "1" : "0"); apply(); });
+
+    apply(); // push initial (saved/default) config into the controller
   }
 
   /**
@@ -2485,10 +3079,12 @@ export class SimUi {
    * @param {string} o.key       config/localStorage key for the curve's anchors
    * @param {number} o.defaultY  y for the flat 2-anchor default
    */
-  _buildCurveChart(host, { key, defaultY = 50 }) {
+  _buildCurveChart(host, { key, defaultY = 50, onCommit = null, xLabels = null, yTopLabel = "100", titleEl = null }) {
     const SVGNS = "http://www.w3.org/2000/svg";
     const W = 480, H = 132, padL = 8, padR = 8, padT = 16, padB = 16;
     const plotW = W - padL - padR, plotH = H - padT - padB;
+    const xLeftLabel = (xLabels && xLabels[0]) || "Earth";
+    const xRightLabel = (xLabels && xLabels[1]) || "Mars";
     const ds = this.simMain.simSatellites;            // shared densityFromAnchors
     const REBUILD_CATS = [
       "economics", "simulation", "laser_technology",
@@ -2502,6 +3098,10 @@ export class SimUi {
     let anchors = this._getCurve(key, defaultY); // closure-local state — one per chart
     let dragIdx = null;
     let changed = false;
+    // Optimizer overlays (non-interactive): the accepted scenario + the in-flight batch
+    // "cloud", drawn over the blue base curve while the band solver runs. {accepted, batch}
+    // are anchor arrays; null = none.
+    let overlay = { accepted: null, batch: null };
 
     const svg = document.createElementNS(SVGNS, "svg");
     svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
@@ -2515,14 +3115,27 @@ export class SimUi {
       return pt.matrixTransform(ctm.inverse());
     };
 
-    const render = () => {
-      const A = anchors, SAMPLES = 80;
-      let curve = "";
+    // Sample the smooth curve through an anchor set into an SVG path string.
+    const SAMPLES = 80;
+    const pathFor = (A) => {
+      let d = "";
       for (let k = 0; k <= SAMPLES; k++) {
         const u = k / SAMPLES;
-        curve += `${k === 0 ? "M" : "L"} ${xOf(u).toFixed(1)} ${yOf(ds.densityFromAnchors(A, u)).toFixed(1)} `;
+        d += `${k === 0 ? "M" : "L"} ${xOf(u).toFixed(1)} ${yOf(ds.densityFromAnchors(A, u)).toFixed(1)} `;
       }
+      return d;
+    };
+    const render = () => {
+      const A = anchors;
+      const curve = pathFor(A);
       const area = curve + `L ${xOf(1).toFixed(1)} ${yOf(0).toFixed(1)} L ${xOf(0).toFixed(1)} ${yOf(0).toFixed(1)} Z`;
+      // Optimizer overlays: the faded batch "cloud" first, then the bold accepted line —
+      // both amber, over the blue base curve and beneath the draggable handles.
+      let ov = "";
+      if (overlay.batch) for (const bA of overlay.batch)
+        ov += `<path d="${pathFor(bA)}" fill="none" stroke="#ffb454" stroke-width="1" stroke-opacity="0.2" stroke-linecap="round" pointer-events="none"/>`;
+      if (overlay.accepted)
+        ov += `<path d="${pathFor(overlay.accepted)}" fill="none" stroke="#ffb454" stroke-width="1.6" stroke-linecap="round" pointer-events="none"/>`;
       const pts = A.map((a, i) =>
         `<circle cx="${xOf(a.x).toFixed(1)}" cy="${yOf(a.y).toFixed(1)}" r="${dragIdx === i ? 6 : 4.5}" fill="var(--accent)" stroke="rgba(255,255,255,0.92)" stroke-width="1.5" pointer-events="none"/>` +
         `<text x="${xOf(a.x).toFixed(1)}" y="${(yOf(a.y) - 9).toFixed(1)}" font-size="9" text-anchor="middle" fill="var(--accent)" font-family="ui-monospace,monospace" pointer-events="none">${Math.round(a.y)}</text>`
@@ -2531,16 +3144,18 @@ export class SimUi {
         `<rect x="${padL}" y="${padT}" width="${plotW}" height="${plotH}" fill="var(--accent-dim)" stroke="var(--border-2)" stroke-width="0.6" stroke-dasharray="3 4" rx="2"/>` +
         `<path d="${area}" fill="var(--accent-dim)" stroke="none" pointer-events="none"/>` +
         `<path d="${curve}" fill="none" stroke="var(--accent)" stroke-width="1.6" stroke-linecap="round" pointer-events="none"/>` +
-        `<text x="${padL + 2}" y="${padT + 8}" font-size="8" fill="var(--text-2)" font-family="ui-monospace,monospace" pointer-events="none">100</text>` +
+        ov +
+        `<text x="${padL + 2}" y="${padT + 8}" font-size="8" fill="var(--text-2)" font-family="ui-monospace,monospace" pointer-events="none">${yTopLabel}</text>` +
         `<text x="${padL + 2}" y="${padT + plotH - 2}" font-size="8" fill="var(--text-2)" font-family="ui-monospace,monospace" pointer-events="none">0</text>` +
-        `<text x="${padL}" y="${H - 3}" font-size="9" fill="var(--text-2)" font-family="ui-monospace,monospace" pointer-events="none">Earth</text>` +
-        `<text x="${padL + plotW}" y="${H - 3}" font-size="9" fill="var(--text-2)" text-anchor="end" font-family="ui-monospace,monospace" pointer-events="none">Mars</text>` +
+        `<text x="${padL}" y="${H - 3}" font-size="9" fill="var(--text-2)" font-family="ui-monospace,monospace" pointer-events="none">${xLeftLabel}</text>` +
+        `<text x="${padL + plotW}" y="${H - 3}" font-size="9" fill="var(--text-2)" text-anchor="end" font-family="ui-monospace,monospace" pointer-events="none">${xRightLabel}</text>` +
         pts;
     };
 
     const commit = () => {
       this._setCurve(key, anchors);
-      this.simMain.setSatellitesConfig(this.getGroupsConfig(REBUILD_CATS));
+      if (onCommit) onCommit(anchors);
+      else this.simMain.setSatellitesConfig(this.getGroupsConfig(REBUILD_CATS));
     };
     // Throttled live commit so the sim updates in real time during a drag (like the
     // sliders did), not only on release. The heavy satellite/topology rebuild is
@@ -2553,14 +3168,16 @@ export class SimUi {
       commit();
     };
 
-    // Reset-to-default button (top-right corner of the chart). Restores this curve's
+    // Reset-to-default button — placed on the chart's title line (right-aligned) when the
+    // caller passes its titleEl, else the chart's top-right corner. Restores this curve's
     // anchors to its default (a flat level, or a ramp), redraws and rebuilds.
     const resetBtn = document.createElement("button");
     resetBtn.type = "button";
     resetBtn.textContent = "↺";
     resetBtn.title = "Reset this curve to its default";
     resetBtn.style.cssText =
-      "position:absolute; top:1px; right:3px; z-index:2; padding:0 5px; font-size:12px; line-height:16px;" +
+      (titleEl ? "margin-left:auto;" : "position:absolute; top:1px; right:3px; z-index:2;") +
+      "padding:0 6px; font-size:12px; line-height:16px;" +
       "background:var(--accent-dim); color:var(--text-2); border:1px solid var(--border-2); border-radius:3px; cursor:pointer;";
     resetBtn.addEventListener("click", (e) => {
       e.preventDefault();
@@ -2572,7 +3189,13 @@ export class SimUi {
       render();
       commit();
     });
-    host.appendChild(resetBtn);
+    if (titleEl) {
+      titleEl.style.display = "flex";
+      titleEl.style.alignItems = "center";
+      titleEl.appendChild(resetBtn);
+    } else {
+      host.appendChild(resetBtn);
+    }
 
     // Nearest anchor within HIT px of (vx,vy), else -1.
     const HIT = 9;
@@ -2689,28 +3312,128 @@ export class SimUi {
     // Register a refresh so external changes (e.g. the optimizer applying a density
     // result) re-seed this chart from storage and redraw.
     if (!this._curveRefresh) this._curveRefresh = {};
-    this._curveRefresh[key] = () => { closeEditor(); anchors = this._getCurve(key, defaultY); dragIdx = null; render(); };
+    this._curveRefresh[key] = () => { closeEditor(); anchors = this._getCurve(key, defaultY); dragIdx = null; overlay = { accepted: null, batch: null }; render(); };
+    // Optimizer overlay setter: merge a partial {accepted?, batch?} (anchor arrays) and
+    // redraw; pass null to clear. The band solver drives this live during a run.
+    if (!this._curveSetOverlay) this._curveSetOverlay = {};
+    this._curveSetOverlay[key] = (ov) => { overlay = ov ? { ...overlay, ...ov } : { accepted: null, batch: null }; render(); };
     render();
   }
 
   /**
-   * Run the adapted-ring density optimizer. Builds the current full config, fans
-   * candidate band-weight vectors out across a fresh worker pool (objective-only
-   * fast path), and applies the best distribution found to the 10 band sliders.
+   * Shared geometry-sample list used by the optimizer AND the sensitivity sweep, so
+   * "geometry mode" means the same thing everywhere. geomCount:
+   *   • 1  → [{ current: true }]  — score the live layout at `currentDateIso`.
+   *   • 4  → Earth fixed 90° from the reference × Mars at {0,90,180,270}°.
+   *   • 16 → Earth {0,90,180,270}° × Mars {0,90,180,270}°  (4×4 grid).
+   * Offsets are ecliptic-longitude offsets from the Earth–Mars closest-approach
+   * direction (applied worker-side via applyGeometryOffsets); the relay satellites are
+   * held at a fixed reference phase (FIXED_GEOM_DATE) because the dense rings are
+   * ~rotation-invariant. Returns plain {current} | {earthOffset,marsOffset} entries.
    */
-  async _runBandSolver() {
-    if (this._bandSolverRunning) return;
+  _buildGeometries(geomCount) {
+    const ANG4 = [0, 90, 180, 270];
+    if (geomCount <= 1) return [{ current: true }];
+    if (geomCount === 4) return ANG4.map((m) => ({ earthOffset: 90, marsOffset: m }));
+    const g = [];
+    for (const e of ANG4) for (const m of ANG4) g.push({ earthOffset: e, marsOffset: m });
+    return g;
+  }
+
+  /**
+   * Explanatory popover for the planet-geometry selector (Sensitivity + the optimizer):
+   * a 2-D schematic of the Earth & Mars orbits with the closest-approach 0° reference,
+   * showing EXACTLY what `mode` samples:
+   *   • "current"     → Earth & Mars at their actual current-date positions (1 scenario).
+   *   • "geometry-4"  → Earth fixed at +90°, Mars at {0,90,180,270}° (4 scenarios).
+   *   • "geometry-16" → Earth × Mars at {0,90,180,270}° each (16 scenarios).
+   * Returns an HTML string (inline SVG + legend). Re-render when the mode changes.
+   */
+  _geometryHelp(mode = "geometry-4") {
+    const E = this.simMain?.simSatellites?.getEarth?.() || { a: 1.00002, e: 0.0166967, p: 102.8517 };
+    const M = this.simMain?.simSatellites?.getMars?.() || { a: 1.5236365, e: 0.0934231, p: 336.0882 };
+    const ref = EARTH_MARS_CLOSEST_APPROACH_DEG;
+    const d2r = Math.PI / 180;
+    const rad = (o, L) => { const v = (L - o.p) * d2r; return (o.a * (1 - o.e * o.e)) / (1 + o.e * Math.cos(v)); };
+    const W = 320, H = 230, cx = 150, cy = 115, scale = 52;
+    // Ecliptic longitude L (deg) → screen (y flipped so +longitude is CCW/up).
+    const P = (o, L) => ({ x: cx + rad(o, L) * Math.cos(L * d2r) * scale, y: cy - rad(o, L) * Math.sin(L * d2r) * scale });
+    const orbitPath = (o) => { let d = ""; for (let L = 0; L <= 360; L += 3) { const p = P(o, L); d += (L === 0 ? "M" : "L") + p.x.toFixed(1) + " " + p.y.toFixed(1) + " "; } return d + "Z"; };
+    const dot = (p, col, r2, title) => `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${r2}" fill="${col}"><title>${title}</title></circle>`;
+    // Current ecliptic longitude of a live planet (for "current" mode).
+    const liveLon = (name) => {
+      try {
+        const planets = this.simMain?.simSolarSystem?.getSolarSystemData?.()?.planets || [];
+        const p = planets.find((pl) => pl.name === name);
+        if (p && p.position) { let L = (Math.atan2(p.position.y, p.position.x) * 180) / Math.PI; return ((L % 360) + 360) % 360; }
+      } catch {}
+      return null;
+    };
+    const C_E = "#4a90e2", C_M = "#ffb454", C_REF = "#5dd6a0";
+    const ANG = [0, 90, 180, 270];
+    let svg = `<svg viewBox="0 0 ${W} ${H}" style="width:100%; max-width:340px; height:auto; display:block; font-family:ui-monospace,monospace;">`;
+    svg += `<path d="${orbitPath(E)}" fill="none" stroke="${C_E}" stroke-width="1.2"/>`;
+    svg += `<path d="${orbitPath(M)}" fill="none" stroke="${C_M}" stroke-width="1.2"/>`;
+    svg += `<circle cx="${cx}" cy="${cy}" r="3" fill="#ffd76b"><title>Sun</title></circle>`;
+    // Reference (0°) direction line toward the Mars closest-approach point.
+    const mref = P(M, ref);
+    svg += `<line x1="${cx}" y1="${cy}" x2="${mref.x.toFixed(1)}" y2="${mref.y.toFixed(1)}" stroke="${C_REF}" stroke-width="1" stroke-dasharray="3 3"/>`;
+    svg += `<text x="${(mref.x + 6).toFixed(1)}" y="${(mref.y - 4).toFixed(1)}" font-size="9" fill="${C_REF}">0°</text>`;
+
+    let desc;
+    if (mode === "current") {
+      const eL = liveLon("Earth"), mL = liveLon("Mars");
+      const eP = P(E, eL == null ? ref + 90 : eL), mP = P(M, mL == null ? ref : mL);
+      svg += `<line x1="${eP.x.toFixed(1)}" y1="${eP.y.toFixed(1)}" x2="${mP.x.toFixed(1)}" y2="${mP.y.toFixed(1)}" stroke="#ffffff" stroke-opacity="0.25" stroke-width="1"/>`;
+      svg += dot(eP, C_E, 4.5, `Earth ${eL == null ? "" : Math.round(eL) + "°"}`);
+      svg += dot(mP, C_M, 4.5, `Mars ${mL == null ? "" : Math.round(mL) + "°"}`);
+      desc = `<b>Current date</b>: Earth &amp; Mars at their actual positions for the current sim date — a single scenario.`;
+    } else if (mode === "geometry-16") {
+      for (const off of ANG) svg += dot(P(E, ref + off), C_E, 3.5, `Earth +${off}°`);
+      for (const off of ANG) svg += dot(P(M, ref + off), C_M, 3.5, `Mars +${off}°`);
+      desc = `<b>×16</b>: 4 Earth × 4 Mars positions at {0, 90, 180, 270}° from the reference — 16 scenarios.`;
+    } else {
+      svg += dot(P(E, ref + 90), C_E, 4.5, "Earth +90° (fixed)");
+      for (const off of ANG) svg += dot(P(M, ref + off), C_M, 3.5, `Mars +${off}°`);
+      desc = `<b>×4</b>: Earth fixed at +90°, Mars at {0, 90, 180, 270}° from the reference — 4 scenarios.`;
+    }
+    svg += `</svg>`;
+    const geomNote = mode === "current" ? "" :
+      `<div style="margin-top:4px;">Geometry modes place the planets by orbital longitude (relay sats held at a fixed phase), decoupled from any date — so results reflect the planet geometry, not a calendar.</div>`;
+    const legend =
+      `<div style="font-size:11px; line-height:1.5; margin-top:6px;">` +
+      `<div>${desc}</div>` +
+      `<div style="margin-top:4px;"><span style="color:${C_REF};">●</span> <b>0°</b> = the Earth–Mars <b>closest approach</b> (${ref}°, narrowest orbit gap), the reference offsets are measured from.</div>` +
+      geomNote +
+      `<div style="margin-top:4px;"><span style="color:${C_E};">●</span> Earth &nbsp; <span style="color:${C_M};">●</span> Mars</div>` +
+      `</div>`;
+    return svg + legend;
+  }
+
+  /**
+   * Run the adapted-ring density optimizer. Builds the current full config, fans
+   * candidate band-weight vectors out across a fresh worker pool (objective-only fast
+   * path), and applies the best distribution found to the curve(s).
+   * opts.silent: run headless (no band-solver button/progress/revert UI) and return
+   *   { applied, capacity } — used by the optimized sensitivity sweep.
+   */
+  async _runBandSolver(opts = {}) {
+    const silent = !!opts.silent;
+    if (this._bandSolverRunning) return null;
     const btn = document.getElementById("band-solver-btn");
     const stopBtn = document.getElementById("band-solver-stop");
     const prog = document.getElementById("band-solver-progress");
     const evalsInput = document.getElementById("band-solver-evals");
-    const maxEvals = Math.max(20, Math.min(4000, parseInt(evalsInput?.value, 10) || 240));
+    const maxEvals = Math.max(20, Math.min(20000, parseInt(evalsInput?.value, 10) || 240));
     const bandCount = Math.max(2, Math.min(40, parseInt(document.getElementById("band-solver-bands")?.value, 10) || 10));
     const alpha = Math.max(0, Math.min(1, (parseFloat(document.getElementById("band-solver-alpha")?.value) || 0) / 100));
     const wFast = Math.max(0, Math.min(1, (parseFloat(document.getElementById("band-solver-fast")?.value) || 0) / 100));
     const geomCount = Math.max(1, parseInt(document.getElementById("band-solver-geom")?.value, 10) || 1);
     const aggregation = document.getElementById("band-solver-agg")?.value === "worst" ? "worst" : "mean";
     const keepBetween = document.getElementById("band-solver-keep-between")?.checked !== false; // default on
+    const moveModes = [...document.querySelectorAll(".band-solver-move:checked")].map((c) => c.value);
+    if (!moveModes.length) moveModes.push("single-1chart"); // fall back if the user unchecked all
+    const stepScale = Math.max(0.05, Math.min(2, parseFloat(document.getElementById("band-solver-step")?.value) || 1)); // scales proposed move size
 
     // The optimizer searches every checked part of every curve at once. Each curve is
     // sampled at bandCount evenly-spaced points; only the indices whose part (left
@@ -2732,20 +3455,22 @@ export class SimUi {
       if (free.length) plan.push({ key: c.key, seed, free });
     }
     if (plan.length === 0) {
-      prog.style.display = "";
-      prog.textContent = "Nothing to optimize — check a part (‘middle’ needs ≥3 points).";
-      return;
+      if (prog) { prog.style.display = ""; prog.textContent = "Nothing to optimize — check a part (‘middle’ needs ≥3 points)."; }
+      return silent ? { applied: false, capacity: 0 } : undefined;
     }
     let _off = 0;
     for (const p of plan) { p.start = _off; _off += p.free.length; } // offset in the search vector
 
+    // Snapshot the optimized curves so the run can be reverted afterwards; clear any
+    // stale revert button from a previous run.
+    const initialCurves = plan.map((p) => ({ key: p.key, anchors: this._getCurve(p.key, 50).map((a) => ({ x: a.x, y: a.y })) }));
+    document.getElementById("band-solver-revert")?.remove();
+
     this._bandSolverRunning = true;
     this._bandSolverStop = false;
-    btn.disabled = true;
-    btn.textContent = "Optimizing…";
-    stopBtn.style.display = "";
-    prog.style.display = "";
-    prog.textContent = "Starting…";
+    if (btn) { btn.disabled = true; btn.textContent = "Optimizing…"; }
+    if (stopBtn) stopBtn.style.display = "";
+    if (prog) { prog.style.display = ""; prog.textContent = "Starting…"; }
 
     // Full current config; only the 10 band weights vary per candidate.
     const allCats = [
@@ -2764,15 +3489,12 @@ export class SimUi {
       return segToAnchors(full);
     };
 
-    // Geometry samples: score each layout at geomCount Earth/Mars configurations,
-    // stepped from the current date by a golden-ratio fraction of the Earth–Mars
-    // synodic period — a low-discrepancy, non-resonant spacing that spreads both the
-    // relative separation and the absolute orientation across years (so the optimum
-    // doesn't overfit a single date). geomCount=1 → just the current date.
-    const startMs = (this.simMain?.simTime?.getDate?.() || new Date()).getTime();
-    const SYNODIC_DAYS = 779.94, STEP_DAYS = SYNODIC_DAYS * 0.6180339887; // golden ratio
-    const dates = [];
-    for (let g = 0; g < geomCount; g++) dates.push(new Date(startMs + g * STEP_DAYS * 86400000).toISOString());
+    // Geometry samples (shared with the sensitivity sweep via _buildGeometries):
+    // 'current' scores the live layout at the current sim date; 4/16 place Earth & Mars
+    // by geometry, decoupled from date, holding the relay satellites at FIXED_GEOM_DATE.
+    const currentDateIso = (this.simMain?.simTime?.getDate?.() || new Date()).toISOString();
+    const FIXED_GEOM_DATE = new Date(Date.UTC(2000, 0, 1)).toISOString(); // fixed satellite phase
+    const geometries = this._buildGeometries(geomCount);
 
     // Constellation size is independent of the band weights, so estimate worker
     // heap once for the memory-admission budget.
@@ -2781,8 +3503,15 @@ export class SimUi {
     const estMB = Math.max(20, estSats * 0.016);
 
     const requestedWorkers = parseInt(document.getElementById("band-solver-threads")?.value, 10) || 0;
-    const pool = new SensitivityPool(requestedWorkers || undefined);
+    const memPct = Math.max(10, Math.min(95, parseInt(document.getElementById("band-solver-mem")?.value, 10) || 60));
+    const pool = new SensitivityPool(requestedWorkers || undefined, { memBudgetPct: memPct });
     this._bandSolverPool = pool;
+    // Per-step batch = how many scenarios actually run AT ONCE: capped by BOTH the worker
+    // count and the memory budget (≈ memBudget / per-scenario heap). This keeps each SA
+    // step a single concurrent wave (no straggler sub-waits) and makes the eval count
+    // advance by exactly what ran — e.g. 22, not 30, when memory only fits 22 of 30 workers.
+    const memConcurrent = Math.max(1, Math.floor(pool.memBudgetMB / Math.max(1, estMB)));
+    const batchSize = Math.min(pool.size, memConcurrent);
 
     // Live progress: onProgress (fired between batches, when workers are briefly
     // idle) owns the metrics line; onActivity owns the worker count and renders it
@@ -2790,7 +3519,7 @@ export class SimUi {
     // momentary lull between batches.
     let active = 0;
     let lastLine = "Starting…";
-    const renderProgress = () => { prog.textContent = `${lastLine} · ${active}/${pool.size} workers`; };
+    const renderProgress = () => { if (prog) prog.textContent = `${lastLine} · ${active}/${pool.size} workers`; };
     pool.onActivity = ({ active: a }) => { active = a; renderProgress(); };
 
     let scenarioId = 0;
@@ -2803,12 +3532,14 @@ export class SimUi {
       const cfg = { ...baseConfig };
       // Rebuild each curve from its fixed seed + the free values in the search vector.
       for (const p of plan) cfg[p.key] = anchorsFor(p, weights);
-      const per = await Promise.all(dates.map((d) =>
+      const per = await Promise.all(geometries.map((g) =>
         pool.submit({
           scenarioId: scenarioId++,
           uiConfig: cfg,
-          simDate: d,
-          sizingDate: d,
+          simDate: g.current ? currentDateIso : FIXED_GEOM_DATE,
+          sizingDate: g.current ? currentDateIso : FIXED_GEOM_DATE,
+          earthAngleOffset: g.current ? null : g.earthOffset, // null → use the date's geometry (current)
+          marsAngleOffset: g.current ? null : g.marsOffset,
           maxIterations: 0,     // relay capacity/latency are independent of planet-ring sizing
           objectiveOnly: true,  // skip max-flow / cost — just the topology + routeSummary
         }, estMB).then((res) => {
@@ -2840,7 +3571,42 @@ export class SimUi {
       return { capacity, latency, violation };
     };
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=4.6");
+    // Live constellation preview: rebuild the main display from a weight vector (the SA's
+    // accepted state, or the seed for the initial conditions) so the user watches the layout
+    // evolve. Throttled, and WITHOUT mutating the stored curves — so if the run ends with no
+    // improvement we can restore the original view. `vizDirty` tracks whether we touched the
+    // display so the no-improvement branches know to rebuild back to the original. Works in
+    // both the manual optimizer and the optimized sweep (whose updateLoop stays live); it
+    // only queues the config — the reactive updateLoop renders it on the next frame.
+    let vizDirty = false, lastVizMs = 0, lastVizSig = "";
+    const VIZ_THROTTLE_MS = 500;
+    const previewAccepted = (weights, capacity) => {
+      if (!weights) return;
+      const sig = weights.map((w) => Math.round(w)).join(",");
+      if (sig === lastVizSig) return;                       // accepted state unchanged
+      const now = performance.now();
+      if (now - lastVizMs < VIZ_THROTTLE_MS) return;        // bound rebuild rate
+      lastVizMs = now; lastVizSig = sig;
+      const cfg = this.getGroupsConfig(allCats);
+      for (const p of plan) cfg[p.key] = anchorsFor(p, weights);
+      // Resize Earth/Mars worst-case throughput to match THIS solution's relay capacity
+      // BEFORE the rebuild, so the previewed planet rings aren't stale (auto mode only;
+      // 'off' leaves them as the user set). Preview-only — does not touch the sliders.
+      if (capacity > 0 && this._planetSizingMode() === "auto") {
+        const pm = this._planetRingMbps(capacity);
+        cfg["ring_earth.requiredmbpsbetweensats"] = pm;
+        cfg["ring_mars.requiredmbpsbetweensats"] = pm;
+      }
+      this.simMain.setSatellitesConfig(cfg);
+      vizDirty = true;
+    };
+
+    // Render the initial conditions immediately (ring/tech/curves may have just changed,
+    // e.g. a new sweep scenario) so the viz starts from the right layout, not the old one.
+    // Earth/Mars use their seeded values here; each accepted best then refines them below.
+    previewAccepted(initialWeights);
+
+    const { solveBandDistribution } = await import("./bandSolver.js?v=4.28");
     let result = null;
     try {
       result = await solveBandDistribution({
@@ -2849,28 +3615,45 @@ export class SimUi {
         shouldStop: () => this._bandSolverStop,
         maxEvals,
         alpha,
-        batchSize: Math.max(4, pool.size),
-        onProgress: ({ phase, metrics, evals, maxEvals, temperature }) => {
+        batchSize,
+        moveModes,
+        stepScale,
+        segments: plan.map((p) => ({ start: p.start, length: p.free.length, free: p.free })), // per-chart ranges (+ x-indices for same-x moves)
+        onBatch: (ws) => {
+          // Live "what's cooking" cloud: map each candidate's weight vector to per-curve
+          // anchors and push it as the faded batch overlay on every optimized chart.
+          for (const p of plan) this._curveSetOverlay?.[p.key]?.({ batch: ws.map((w) => anchorsFor(p, w)) });
+        },
+        onProgress: ({ phase, metrics, evals, maxEvals, temperature, currentWeights, bestWeights }) => {
           if (phase === "calibrating") { lastLine = `Calibrating · ${evals}/${maxEvals}`; }
           else {
             const m = metrics || {};
             lastLine = `${evals}/${maxEvals} · best ${fmtCap(m.capacity || 0)} / ${fmtLat(m.latency)} · T=${temperature.toFixed(2)}`;
           }
+          // Bold accepted-scenario line follows the SA chain's current (accepted) state.
+          if (currentWeights) for (const p of plan) this._curveSetOverlay?.[p.key]?.({ accepted: anchorsFor(p, currentWeights) });
+          // Live-rebuild the constellation from the BEST solution so the viz reflects each
+          // improvement (the dedup skips ticks where the best didn't change), resizing
+          // Earth/Mars to that solution's capacity first.
+          previewAccepted(bestWeights, metrics?.capacity);
           renderProgress();
         },
       });
     } catch (err) {
       console.error("[BandSolver] failed:", err);
-      prog.textContent = "Failed: " + (err?.message || err);
+      if (prog) prog.textContent = "Failed: " + (err?.message || err);
     } finally {
       pool.terminate();
       this._bandSolverPool = null;
       this._bandSolverRunning = false;
-      btn.disabled = false;
-      btn.textContent = "⚙ Optimize checked";
-      stopBtn.style.display = "none";
+      if (btn) { btn.disabled = false; btn.textContent = "⚙ Optimize checked"; }
+      if (stopBtn) stopBtn.style.display = "none";
     }
 
+    // The run is over — drop the live overlays (the base curve now carries the result).
+    for (const p of plan) this._curveSetOverlay?.[p.key]?.(null);
+
+    let applied = false;
     const infeasible = keepBetween && (result?.metrics?.violation || 0) > 0;
     if (result && !infeasible && result.score > result.baselineScore + 1e-9) {
       // Apply each curve's winning shape (fixed seed + optimized free parts) + rebuild.
@@ -2879,6 +3662,12 @@ export class SimUi {
         this._setCurve(p.key, anchors);
         this._curveRefresh?.[p.key]?.();
       }
+      applied = true;
+      // The optimized curves change the relay capacity → re-size Earth/Mars in-ring
+      // rate to half the new live capacity on the rebuild's links-ready (auto mode;
+      // no-op for 'off'). Arming here is what every other design change does. (The
+      // optimized sweep also writes Earth/Mars explicitly from the returned capacity.)
+      this._planetSizeArmed = true;
       this.simMain.setSatellitesConfig(this.getGroupsConfig(allCats));
       const b = result.baseline || {}, m = result.metrics || {};
       const baseFeasible = b.capacity > 0; // an infeasible (penalized) baseline → no meaningful % gain
@@ -2886,12 +3675,40 @@ export class SimUi {
       const latChange = baseFeasible && isFinite(b.latency) && b.latency > 0 && isFinite(m.latency) ? ((m.latency - b.latency) / b.latency) * 100 : null;
       const capStr = capGain != null ? `${fmtCap(m.capacity || 0)} (${capGain >= 0 ? "+" : ""}${capGain.toFixed(1)}%)` : `${fmtCap(m.capacity || 0)} (from infeasible start)`;
       const latStr = latChange != null ? ` · lat ${fmtLat(m.latency)} (${latChange >= 0 ? "+" : ""}${latChange.toFixed(1)}%)` : ` · lat ${fmtLat(m.latency)}`;
-      prog.textContent = `Applied · cap ${capStr}${latStr} · ${result.evals} evals.`;
+      if (prog) prog.textContent = `Applied · cap ${capStr}${latStr} · ${result.evals} evals.`;
+      // Offer a one-click revert to the pre-run curves (interactive mode only).
+      if (!silent && prog) {
+        const revertBtn = document.createElement("button");
+        revertBtn.id = "band-solver-revert";
+        revertBtn.type = "button";
+        revertBtn.className = "btn";
+        revertBtn.textContent = "↩ Revert to initial curves";
+        revertBtn.style.cssText = "margin-top:6px; font-size:12px; width:100%;";
+        revertBtn.addEventListener("click", () => {
+          for (const ic of initialCurves) {
+            this._setCurve(ic.key, ic.anchors);
+            this._curveRefresh?.[ic.key]?.();
+          }
+          this._planetSizeArmed = true; // capacity reverts too → re-size Earth/Mars to match
+          this.simMain.setSatellitesConfig(this.getGroupsConfig(allCats));
+          revertBtn.remove();
+          prog.textContent = "Reverted to initial curves.";
+        });
+        prog.parentNode.insertBefore(revertBtn, prog.nextSibling);
+      }
     } else if (infeasible) {
-      prog.textContent = `Couldn't keep all rings between the orbits (best layout still had ${result.metrics.violation} inside-Earth/outside-Mars sats) · kept current. Loosen the curves or uncheck the constraint.`;
+      if (prog) prog.textContent = `Couldn't keep all rings between the orbits (best layout still had ${result.metrics.violation} inside-Earth/outside-Mars sats) · kept current. Loosen the curves or uncheck the constraint.`;
     } else if (result) {
-      prog.textContent = `No improvement after ${result.evals} evals · kept current.`;
+      if (prog) prog.textContent = `No improvement after ${result.evals} evals · kept current.`;
     }
+    // The live preview may have left the display on the last accepted (non-winning) state;
+    // when we didn't commit a winner, rebuild from the unchanged stored curves to restore it.
+    if (vizDirty && !applied) this.simMain.setSatellitesConfig(this.getGroupsConfig(allCats));
+
+    // Headless callers (the optimized sweep) get the converged relay capacity so they
+    // can size Earth/Mars and capture metrics; falls back to the baseline if the search
+    // didn't improve (curves unchanged but capacity is still meaningful).
+    return { applied, capacity: result?.metrics?.capacity ?? result?.baseline?.capacity ?? 0 };
   }
 
   /**
@@ -2972,8 +3789,8 @@ export class SimUi {
         case "display.planet-orbits":
           this.simMain.setPlanetOrbits(newValue);
           break;
-        case "display.plane-nodes":
-          this.simMain.setPlaneNodes(newValue);
+        case "display.reference-lines":
+          this.simMain.setReferenceLines(newValue);
           break;
         case "display.geostationary-orbits":
           this.simMain.setGeostationaryOrbits(newValue);
@@ -3008,6 +3825,8 @@ export class SimUi {
         case "simulation.calctimeSec":
         case "simulation.solarExclusionDeg":
         case "simulation.interring-matcher":
+        case "simulation.route-continuity":
+        case "simulation.greedy-merge-swap-degrees":
         case "circular_rings.flow-solver":
         case "eccentric_rings.flow-solver":
         case "adapted_rings.flow-solver":
@@ -3018,7 +3837,14 @@ export class SimUi {
         case "relay_type.selected":
           // Show only the selected relay family's config section, then rebuild (the
           // shared ring count drives whichever family is active).
+          this._planetSizeArmed = true; // a design change → re-size Earth/Mars on next links-ready
           this.updateRelaySectionVisibility();
+        // falls through to the shared relay rebuild below
+        case "adapted_eccentric_rings.requiredmbpsbetweensats":
+          // Changing the adapted-eccentric in-ring worst-case rate shifts the relay
+          // capacity, so re-size Earth/Mars to half the new capacity on next links-ready
+          // (same trigger as a ring-count change).
+          this._planetSizeArmed = true;
         // falls through to the shared relay rebuild below
         case "ring_earth.match-circular-rings":
         case "ring_earth.side-extension-degrees-slider":
@@ -3033,11 +3859,12 @@ export class SimUi {
         case "circular_rings.inring-interring-bias-pct":
         case "circular_rings.earth-mars-orbit-inclination-pct":
         case "adapted_rings.laser-ports-per-satellite":
+        case "adapted_rings.lattice":
         case "adapted_rings.ringcount":
         case "adapted_rings.trim-rings":
         case "adapted_rings.auto_route_count":
         case "adapted_rings.route_count":
-        case "adapted_rings.linear_satcount_increase":
+        case "adapted_rings.satcount-density-routes":
         case "adapted_rings.earth-mars-raan-pct":
         case "adapted_rings.earth-mars-argperi-pct":
         case "adapted_rings.earth-mars-eccentricity-pct":
@@ -3066,7 +3893,6 @@ export class SimUi {
         case "adapted_eccentric_rings.laser-ports-per-satellite":
         case "adapted_eccentric_rings.cross-ring-links":
         case "adapted_eccentric_rings.ringcount":
-        case "adapted_eccentric_rings.requiredmbpsbetweensats":
         case "adapted_eccentric_rings.argument-of-perihelion":
         case "adapted_eccentric_rings.earth-side-clearance-x":
         case "adapted_eccentric_rings.mars-side-clearance-x":
@@ -3089,11 +3915,13 @@ export class SimUi {
           );
           break;
 
-        case "relay_type.requiredgbps":
-          // Throughput-driven design: size Earth/Mars rings + (concentric) the ring
-          // count or (eccentric) the in-ring rate. Those sub-slider writes each trigger
-          // the rebuild themselves. Standalone case (not in the fall-through chain above).
-          this.applyDesignFromThroughput(newValue);
+        case "relay_type.planet_sizing":
+          // Earth/Mars auto-size mode changed: relock/unlock the planet in-ring rows and
+          // re-size them against the live relay capacity (standalone — no rebuild here;
+          // runPlanetSizingStep's own slider writes trigger any needed rebuild).
+          this._updatePlanetSizingLock();
+          this._planetSizeArmed = true; // switching to auto → size against the current relay capacity
+          this.runPlanetSizingStep();
           break;
 
         case "economics.satellite-cost-slider":
@@ -3212,15 +4040,17 @@ export class SimUi {
   }
 
   // Density equalizer + per-`a` Earth↔Mars blend curves with their defaults. RAAN
-  // defaults flat at 100% (full Mars); inclination / arg-perigee / eccentricity
-  // default to a 0→100 ramp (Earth value at the Earth side, Mars value at the Mars
-  // side). A default may be a flat level (number) or a full anchor array.
+  // defaults flat at 100% (full Mars); inclination / eccentricity default to a 0→100
+  // ramp (Earth value at the Earth side, Mars value at the Mars side); arg-perigee
+  // ramps fast to 100% over the inner ~40% then holds. A default may be a flat level
+  // (number) or a full anchor array.
   static get ADAPTED_CURVES() {
     const RAMP = [{ x: 0, y: 0 }, { x: 1, y: 100 }];
+    const ARGPERI = [{ x: 0, y: 0 }, { x: 0.1, y: 45 }, { x: 0.2, y: 64 }, { x: 0.3, y: 84 }, { x: 0.4, y: 100 }, { x: 1, y: 100 }];
     return [
       ["adapted_rings.density-anchors", 50],
       ["adapted_rings.raan-curve", 100],
-      ["adapted_rings.argperi-curve", RAMP],
+      ["adapted_rings.argperi-curve", ARGPERI],
       ["adapted_rings.eccentricity-curve", RAMP],
       ["adapted_rings.inclination-curve", RAMP],
     ];
@@ -3385,6 +4215,10 @@ export class SimUi {
       });
     }
 
+    // The Fleet-link and Coverage cards are emitted as part of this panel;
+    // (re)create their distribution charts now that the canvases are in the DOM.
+    this.simMain?.makeFleetLinkCharts?.();
+    this.simMain?.makeCoverageCharts?.();
   }
 
   /**
