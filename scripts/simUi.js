@@ -2455,6 +2455,26 @@ export class SimUi {
       { label: "Cost", unit: "$M", get: (m) => +m.totalCostM },
       { label: "Cost / Mbps", unit: "$/Mbps", get: (m) => +m.costPerMbps },
     ];
+
+    // Laser-tech normalization. Saved configs were captured at whatever laser-tech
+    // improvement factor was active then; to compare them fairly we rescale every
+    // capacity (Gbps/Mbps) LINEARLY to a common tech level chosen by the slider below.
+    // The factor is 2^improvement-factor (see SimLinkBudget), so k = 2^(target − saved).
+    // Cost is fixed, so Cost/Mbps scales by 1/k. Only the charts use this normalized
+    // view; the saved-configs list keeps the actual values that were saved.
+    const NORM_KEY = "laser_technology.improvement-factor";
+    let normTechIF = parseFloat(this.sliders.laser_technology?.["improvement-factor"]?.value ?? this.slidersData.laser_technology?.["improvement-factor"]?.value);
+    if (!Number.isFinite(normTechIF)) normTechIF = 7;
+    const normalizeArr = (arr) => arr.map((e) => {
+      const m = e.metrics || {};
+      const savedIF = parseFloat(e.config?.sliders?.[NORM_KEY]);
+      if (!Number.isFinite(savedIF)) return e; // legacy entry w/o tech factor — leave as saved
+      const k = Math.pow(2, normTechIF - savedIF);
+      if (k === 1) return e;
+      const gbps = Number.isFinite(+m.gbps) ? +m.gbps * k : m.gbps;
+      const costPerMbps = Number.isFinite(+m.costPerMbps) ? +m.costPerMbps / k : m.costPerMbps;
+      return { ...e, metrics: { ...m, gbps, costPerMbps } };
+    });
     const buildChart = (arr, metric, xm) => {
       const pts = arr.map((e) => { const m = e.metrics || {}; return { x: xm.get(m), y: metric.get(m), ecc: ECC(m.relayType), rc: +m.ringCount, name: e.name }; })
         .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y) && p.x > 0);
@@ -2498,7 +2518,7 @@ export class SimUi {
     const chartsWrap = document.createElement("div");
     chartsWrap.style.cssText = "display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:10px;";
     const renderCharts = () => {
-      const arr = load();
+      const arr = normalizeArr(load());
       const xm = X_MODES[xMode] || X_MODES.ring;
       // Reflect the eccentric ring-count span in the legend's gradient labels.
       const eccRings = arr.filter((e) => ECC((e.metrics || {}).relayType)).map((e) => +(e.metrics || {}).ringCount).filter(Number.isFinite);
@@ -2524,7 +2544,7 @@ export class SimUi {
     const costVsMbpsWrap = document.createElement("div");
     costVsMbpsWrap.style.cssText = "display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:10px;";
     const renderCostVsMbps = () => {
-      const arr = load();
+      const arr = normalizeArr(load());
       costVsMbpsWrap.innerHTML = "";
       const card = document.createElement("div");
       card.style.cssText = "border:1px solid var(--border-2,#333); border-radius:8px; padding:6px 8px;";
@@ -2641,7 +2661,25 @@ export class SimUi {
       xToggle.appendChild(b);
     }
 
-    wrap.append(saveBtn, copyBtn, chartsLabel, xToggle, legend, chartsWrap, mkLabel("Cost vs capacity"), costVsMbpsWrap, mkLabel("Saved configs"), listEl);
+    // Laser-tech normalization slider — sits beside the x-axis toggle. Moving it
+    // rescales every Gbps/Mbps-bearing chart to the chosen tech level (linear in
+    // capacity); the saved-configs list below stays at the saved values.
+    const techRow = document.createElement("div");
+    techRow.className = "muted";
+    techRow.style.cssText = "font-size:11px; display:flex; gap:8px; align-items:center;";
+    const techVal = document.createElement("span");
+    techVal.style.cssText = "font-variant-numeric:tabular-nums; min-width:46px;";
+    const techSlider = document.createElement("input");
+    techSlider.type = "range"; techSlider.min = "0"; techSlider.max = "20"; techSlider.step = "1";
+    techSlider.value = String(normTechIF);
+    techSlider.style.cssText = "flex:1; max-width:200px;";
+    const fmtMult = (v) => { const f = Math.pow(2, v); return f >= 1000 ? `${+(f / 1000).toFixed(f >= 10000 ? 0 : 1)}k×` : `${f}×`; };
+    const updTech = () => { techVal.textContent = `${fmtMult(normTechIF)} (2^${normTechIF})`; };
+    techSlider.addEventListener("input", () => { normTechIF = parseFloat(techSlider.value) || 0; updTech(); renderCharts(); renderCostVsMbps(); });
+    techRow.append(document.createTextNode("normalize to laser tech:"), techSlider, techVal);
+    updTech();
+
+    wrap.append(saveBtn, copyBtn, chartsLabel, xToggle, techRow, legend, chartsWrap, mkLabel("Cost vs capacity"), costVsMbpsWrap, mkLabel("Saved configs"), listEl);
     host.appendChild(wrap);
     setXMode(xMode);
     renderAll();
