@@ -1,6 +1,6 @@
 // slidersData.js
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.28";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.31";
 
 export const slidersData = {
   display: {
@@ -208,8 +208,8 @@ export const slidersData = {
       type: "radio",
       label: "Inter-ring matcher",
       description:
-        "Algorithm pairing inner-ring sats with outer-ring sats for the concentric relay families' radial backbone. Kept selectable for comparison. linear-merge = current (forward-only merge); monotonic-wrap = forward pointer with wraparound; greedy-nearest = original shortest-distance greedy (can emit long cross-route links); greedy-merge = greedy-nearest plus an island-merge repair — an augmenting-path pass that shifts the routes between an inner-rooted partial (stalagmite) and an outer-rooted partial (stalactite) so they meet into a complete Earth→Mars route, maximising the complete-route count while preserving greedy's existing routes; periapsis-chain / periapsis-radial = seed route at the Mars-periapsis angle then a parallel neighbour sweep using every satellite — the seed hop picks the nearest sat to the previous sat (chain) or to the periapsis angle itself (radial); max-throughput = pools all rings (routes may skip rings) and greedily packs the fattest node-disjoint Earth→Mars routes first to maximise aggregate Gbps (Σ capacity of each route's longest segment); logs its realised total vs. a max-flow upper bound to the console.",
-      options: ["linear-merge", "monotonic-wrap", "greedy-nearest", "greedy-merge", "periapsis-chain", "periapsis-radial", "max-throughput"],
+        "Algorithm pairing inner-ring sats with outer-ring sats for the concentric relay families' radial backbone. Kept selectable for comparison. linear-merge = current (forward-only merge); monotonic-wrap = forward pointer with wraparound; greedy-nearest = original shortest-distance greedy (can emit long cross-route links); greedy-pairs = greedy-nearest restructured into independent per-ring-pair units (each inner sat takes the 3 sun-angle-nearest outer sats, scored by true 3D distance, greedily assigned per pair; no departure tilt or inline continuity — the route-continuity post-pass handles that). Built to be farmed one-pair-per-worker later; runs as a sequential loop for now; greedy-merge = greedy-nearest plus an island-merge repair — an augmenting-path pass that shifts the routes between an inner-rooted partial (stalagmite) and an outer-rooted partial (stalactite) so they meet into a complete Earth→Mars route, maximising the complete-route count while preserving greedy's existing routes; periapsis-chain / periapsis-radial = seed route at the Mars-periapsis angle then a parallel neighbour sweep using every satellite — the seed hop picks the nearest sat to the previous sat (chain) or to the periapsis angle itself (radial); max-throughput = pools all rings (routes may skip rings) and greedily packs the fattest node-disjoint Earth→Mars routes first to maximise aggregate Gbps (Σ capacity of each route's longest segment); logs its realised total vs. a max-flow upper bound to the console.",
+      options: ["linear-merge", "monotonic-wrap", "greedy-nearest", "greedy-pairs", "greedy-merge", "periapsis-chain", "periapsis-radial", "max-throughput"],
       value: "linear-merge",
       unit: "",
       updateLongTermScore: true,
@@ -325,7 +325,18 @@ export const slidersData = {
     },
     "solar-cost-per-kw": {
       label: "Solar cost",
-      description: "Satellite solar-array cost per kW of power. Space-grade arrays ~$0.1–0.5M/kW.",
+      description: "Satellite solar-array cost per kW of power, priced at Earth's aphelion and scaled by (apoapsis/Earth-aphelion)² — a ring sized for lower flux (farther aphelion) needs a bigger, costlier array. Space-grade arrays ~$0.1–0.5M/kW.",
+      min: 0,
+      max: 5,
+      value: 0.1,
+      step: 0.05,
+      unit: "m$/kW",
+      scale: "linear",
+      updateLongTermScore: false,
+    },
+    "radiator-cost-per-kw": {
+      label: "Radiator cost",
+      description: "Satellite thermal-radiator cost per kW of power, priced at Earth's aphelion and scaled by (Earth-aphelion/perihelion)² — a ring that swings closer to the Sun (smaller perihelion) rejects more heat and needs a bigger radiator. With the solar term this charges the eccentric dual-thermal premium (aphelion-sized array AND perihelion-sized radiator) as launch-independent hardware. ~$0.1M/kW.",
       min: 0,
       max: 5,
       value: 0.1,
@@ -446,11 +457,11 @@ export const slidersData = {
     selected: {
       label: "Relay ring type",
       type: "radio",
-      options: ["Adapted concentric", "Adapted eccentric", "Circular", "Eccentric"],
-      value: "Adapted concentric",
+      options: ["Contoured concentric", "Contoured eccentric", "Circular", "Eccentric"],
+      value: "Contoured concentric",
       optionDescriptions: {
-        "Adapted concentric": "Nested rings between Earth and Mars; relay traffic crosses radially ring-to-ring. The ring count sets the relay capacity.",
-        "Adapted eccentric": "Ellipses tangent to both planet orbits; each ring relays Earth→Mars along its azimuthal loop. The ring count (with the in-ring rate) sets the relay capacity.",
+        "Contoured concentric": "Nested rings between Earth and Mars; relay traffic crosses radially ring-to-ring. The ring count sets the relay capacity.",
+        "Contoured eccentric": "Ellipses tangent to both planet orbits; each ring relays Earth→Mars along its azimuthal loop. The ring count (with the in-ring rate) sets the relay capacity.",
         "Circular": "Plain concentric circular rings; relay traffic crosses radially ring-to-ring. The ring count sets the relay capacity.",
         "Eccentric": "Plain eccentric ellipses; relay traffic runs along each ring's azimuthal loop. The ring count (with the in-ring rate) sets the relay capacity.",
       },
@@ -727,25 +738,43 @@ export const slidersData = {
     },
   },
   adapted_rings: {
-    "laser-ports-per-satellite": {
-      label: "Laser Terminals per Satellite",
-      min: 2,
-      max: 10,
-      value: 5,
-      step: 1,
-      unit: " ports",
-      scale: "linear",
-      updateLongTermScore: true,
+    "terminals-header": {
+      type: "header",
+      label: "Laser terminals",
+      description:
+        "Per-satellite laser terminal budget: a fixed radial backbone, the circular lattice, and extra terminals for in-transit spacecraft.",
+    },
+    "radial-terminals": {
+      type: "computed",
+      label: "Radial links",
+      compute: () => "2",
     },
     lattice: {
       type: "radio",
       label: "Circular lattice",
       description:
-        "How many laser terminals each satellite spends on intra-ring (azimuthal) links, on top of the radial backbone. None = all spare terminals go to spacecraft access; Half = one circular link per sat (a matching); Full = a complete azimuthal ring (two links). Lowering it frees terminals for spacecraft to attach to.",
+        "How many laser terminals each satellite spends on intra-ring (azimuthal) links, on top of the 2 radial backbone terminals. None = 0 terminals (all spare go to spacecraft access); Half = 1 terminal (a matching); Full = 2 terminals (a complete azimuthal ring). Lowering it frees terminals for spacecraft to attach to.",
       options: ["No circular connections", "Half lattice (1 laser terminal)", "Full lattice (2 laser terminals)"],
       value: "Full lattice (2 laser terminals)",
       unit: "",
       updateLongTermScore: true,
+    },
+    "extra-terminals": {
+      label: "Extra terminals (spacecraft in transit)",
+      description:
+        "Additional laser terminals beyond the radial backbone and circular lattice, available for linking to in-transit spacecraft. Total terminals per satellite = 2 radial + lattice + these.",
+      min: 0,
+      max: 8,
+      value: 1,
+      step: 1,
+      unit: " ports",
+      scale: "linear",
+      updateLongTermScore: true,
+    },
+    "total-terminals": {
+      type: "computed",
+      label: "Total laser terminals",
+      compute: (ui) => String(ui._adaptedTerminalTotal("adapted_rings")),
     },
     "flow-solver": {
       type: "radio",
@@ -1006,15 +1035,38 @@ export const slidersData = {
     },
   },
   adapted_eccentric_rings: {
-    "laser-ports-per-satellite": {
-      label: "Laser Terminals per Satellite",
-      min: 2,
-      max: 10,
-      value: 4,
+    "terminals-header": {
+      type: "header",
+      label: "Laser terminals",
+      description:
+        "Per-satellite laser terminal budget: in-ring neighbour links, the junction link to a planetary ring, and extra terminals for in-transit spacecraft.",
+    },
+    "inring-terminals": {
+      type: "computed",
+      label: "In-ring links",
+      compute: () => "2",
+    },
+    "junction-terminals": {
+      type: "computed",
+      label: "Junction (planetary-ring link)",
+      compute: () => "1",
+    },
+    "extra-terminals": {
+      label: "Extra terminals (spacecraft in transit)",
+      description:
+        "Additional laser terminals beyond the 2 in-ring and 1 junction terminals, available for linking to in-transit spacecraft. Total terminals per satellite = 2 in-ring + 1 junction + these.",
+      min: 0,
+      max: 8,
+      value: 1,
       step: 1,
       unit: " ports",
       scale: "linear",
       updateLongTermScore: true,
+    },
+    "total-terminals": {
+      type: "computed",
+      label: "Total laser terminals",
+      compute: (ui) => String(ui._adaptedTerminalTotal("adapted_eccentric_rings")),
     },
     "flow-solver": {
       type: "radio",
@@ -1029,7 +1081,7 @@ export const slidersData = {
       type: "radio",
       label: "Cross-ring links",
       description:
-        "Where two rings cross in the ecliptic (xy) plane, link the nearest satellite on each ring using its spare radial laser terminal (the 3rd laser, after the two in-ring neighbour links). Adds a shortcut between rings at every crossing.",
+        "Where two eccentric rings cross in the ecliptic (xy) plane, link the nearest satellite on each ring. This reuses the junction terminal (no extra terminal needed): the junction link is always present (otherwise the rings are islanded), and this toggles whether it also forms ring-to-ring shortcuts at every crossing.",
       options: ["yes", "no"],
       value: "yes",
       unit: "",

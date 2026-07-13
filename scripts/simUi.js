@@ -1,10 +1,11 @@
 // simUi.js
-import { slidersData } from "./slidersData.js?v=4.28";
-import { LukashianClock } from "./lukashianTime.js?v=4.28";
-import { wireAuthUi } from "./auth.js?v=4.28";
-import { SensitivityPool } from "./sensitivityPool.js?v=4.28";
-import { minOf } from "./simMath.js?v=4.28";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.28";
+import { slidersData } from "./slidersData.js?v=4.31";
+import { LukashianClock } from "./lukashianTime.js?v=4.31";
+import { wireAuthUi } from "./auth.js?v=4.31";
+import { SensitivityPool } from "./sensitivityPool.js?v=4.31";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.31";
+import { minOf } from "./simMath.js?v=4.31";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.31";
 
 export class SimUi {
   constructor(simMain) {
@@ -323,6 +324,7 @@ export class SimUi {
         simplePane.hidden = mode !== "simple";
         configurePane.hidden = mode !== "configure";
         sensitivityPane.hidden = mode !== "sensitivity";
+        if (mode === "sensitivity") this._updateSensRouteGrey();
         if (archivePane) archivePane.hidden = mode !== "archive";
         // The expand mode is sensitivity-only; collapse the drawer for other panes.
         if (mode !== "sensitivity") {
@@ -852,6 +854,69 @@ export class SimUi {
     return routeCount * perRouteMbps;
   }
 
+  /**
+   * Metadata for the sensitivity panel's SECOND sweep axis, which adapts to the
+   * active relay family:
+   *   • Contoured concentric → "Route count"  (adapted_rings.route_count)
+   *   • Contoured eccentric  → "Throughput in ring (worst case)"
+   *                          (adapted_eccentric_rings.requiredmbpsbetweensats)
+   * Other families have no swept second parameter (axis greyed).
+   */
+  _sensSecondAxis() {
+    const t = this.getSelectedRelayType?.();
+    if (t === "Contoured eccentric") {
+      return {
+        kind: "throughput",
+        applyKey: "adapted_eccentric_rings.requiredmbpsbetweensats",
+        label: "Throughput in ring (worst case)",
+        prefix: "Mbps ",
+        unit: "Mbps",
+      };
+    }
+    return {
+      kind: "routes",
+      applyKey: "adapted_rings.route_count",
+      label: "Route count",
+      prefix: "Routes ",
+      unit: "routes",
+    };
+  }
+
+  /** Is the sensitivity second-axis a no-op? Route count (concentric) is only directly
+   *  settable when Auto Route Count = no; the eccentric throughput is always settable;
+   *  every other family leaves this axis inert. */
+  _sensRouteGreyed() {
+    const t = this.getSelectedRelayType?.();
+    if (t === "Contoured eccentric") return false;
+    if (t === "Contoured concentric") {
+      const auto = this.slidersData.adapted_rings?.auto_route_count?.value || "yes";
+      return auto !== "no";
+    }
+    return true;
+  }
+
+  /** Relabel + grey (disable + dim) the sensitivity second-axis block to match the
+   *  active relay family. */
+  _updateSensRouteGrey() {
+    const grp = document.getElementById("sens-route-group");
+    if (!grp) return;
+    const ax = this._sensSecondAxis();
+    const labelEl = document.getElementById("sens-route-label");
+    const unitEl = document.getElementById("sens-route-unit");
+    if (labelEl) labelEl.textContent = ax.label;
+    if (unitEl) unitEl.textContent = ax.unit;
+    const greyed = this._sensRouteGreyed();
+    grp.style.opacity = greyed ? "0.4" : "";
+    grp.style.pointerEvents = greyed ? "none" : "";
+    const cb = document.getElementById("sens-route-enable");
+    if (cb) cb.disabled = greyed;
+    const note = document.getElementById("sens-route-note");
+    if (note) note.textContent = !greyed ? ""
+      : this.getSelectedRelayType?.() === "Contoured concentric"
+        ? "Route count is auto-derived — set Auto Route Count to ‘no’ (manual) in the concentric section to sweep it."
+        : "This axis applies to the Contoured concentric (route count) and Contoured eccentric (in-ring throughput) families.";
+  }
+
   applySimpleDefaults(ringCount, options = {}) {
     const selKey = SimUi.RELAY_TYPE_SECTIONS[this.getSelectedRelayType()] || "adapted_rings";
 
@@ -870,7 +935,7 @@ export class SimUi {
       "relay_type.ringcount": ringCount,
       // Adapted-concentric tuning (only consumed when that family is the active one).
       "adapted_rings.auto_route_count": "yes",
-      "adapted_rings.laser-ports-per-satellite": 5,
+      "adapted_rings.extra-terminals": 1,
       "adapted_rings.satcount-density-routes": 100,
       // Earth ring — sized to match relay capacity
       "ring_earth.laser-ports-per-satellite": 3,
@@ -975,6 +1040,53 @@ export class SimUi {
       else { for (let t = s; t <= e; t += linStep) vals.push(t); }
       return vals.length ? vals : [null];
     };
+    // Route-count sweep. Disabled unless the concentric family is active with Auto Route
+    // Count = no (manual) — otherwise the route count is auto-derived from ring count.
+    const buildRouteValues = () => {
+      const cb = document.getElementById("sens-route-enable");
+      if (!cb || !cb.checked || this._sensRouteGreyed()) return [null];
+      const s = parseInt(document.getElementById("sens-route-start").value);
+      const e = parseInt(document.getElementById("sens-route-end").value);
+      const step = parseInt(document.getElementById("sens-route-step").value) || 1;
+      const vals = [];
+      for (let r = s; r <= e; r += step) vals.push(r);
+      return vals.length ? vals : [null];
+    };
+    // Write a swept slider value WITHOUT the interactive slider's max clamping it. The
+    // sweep legitimately explores values beyond the manual range (e.g. multi-Gbps in-ring
+    // rates above the 999 Mbps slider max), but range inputs clamp .value to their `max`
+    // attribute — so lift `max` first. Originals are restored when the run finishes
+    // (this._sensWidenedMaxes, drained in the restore/finally block).
+    const setSweptSlider = (fullId, v) => {
+      const [sec, id] = fullId.split(".");
+      const input = this.sliders[sec]?.[id];
+      if (input && input.max !== "" && Number.isFinite(+input.max) && +v > +input.max) {
+        if (!this._sensWidenedMaxes) this._sensWidenedMaxes = new Map();
+        if (!this._sensWidenedMaxes.has(input)) this._sensWidenedMaxes.set(input, input.max);
+        input.max = String(v);
+      }
+      this.applySliderValues({ [fullId]: v });
+    };
+    // The second sweep axis means route count (concentric) or in-ring worst-case
+    // throughput (eccentric) — see _sensSecondAxis. The two families need the value
+    // applied at different points relative to applySimpleDefaults:
+    //   • throughput: BEFORE — applySimpleDefaults seeds the Earth/Mars rings from the
+    //     relay capacity, which for eccentric is derived from this in-ring rate.
+    //   • route count: AFTER — applySimpleDefaults forces auto_route_count = yes, so we
+    //     re-set it to manual and write the count.
+    const applySecondAxisPre = (v) => {
+      if (v == null) return;
+      const ax = this._sensSecondAxis();
+      if (ax.kind === "throughput") setSweptSlider(ax.applyKey, v);
+    };
+    const applySecondAxisPost = (v) => {
+      if (v == null) return;
+      const ax = this._sensSecondAxis();
+      if (ax.kind === "routes") {
+        this.applySliderValues({ "adapted_rings.auto_route_count": "no" });
+        setSweptSlider("adapted_rings.route_count", v);
+      }
+    };
     const currentDateIso = () => {
       const d = this.simMain?.simTime?.getDate?.();
       return d ? d.toISOString() : new Date(Date.UTC(2030, 0, 1)).toISOString();
@@ -1002,11 +1114,24 @@ export class SimUi {
     // The placement dimension is a real swept axis only in the geometry modes (>1 sample);
     // "current" is a single fixed point. Drives chart dims + the "Fixed:" label.
     const placementIsDim = () => geomModeVal() !== "current";
+    // Per-scenario max-flow time budget (ms), from the panel field. Scenarios whose solve
+    // exceeds it are reported as flow gaps (not 0). Separate from the live view's
+    // "Allowed flow calc time" (simulation.calctimeSec). 0 = no limit (run the solve to
+    // completion, like the live sim — may take very long / never finish; pair with Main
+    // thread). Defaults to 20 s if the field is blank/invalid.
+    const flowBudgetMs = () => {
+      const v = parseFloat(document.getElementById("sens-flow-budget")?.value);
+      if (v === 0) return Infinity; // no timeout — grind to completion
+      return Number.isFinite(v) && v > 0 ? Math.round(v * 1000) : 20000;
+    };
     let placementAxisLabel = "Date"; // set per run; "Geometry" in geometry modes
+    // The second sweep axis's display metadata (route count vs in-ring throughput),
+    // captured at run start; used for chart labels/titles. See _sensSecondAxis.
+    let secondAxisMeta = this._sensSecondAxis();
 
     // --- Estimate display (iteration count + time) ---
     const updateEstimate = () => {
-      const total = buildRingValues().length * buildTechValues().length * buildPlacements().length;
+      const total = buildRingValues().length * buildTechValues().length * buildRouteValues().length * buildPlacements().length;
       const optimized = (this._sensMode || "simple") === "optimized";
       const wt = this.simMain?.lastWorkerTimings;
       const perIterMs = wt?.totalMs || wt?.links || 0;
@@ -1072,6 +1197,20 @@ export class SimUi {
       updateEstimate();
     };
     for (const b of modeBtns) b.addEventListener("click", () => { this._sensMode = b.dataset.mode; syncMode(); });
+
+    // --- Execution location toggle (Simple mode): Worker pool vs Main thread ---
+    this._sensExec = this._sensExec || "worker";
+    const execBtns = [...document.querySelectorAll(".sens-exec-btn")];
+    const workerCountRow = document.getElementById("sens-worker-count-row");
+    const mainOpts = document.getElementById("sens-main-opts");
+    const syncExec = () => {
+      const main = this._sensExec === "main";
+      for (const b of execBtns) b.classList.toggle("active", b.dataset.exec === this._sensExec);
+      if (workerCountRow) workerCountRow.style.display = main ? "none" : "";
+      if (mainOpts) mainOpts.style.display = main ? "" : "none";
+    };
+    for (const b of execBtns) b.addEventListener("click", () => { this._sensExec = b.dataset.exec; syncExec(); });
+    syncExec();
 
     // --- Geometry explainer popover (ⓘ): renders what the selected mode samples,
     //     and re-renders live when the mode changes while open. ---
@@ -1189,8 +1328,8 @@ export class SimUi {
         for (const sv of seriesValues) {
           for (const tv of thirdValues) {
             let label = "";
-            if (sv != null) label += `${seriesDim === "tech" ? "Tech " : seriesDim === "date" ? "" : "Rings "}${sv}`;
-            if (tv != null) label += `${label ? " / " : ""}${thirdDim === "tech" ? "Tech " : thirdDim === "date" ? "" : "Rings "}${tv}`;
+            if (sv != null) label += `${seriesDim === "tech" ? "Tech " : seriesDim === "date" ? "" : seriesDim === "routes" ? secondAxisMeta.prefix : "Rings "}${sv}`;
+            if (tv != null) label += `${label ? " / " : ""}${thirdDim === "tech" ? "Tech " : thirdDim === "date" ? "" : thirdDim === "routes" ? secondAxisMeta.prefix : "Rings "}${tv}`;
             if (!label) label = titleFallback;
             ds.push({
               label,
@@ -1255,8 +1394,8 @@ export class SimUi {
         for (const sv of seriesValues) {
           for (const tv of thirdValues) {
             let label = "";
-            if (sv != null) label += `${seriesDim === "tech" ? "Tech " : seriesDim === "date" ? "" : "Rings "}${sv}`;
-            if (tv != null) label += `${label ? " / " : ""}${thirdDim === "tech" ? "Tech " : thirdDim === "date" ? "" : "Rings "}${tv}`;
+            if (sv != null) label += `${seriesDim === "tech" ? "Tech " : seriesDim === "date" ? "" : seriesDim === "routes" ? secondAxisMeta.prefix : "Rings "}${sv}`;
+            if (tv != null) label += `${label ? " / " : ""}${thirdDim === "tech" ? "Tech " : thirdDim === "date" ? "" : thirdDim === "routes" ? secondAxisMeta.prefix : "Rings "}${tv}`;
             if (!label) label = cfg.title;
             datasets.push({
               label,
@@ -1285,7 +1424,7 @@ export class SimUi {
             layout: { padding: { top: 4, right: 4, bottom: 0, left: 0 } },
             scales: {
               x: {
-                title: { display: true, text: xDim === "rings" ? "Relay rings" : xDim === "tech" ? "Laser tech" : placementAxisLabel, color: textMuted, font: { size: 10 } },
+                title: { display: true, text: xDim === "rings" ? "Relay rings" : xDim === "tech" ? "Laser tech" : xDim === "routes" ? secondAxisMeta.label : placementAxisLabel, color: textMuted, font: { size: 10 } },
                 ticks: { color: textDim, font: { size: 9 }, maxRotation: 45, autoSkip: true, maxTicksLimit: 12 },
                 grid: { display: false },
                 border: { color: gridColor },
@@ -1307,7 +1446,7 @@ export class SimUi {
                 titleFont: { size: 11 }, bodyFont: { size: 11 }, padding: 8,
                 callbacks: {
                   title: (items) => {
-                    const xName = xDim === "rings" ? "Relay rings" : xDim === "tech" ? "Laser tech" : placementAxisLabel;
+                    const xName = xDim === "rings" ? "Relay rings" : xDim === "tech" ? "Laser tech" : xDim === "routes" ? secondAxisMeta.label : placementAxisLabel;
                     return items.length ? `${xName}: ${items[0].label}` : "";
                   },
                   label: (ctx) => {
@@ -1340,7 +1479,7 @@ export class SimUi {
      *                              cost, cpf, latMin, latP50 } (raw, pre-scale)
      */
     const dimVal = (dim, scenario) =>
-      dim === "rings" ? scenario.ringCount : dim === "tech" ? scenario.laserTechImprovement : scenario.launchDate;
+      dim === "rings" ? scenario.ringCount : dim === "tech" ? scenario.laserTechImprovement : dim === "routes" ? scenario.routeCount : scenario.launchDate;
     const matchesSeries = (chart, ds, scenario) =>
       (chart._seriesDim == null || String(ds._seriesVal) === String(dimVal(chart._seriesDim, scenario))) &&
       (chart._thirdDim == null || String(ds._thirdVal) === String(dimVal(chart._thirdDim, scenario)));
@@ -1404,11 +1543,16 @@ export class SimUi {
         // mode is serial and SHOULD render — the user watches the layout evolve per scenario
         // (initial conditions + each accepted SA solution), so leave the loop live.
         this.simMain._sensitivityRunning = !optimizedMode;
+        secondAxisMeta = this._sensSecondAxis(); // relay family fixed for the run
+        const flowMs = flowBudgetMs(); // per-scenario max-flow budget, fixed for the run
         const ringValues = buildRingValues();
         const techValues = buildTechValues();
+        const routeValues = buildRouteValues();
+        const routeEnabled = routeValues[0] != null;
         const placements = buildPlacements();
-        const totalScenarios = ringValues.length * techValues.length * placements.length;
+        const totalScenarios = ringValues.length * techValues.length * routeValues.length * placements.length;
         let completed = 0;
+        let flowTimeouts = 0; // scenarios whose max-flow solve exceeded the time budget (plotted as gaps)
         console.log(`[Sensitivity] START (${this._sensMode}): ${totalScenarios} scenarios, rings=[${ringValues}], tech=[${techValues}], placements=[${placements.map((p) => p.label)}]`);
 
         // Build chart dimension info. The placement axis ("date") carries either date
@@ -1416,6 +1560,7 @@ export class SimUi {
         const enabledDims = [];
         const dimValues = {};
         if (ringEnabled) { enabledDims.push("rings"); dimValues.rings = ringValues.filter(v => v != null); }
+        if (routeEnabled) { enabledDims.push("routes"); dimValues.routes = routeValues.filter(v => v != null); }
         if (techEnabled) { enabledDims.push("tech"); dimValues.tech = techValues.filter(v => v != null); }
         if (placementEnabled) { enabledDims.push("date"); dimValues.date = placements.map((p) => p.label); }
         // If no dims enabled, use rings as a single-point x-axis
@@ -1472,7 +1617,7 @@ export class SimUi {
 
         // Post-process a worker scenario result into chart metrics (shared by both
         // the parallel and serial paths). Returns { scenario, metrics }.
-        const buildScenarioMetrics = (res, ringCount, techUserVal, dateStr) => {
+        const buildScenarioMetrics = (res, ringCount, techUserVal, dateStr, routeCount) => {
           const costs = this.simMain.calculateCosts(res.maxFlowGbps, res.resultTreesData || []);
           const capacityInfo = res.capacityInfo;
           const rs = res.routeSummary;
@@ -1492,7 +1637,9 @@ export class SimUi {
           const metrics = {
             sats: res.satellitesCount,
             earthSats, relaySats, marsSats,
-            flow: (res.maxFlowGbps ?? 0) * 1000,
+            // A timed-out max-flow solve (too large to solve in the budget) is unknown, not
+            // zero — emit null so the chart shows a gap instead of a misleading drop to 0.
+            flow: res.flowError ? null : (res.maxFlowGbps ?? 0) * 1000,
             earthFlow: ringMin("ring_earth"),
             marsFlow: ringMin("ring_mars"),
             relayFlow: rs?.totalThroughput ?? null,
@@ -1504,6 +1651,7 @@ export class SimUi {
           const scenario = {
             ringCount: ringCount ?? "(current)",
             laserTechImprovement: techUserVal ?? "(current)",
+            routeCount: routeCount ?? "(current)",
             launchDate: dateStr,
             satellites: res.satellitesCount,
           };
@@ -1532,24 +1680,124 @@ export class SimUi {
           // Generate every scenario's uiConfig synchronously, in a stable nested
           // order so simLinkBudget (tech) evolves deterministically and the seed
           // requiredmbps values are reproducible. No topology here.
+          // Whether to drop each scenario's result into the config archive (same
+          // checkbox as optimized mode). The live UI is mutated per scenario here
+          // during generation, then restored afterwards — so the archive config
+          // snapshot + relay type must be captured NOW, not in the async callback.
+          const doArchive = document.getElementById("opt-archive")?.checked !== false;
           const scenarios = [];
           let scenarioId = 0;
           for (const techUserVal of techValues) {
             for (const ringCount of ringValues) {
-              if (ringCount != null) this.applySimpleDefaults(ringCount);
-              if (techUserVal != null) {
-                const techInternal = Math.round(Math.log2(techUserVal));
-                this.applySliderValues({ "laser_technology.improvement-factor": techInternal });
-              }
-              const scenarioConfig = this.getGroupsConfig(allCats);
-              scenarioConfig["simulation.calctimeSec"] = 100;
-              const estMB = estMBfor(scenarioConfig);
-              for (const placement of placements) {
-                scenarios.push({ scenarioId: scenarioId++, ringCount, techUserVal, placement, uiConfig: scenarioConfig, estMB });
+              for (const routeCount of routeValues) {
+                // Throughput axis (eccentric): set BEFORE seeding so the Earth/Mars rings
+                // size to half this scenario's relay capacity.
+                applySecondAxisPre(routeCount);
+                if (ringCount != null) this.applySimpleDefaults(ringCount);
+                if (techUserVal != null) {
+                  const techInternal = Math.round(Math.log2(techUserVal));
+                  this.applySliderValues({ "laser_technology.improvement-factor": techInternal });
+                }
+                // Route-count axis (concentric): applySimpleDefaults reset auto_route_count.
+                applySecondAxisPost(routeCount);
+                const scenarioConfig = this.getGroupsConfig(allCats);
+                scenarioConfig["simulation.calctimeSec"] = 100;
+                const estMB = estMBfor(scenarioConfig);
+                // Snapshot the live config (sliders + curves), relay type and resolved
+                // ring count for this (tech, ring, route) combo — shared across placements.
+                const archiveConfig = doArchive ? (this._archiveSnapshotConfig?.() || {}) : null;
+                const archiveRelayType = doArchive ? this.getSelectedRelayType() : null;
+                const resolvedRingCount = typeof ringCount === "number" ? ringCount : (parseFloat(this.sliders.relay_type?.ringcount?.value) || 0);
+                for (const placement of placements) {
+                  scenarios.push({ scenarioId: scenarioId++, ringCount, techUserVal, routeCount, placement, uiConfig: scenarioConfig, estMB, archiveConfig, archiveRelayType, resolvedRingCount });
+                }
               }
             }
           }
 
+          // Record one finished scenario into the charts + archive. Shared by the worker
+          // pool and the in-process Main-thread path; does not touch progress counters.
+          const recordScenarioResult = (res, s) => {
+            if (res.flowError) flowTimeouts++;
+            const { scenario, metrics, costs, capacityInfo, rs } = buildScenarioMetrics(res, s.ringCount, s.techUserVal, s.placement.label, s.routeCount);
+            resultArray.push({
+              scenario,
+              liveMetrics: {
+                satellites: res.satellitesCount,
+                costs, metrics,
+                capacityInfo: capacityInfo ? JSON.parse(JSON.stringify(capacityInfo)) : null,
+                routeSummary: rs ? { ...rs } : null,
+              },
+              data: [{ maxFlowGbps: res.maxFlowGbps }],
+            });
+            pushChartPoint(scenario, metrics);
+            if (doArchive && this._archiveAppend) {
+              const gbpsVal = rs && rs.totalThroughput > 0 ? rs.totalThroughput / 1000 : (res.maxFlowGbps || 0);
+              const m = {
+                relayType: s.archiveRelayType,
+                ringCount: s.resolvedRingCount,
+                routeCount: s.routeCount ?? null,
+                satCount: res.satellitesCount || 0,
+                gbps: Math.round(gbpsVal * 1000) / 1000,
+                latMinMin: metrics.latMin != null ? Math.round(metrics.latMin * 10) / 10 : null,
+                latP50Min: metrics.latP50 != null ? Math.round(metrics.latP50 * 10) / 10 : null,
+                totalCostM: Number.isFinite(costs?.totalCosts) ? Math.round(costs.totalCosts / 1e6) : null,
+                costPerMbps: Number.isFinite(costs?.costPerMbps) ? costs.costPerMbps : null,
+                launches: costs?.launchCount ?? null,
+                lasers: costs?.laserCount ?? null,
+              };
+              const tag = `sweep: ${s.ringCount ?? "cur"} rings${s.techUserVal != null ? " · " + s.techUserVal + "x" : ""}${s.routeCount != null ? " · " + s.routeCount + " " + secondAxisMeta.unit : ""} · ${s.placement.label}`;
+              this._archiveAppend({ id: Date.now() + s.scenarioId, name: tag, ts: new Date().toISOString(), config: s.archiveConfig || {}, metrics: m });
+            }
+          };
+
+          if (this._sensExec === "main") {
+            // ── Main thread: run scenarios SERIALLY in-process (no worker pool). Blocks the
+            //    UI during each solve, but there is no parallel-worker memory contention —
+            //    constellations that time out under the pool can finish here. Optionally
+            //    rebuild + display each constellation and dwell so the user can watch. ──
+            ensureSimWorkerState();
+            const renderMT = document.getElementById("sens-mt-render")?.checked === true;
+            const dwellMs = Math.max(0, (parseFloat(document.getElementById("sens-mt-dwell")?.value) || 0) * 1000);
+            // With display on, let the render loop run so each build is visible.
+            if (renderMT) this.simMain._sensitivityRunning = false;
+            const renderProgress = () => {
+              const pct = Math.round((completed / totalScenarios) * 100);
+              progressBar.style.width = `${pct}%`;
+              progressText.textContent = `${pct}% (${completed}/${totalScenarios}) · main thread${renderMT ? " · displaying" : " · solving…"}`;
+            };
+            renderProgress();
+            console.log(`[Sensitivity] main thread: ${scenarios.length} scenarios serially${renderMT ? " (displaying)" : ""}`);
+            for (const s of scenarios) {
+              if (stopRequested) break;
+              if (renderMT) {
+                // Rebuild the VISIBLE constellation for this scenario, then dwell so it paints.
+                try { this.simMain.setSatellitesConfig(s.uiConfig); } catch (e) { console.warn("[Sensitivity] display build failed:", e?.message); }
+                if (dwellMs > 0) await new Promise((r) => setTimeout(r, dwellMs));
+              }
+              let res;
+              try {
+                res = runScenarioInProcess({
+                  // Shallow-copy: runScenario mutates these keys during Earth/Mars sizing,
+                  // and placements of the same (tech,ring,route) share one config object —
+                  // the worker path is immune (postMessage clones), in-process is not.
+                  scenarioId: s.scenarioId, uiConfig: { ...s.uiConfig },
+                  simDate: s.placement.simDate, sizingDate: placements[0].simDate,
+                  earthAngleOffset: s.placement.earthAngleOffset, marsAngleOffset: s.placement.marsAngleOffset,
+                  flowCalctimeMs: flowMs,
+                });
+              } catch (err) {
+                console.error(`[Sensitivity] main-thread scenario ${s.scenarioId} failed:`, err);
+                completed++; renderProgress();
+                continue;
+              }
+              if (stopRequested || !res) { completed++; renderProgress(); continue; }
+              recordScenarioResult(res, s);
+              completed++; renderProgress();
+              // Yield so the progress bar + charts paint between scenarios.
+              await new Promise((r) => setTimeout(r, 0));
+            }
+          } else {
           const requestedWorkers = parseInt(workerCountInput?.value, 10) || defaultWorkers;
           const pool = new SensitivityPool(requestedWorkers);
           this._sensPool = pool;
@@ -1580,21 +1828,10 @@ export class SimUi {
                 sizingDate: placements[0].simDate,
                 earthAngleOffset: s.placement.earthAngleOffset,
                 marsAngleOffset: s.placement.marsAngleOffset,
-                flowCalctimeMs: 20000,
+                flowCalctimeMs: flowMs,
               }, s.estMB).then((res) => {
                 if (stopRequested || !res) return;
-                const { scenario, metrics, costs, capacityInfo, rs } = buildScenarioMetrics(res, s.ringCount, s.techUserVal, s.placement.label);
-                resultArray.push({
-                  scenario,
-                  liveMetrics: {
-                    satellites: res.satellitesCount,
-                    costs, metrics,
-                    capacityInfo: capacityInfo ? JSON.parse(JSON.stringify(capacityInfo)) : null,
-                    routeSummary: rs ? { ...rs } : null,
-                  },
-                  data: [{ maxFlowGbps: res.maxFlowGbps }],
-                });
-                pushChartPoint(scenario, metrics);
+                recordScenarioResult(res, s);
                 completed++;
                 renderProgress();
               }).catch((err) => {
@@ -1606,6 +1843,7 @@ export class SimUi {
             pool.terminate();
             this._sensPool = null;
           }
+          } // end worker-pool branch
         } else {
           // ── Optimized: SERIAL. Per scenario, set the config live, run the curve
           //    optimizer (its own worker pool), resize Earth/Mars from the optimized
@@ -1625,11 +1863,14 @@ export class SimUi {
             let scenarioId = 0;
             for (const techUserVal of techValues) {
               for (const ringCount of ringValues) {
+                for (const routeCount of routeValues) {
                 for (const placement of placements) {
                   if (stopRequested) break;
                   // 1. Apply this scenario's design live (the optimizer reads the live UI).
+                  applySecondAxisPre(routeCount);
                   if (ringCount != null) this.applySimpleDefaults(ringCount);
                   if (techUserVal != null) this.applySliderValues({ "laser_technology.improvement-factor": Math.round(Math.log2(techUserVal)) });
+                  applySecondAxisPost(routeCount);
                   // 2. Reset only the SELECTED curves (any part checked) to their default shape.
                   if (resetCurves) {
                     for (const c of this._getOptimizeCurves()) {
@@ -1649,10 +1890,11 @@ export class SimUi {
                     scenarioId: scenarioId++, uiConfig: cfg,
                     simDate: placement.simDate, sizingDate: placements[0].simDate,
                     earthAngleOffset: placement.earthAngleOffset, marsAngleOffset: placement.marsAngleOffset,
-                    flowCalctimeMs: 20000,
+                    flowCalctimeMs: flowMs,
                   }, estMBfor(cfg));
                   if (stopRequested || !res) { completed++; renderProgress(); continue; }
-                  const { scenario, metrics, costs, capacityInfo, rs } = buildScenarioMetrics(res, ringCount, techUserVal, placement.label);
+                  if (res.flowError) flowTimeouts++;
+                  const { scenario, metrics, costs, capacityInfo, rs } = buildScenarioMetrics(res, ringCount, techUserVal, placement.label, routeCount);
                   resultArray.push({
                     scenario,
                     liveMetrics: {
@@ -1670,6 +1912,8 @@ export class SimUi {
                     const m = {
                       relayType: this.getSelectedRelayType(),
                       ringCount: typeof ringCount === "number" ? ringCount : (parseFloat(this.sliders.relay_type?.ringcount?.value) || 0),
+                      routeCount: routeCount ?? null,
+                      latticeCount: this._latticeTerminals(),
                       satCount: res.satellitesCount || 0,
                       gbps: Math.round(gbpsVal * 1000) / 1000,
                       latMinMin: metrics.latMin != null ? Math.round(metrics.latMin * 10) / 10 : null,
@@ -1679,11 +1923,13 @@ export class SimUi {
                       launches: costs?.launchCount ?? null,
                       lasers: costs?.laserCount ?? null,
                     };
-                    const tag = `opt: ${ringCount ?? "cur"} rings${techUserVal != null ? " · " + techUserVal + "x" : ""} · ${placement.label}`;
+                    const tag = `opt: ${ringCount ?? "cur"} rings${techUserVal != null ? " · " + techUserVal + "x" : ""}${routeCount != null ? " · " + routeCount + " " + secondAxisMeta.unit : ""} · ${placement.label}`;
                     this._archiveAppend({ id: Date.now() + scenarioId, name: tag, ts: new Date().toISOString(), config: this._archiveSnapshotConfig?.() || {}, metrics: m });
                   }
                   completed++;
                   renderProgress();
+                }
+                if (stopRequested) break;
                 }
                 if (stopRequested) break;
               }
@@ -1725,6 +1971,15 @@ export class SimUi {
         this.simMain.simTime.previousRealMs = performance.now();
         this.simMain.updateLoop();
 
+        // Note any scenarios whose max-flow solve timed out — their Total Flow is shown as
+        // a gap (unknown, not zero). This is the constellation outgrowing the solver's time
+        // budget, typically at high in-ring throughput / very large sat counts.
+        if (flowTimeouts > 0) {
+          const fe = document.getElementById("sens-fixed-dims");
+          if (fe) fe.textContent = `${fe.textContent ? fe.textContent + " · " : ""}⚠ ${flowTimeouts}/${totalScenarios} scenario(s) too large to solve flow in time — shown as gaps (Total Flow unknown, not 0).`;
+          console.warn(`[Sensitivity] ${flowTimeouts}/${totalScenarios} scenarios timed out in the max-flow solve (plotted as gaps).`);
+        }
+
         // Offer results as a download
         const data = { config: { type: "sensitivity" }, results: resultArray };
         this._lastSensitivityResults = data;
@@ -1734,6 +1989,12 @@ export class SimUi {
         console.error("Sensitivity analysis error:", error);
       } finally {
         this.simMain._sensitivityRunning = false;
+        // Restore any slider `max` attributes lifted to allow out-of-range sweep values
+        // (the base value was already restored from baseSliderState above).
+        if (this._sensWidenedMaxes) {
+          for (const [input, origMax] of this._sensWidenedMaxes) input.max = origMax;
+          this._sensWidenedMaxes = null;
+        }
         startBtn.disabled = false;
         startBtn.style.display = "";
         stopBtn.style.display = "none";
@@ -1930,8 +2191,8 @@ export class SimUi {
 
   // Map each relay_type.selected option to its config section key.
   static RELAY_TYPE_SECTIONS = {
-    "Adapted concentric": "adapted_rings",
-    "Adapted eccentric": "adapted_eccentric_rings",
+    "Contoured concentric": "adapted_rings",
+    "Contoured eccentric": "adapted_eccentric_rings",
     "Circular": "circular_rings",
     "Eccentric": "eccentric_rings",
   };
@@ -1940,7 +2201,7 @@ export class SimUi {
   getSelectedRelayType() {
     const input = this.sliders.relay_type?.selected;
     const checked = input && input.querySelector ? input.querySelector("input[type=radio]:checked") : null;
-    return checked ? checked.value : this.slidersData.relay_type?.selected?.value || "Adapted concentric";
+    return checked ? checked.value : this.slidersData.relay_type?.selected?.value || "Contoured concentric";
   }
 
   /** The per-family ringcount sliders are superseded by the shared relay_type.ringcount;
@@ -1960,11 +2221,16 @@ export class SimUi {
       const wrapper = content ? content.closest(".slider-section") : null;
       if (wrapper) wrapper.hidden = label !== sel;
     }
+    // The sensitivity second-axis (route count vs in-ring throughput) depends on the
+    // active family — relabel/grey it to match.
+    this._updateSensRouteGrey();
   }
 
   createSliders() {
     const slidersContainer = document.getElementById("sliders-container");
     slidersContainer.innerHTML = "";
+    // Live "computed" readout rows (e.g. the laser-terminal total) — refreshed on change.
+    this._computedReadouts = [];
 
     // Section-title overrides where the prettified key isn't the desired label.
     // (adapted_rings predates the eccentric variant; keep its key for back-compat
@@ -2001,8 +2267,41 @@ export class SimUi {
         const slider = this.slidersData[section][sliderId];
         const fullSliderId = `${section}.${sliderId}`;
 
+        // Non-input rows: a section sub-header, or a derived (computed) read-only value.
+        // These carry no value and are skipped by getGroupsConfig / the archive snapshot.
+        if (slider.type === "header" || slider.type === "computed") {
+          const row = document.createElement("div");
+          row.dataset.search = `${slider.label || ""} ${sectionLabel}`.toLowerCase();
+          if (slider.description) row.title = slider.description;
+          if (slider.type === "header") {
+            row.className = "slider-subheader";
+            row.style.cssText = "font-weight:600; font-size:12px; margin:10px 0 2px; opacity:0.9;";
+            row.textContent = slider.label;
+          } else {
+            row.className = "slider-container slider-computed";
+            row.style.cssText = "display:flex; justify-content:space-between; align-items:center; gap:8px; font-size:12px; padding:1px 0; opacity:0.85;";
+            const lab = document.createElement("span");
+            lab.className = "slider-label";
+            lab.textContent = slider.label;
+            const val = document.createElement("span");
+            val.className = "slider-computed-value";
+            val.style.cssText = "font-variant-numeric:tabular-nums; font-weight:600;";
+            let txt = ""; try { txt = slider.compute ? String(slider.compute(this)) : ""; } catch {}
+            val.textContent = txt;
+            row.append(lab, val);
+            this._computedReadouts.push({ el: val, compute: slider.compute });
+          }
+          sectionContent.appendChild(row);
+          continue;
+        }
+
         if (slider.displayCondition) {
           const refFullId = `${section}.${slider.displayCondition.slider}`;
+          if (!this.dependencies[refFullId]) this.dependencies[refFullId] = [];
+          this.dependencies[refFullId].push(fullSliderId);
+        }
+        if (slider.disabledCondition) {
+          const refFullId = `${section}.${slider.disabledCondition.slider}`;
           if (!this.dependencies[refFullId]) this.dependencies[refFullId] = [];
           this.dependencies[refFullId].push(fullSliderId);
         }
@@ -2086,6 +2385,14 @@ export class SimUi {
           const refSlider = this.slidersData[section][slider.displayCondition.slider];
           if (refSlider && refSlider.value !== slider.displayCondition.value) {
             sliderContainer.style.display = "none";
+          }
+        }
+        // Check disabled (grey-out) condition: visible but inactive until the ref matches
+        if (slider.disabledCondition) {
+          const refSlider = this.slidersData[section][slider.disabledCondition.slider];
+          if (refSlider && refSlider.value !== slider.disabledCondition.value) {
+            sliderContainer.style.opacity = "0.4";
+            sliderContainer.style.pointerEvents = "none";
           }
         }
 
@@ -2358,6 +2665,7 @@ export class SimUi {
       return {
         relayType: this.getSelectedRelayType(),
         ringCount: parseFloat(this.sliders.relay_type?.ringcount?.value ?? this.slidersData.relay_type.ringcount.value) || 0,
+        latticeCount: this._latticeTerminals(),
         satCount: sm.satellitesCount || costs?.satellitesCount || 0,
         gbps: Math.round(gbps * 1000) / 1000,
         latMinMin: lat && Number.isFinite(lat.bestLatency) ? Math.round((lat.bestLatency / 60) * 10) / 10 : null,
@@ -2443,6 +2751,28 @@ export class SimUi {
       return `hsl(${c(ECC_LO[0], ECC_HI[0]).toFixed(1)}, ${c(ECC_LO[1], ECC_HI[1]).toFixed(1)}%, ${c(ECC_LO[2], ECC_HI[2]).toFixed(1)}%)`;
     };
     const ECC_GRAD_CSS = `linear-gradient(90deg, ${eccColorFor(0)}, ${eccColorFor(1)})`;
+    // Concentric points are colored by circular-lattice setting using 3 DISTINCT cool
+    // colors spanning green → teal → blue, so the lattice choice is readable while the
+    // family stays distinct from the warm eccentric gradient. C_CONC is the fallback when
+    // an entry didn't record its lattice (latticeCount: 0 none / 1 half / 2 full).
+    const CONC_COLORS = { 0: "#35c75a", 1: "#10a9c2", 2: "#3b6fe0" };
+    const LAT_NAME = { 0: "no lattice", 1: "half lattice", 2: "full lattice" };
+    // Lattice count for an entry: prefer the captured metric, else derive from the saved
+    // config's lattice radio (so concentric configs saved before latticeCount was captured
+    // still color correctly). The radio was only a CAP — the lattice actually built was
+    // limited by the laser terminals left after the 2 radial links, so clamp the derived
+    // value by (total ports − 2): 2 ports → no lattice, 3 → ≤half, 4+ → ≤full. Returns NaN
+    // when unknown → falls back to the plain blue.
+    const latticeOf = (e) => {
+      const m = e.metrics || {};
+      if (Number.isFinite(+m.latticeCount)) return +m.latticeCount;
+      const opt = e.config?.sliders?.["adapted_rings.lattice"];
+      if (typeof opt !== "string") return NaN;
+      const sel = /^No/.test(opt) ? 0 : /^Half/.test(opt) ? 1 : 2;
+      const ports = parseFloat(e.config?.sliders?.["adapted_rings.laser-ports-per-satellite"]);
+      if (!Number.isFinite(ports)) return sel;
+      return Math.min(sel, Math.max(0, Math.min(2, Math.round(ports) - 2)));
+    };
     const X_MODES = {
       ring: { label: "ring count", unit: "rings", get: (m) => +m.ringCount },
       sat: { label: "satellite count", unit: "sats", get: (m) => +m.satCount },
@@ -2476,9 +2806,11 @@ export class SimUi {
       return { ...e, metrics: { ...m, gbps, costPerMbps } };
     });
     const buildChart = (arr, metric, xm) => {
-      const pts = arr.map((e) => { const m = e.metrics || {}; return { x: xm.get(m), y: metric.get(m), ecc: ECC(m.relayType), rc: +m.ringCount, name: e.name }; })
+      const pts = arr.map((e) => { const m = e.metrics || {}; return { x: xm.get(m), y: metric.get(m), ecc: ECC(m.relayType), rc: +m.ringCount, lat: latticeOf(e), name: e.name }; })
         .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y) && p.x > 0);
       if (!pts.length) return `<div class="muted" style="font-size:11px; padding:8px;">No data yet.</div>`;
+      // Concentric lattice → one of 3 distinct blues (0 none / 1 half / 2 full).
+      const concColor = (lat) => CONC_COLORS[lat] || C_CONC;
       // Ring-count range across ALL eccentric entries (not just this chart's valid
       // points), so the gradient scale is identical across every chart.
       const eccRings = arr.filter((e) => ECC((e.metrics || {}).relayType)).map((e) => +(e.metrics || {}).ringCount).filter(Number.isFinite);
@@ -2503,17 +2835,17 @@ export class SimUi {
         s += `<text x="${padL - 4}" y="${padT + (1 - f) * plotH + 3}" font-size="8" text-anchor="end" fill="var(--text-2,#aaa)">${yLab(f * yTop)}</text>`;
       }
       s += `<text x="${padL + plotW / 2}" y="${H - 2}" font-size="8" text-anchor="middle" fill="var(--text-2,#aaa)">${xm.label}</text>`;
-      for (const p of pts) s += `<circle cx="${X(p.x).toFixed(1)}" cy="${Y(p.y).toFixed(1)}" r="3.5" fill="${p.ecc ? eccColor(p.rc) : C_CONC}" fill-opacity="0.85" stroke="rgba(0,0,0,0.45)" stroke-width="0.5"><title>${esc(p.name)} — ${xLab(p.x)} ${xm.unit} · ${yLab(p.y)} ${metric.unit}${p.ecc && Number.isFinite(p.rc) && xm.unit !== "rings" ? ` · ${Math.round(p.rc)} rings` : ""}</title></circle>`;
+      for (const p of pts) s += `<circle cx="${X(p.x).toFixed(1)}" cy="${Y(p.y).toFixed(1)}" r="3.5" fill="${p.ecc ? eccColor(p.rc) : concColor(p.lat)}" fill-opacity="0.85" stroke="rgba(0,0,0,0.45)" stroke-width="0.5"><title>${esc(p.name)} — ${xLab(p.x)} ${xm.unit} · ${yLab(p.y)} ${metric.unit}${p.ecc && Number.isFinite(p.rc) && xm.unit !== "rings" ? ` · ${Math.round(p.rc)} rings` : ""}${!p.ecc && Number.isFinite(p.lat) ? ` · ${LAT_NAME[p.lat] || p.lat + " lattice"}` : ""}</title></circle>`;
       return `<svg viewBox="0 0 ${W} ${H}" style="width:100%; height:auto; display:block; font-family:ui-monospace,monospace;">${s}</svg>`;
     };
 
     const legend = document.createElement("div");
     legend.className = "muted";
-    legend.style.cssText = "font-size:11px; display:flex; gap:14px; align-items:center;";
+    legend.style.cssText = "font-size:11px; display:flex; flex-direction:column; gap:5px; align-items:stretch;";
+    const concSwatch = (lat) => `<span style="display:inline-flex;align-items:center;gap:4px;"><span style="width:9px;height:9px;border-radius:50%;background:${CONC_COLORS[lat]};display:inline-block;"></span>${LAT_NAME[lat]}</span>`;
     legend.innerHTML =
-      `<span style="display:inline-flex;align-items:center;gap:5px;"><span style="width:9px;height:9px;border-radius:50%;background:${C_CONC};display:inline-block;"></span>concentric</span>` +
-      `<span style="display:inline-flex;align-items:center;gap:5px;">eccentric<span id="ecc-rmin" style="font-variant-numeric:tabular-nums;"></span><span style="width:42px;height:9px;border-radius:5px;background:${ECC_GRAD_CSS};display:inline-block;"></span><span id="ecc-rmax" style="font-variant-numeric:tabular-nums;"></span><span class="muted">rings</span></span>` +
-      `<span class="muted" style="margin-left:auto;" id="archive-count"></span>`;
+      `<span style="display:flex;align-items:center;gap:8px;"><span class="muted">concentric:</span>${concSwatch(0)}${concSwatch(1)}${concSwatch(2)}<span class="muted" style="margin-left:auto;" id="archive-count"></span></span>` +
+      `<span style="display:flex;align-items:center;gap:5px;"><span class="muted">eccentric:</span><span id="ecc-rmin" style="font-variant-numeric:tabular-nums;"></span><span style="width:42px;height:9px;border-radius:5px;background:${ECC_GRAD_CSS};display:inline-block;"></span><span id="ecc-rmax" style="font-variant-numeric:tabular-nums;"></span><span class="muted">rings</span></span>`;
 
     const chartsWrap = document.createElement("div");
     chartsWrap.style.cssText = "display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:10px;";
@@ -2679,7 +3011,94 @@ export class SimUi {
     techRow.append(document.createTextNode("normalize to laser tech:"), techSlider, techVal);
     updTech();
 
-    wrap.append(saveBtn, copyBtn, chartsLabel, xToggle, techRow, legend, chartsWrap, mkLabel("Cost vs capacity"), costVsMbpsWrap, mkLabel("Saved configs"), listEl);
+    // Import: paste a JSON array (or a single entry) and append it to the archive.
+    // Accepts the output of "Copy results JSON" as-is. Entries with missing or
+    // colliding ids are re-stamped so they don't overwrite existing saves.
+    const importBtn = document.createElement("button");
+    importBtn.type = "button"; importBtn.className = "btn";
+    importBtn.style.cssText = "width:100%;";
+    importBtn.textContent = "📥 Import results JSON";
+    importBtn.title = "Paste a JSON array of saved configs to add them to this archive.";
+
+    const importPanel = document.createElement("div");
+    importPanel.hidden = true;
+    importPanel.style.cssText = "display:flex; flex-direction:column; gap:6px; border:1px solid var(--border-2,#333); border-radius:6px; padding:8px;";
+    const importTa = document.createElement("textarea");
+    importTa.placeholder = "Paste archive JSON here — an array of saved configs (the output of 📋 Copy results JSON), or a single entry…";
+    importTa.style.cssText = "width:100%; min-height:120px; resize:vertical; font-family:ui-monospace,monospace; font-size:11px; box-sizing:border-box;";
+    const importMsg = document.createElement("div");
+    importMsg.className = "muted"; importMsg.style.cssText = "font-size:11px;";
+    const importActions = document.createElement("div");
+    importActions.style.cssText = "display:flex; gap:6px;";
+    const importDoBtn = document.createElement("button");
+    importDoBtn.type = "button"; importDoBtn.className = "btn btn-primary";
+    importDoBtn.style.cssText = "font-size:11px; padding:3px 12px;";
+    importDoBtn.textContent = "Add to archive";
+    const importCancelBtn = document.createElement("button");
+    importCancelBtn.type = "button"; importCancelBtn.className = "btn";
+    importCancelBtn.style.cssText = "font-size:11px; padding:3px 12px;";
+    importCancelBtn.textContent = "Cancel";
+    importActions.append(importDoBtn, importCancelBtn);
+    importPanel.append(importTa, importActions, importMsg);
+
+    importBtn.addEventListener("click", () => {
+      importPanel.hidden = !importPanel.hidden;
+      if (!importPanel.hidden) { importMsg.textContent = ""; importTa.focus(); }
+    });
+    importCancelBtn.addEventListener("click", () => { importPanel.hidden = true; importTa.value = ""; importMsg.textContent = ""; });
+    importDoBtn.addEventListener("click", () => {
+      const raw = importTa.value.trim();
+      if (!raw) { importMsg.textContent = "Paste some JSON first."; return; }
+      let parsed;
+      try { parsed = JSON.parse(raw); } catch (err) { importMsg.textContent = "Invalid JSON: " + err.message; return; }
+      const incoming = (Array.isArray(parsed) ? parsed : [parsed]).filter((e) => e && typeof e === "object");
+      if (!incoming.length) { importMsg.textContent = "No archive entries found in that JSON."; return; }
+      const arr = load();
+      const ids = new Set(arr.map((e) => String(e.id)));
+      let base = Date.now(), added = 0;
+      for (const src of incoming) {
+        const entry = { ...src };
+        if (entry.id == null || ids.has(String(entry.id))) entry.id = base++;
+        ids.add(String(entry.id));
+        if (!entry.ts) entry.ts = new Date().toISOString();
+        if (!entry.config || typeof entry.config !== "object") entry.config = { sliders: {}, curves: {} };
+        if (!entry.metrics || typeof entry.metrics !== "object") entry.metrics = {};
+        if (!entry.name) entry.name = "imported";
+        arr.unshift(entry);
+        added++;
+      }
+      save(arr);
+      renderAll();
+      importTa.value = "";
+      importPanel.hidden = true;
+      importMsg.textContent = `Added ${added} ${added === 1 ? "entry" : "entries"}.`;
+    });
+
+    // --- Danger zone: wipe the entire archive --------------------------------
+    const RED = "#e5484d";
+    const danger = document.createElement("div");
+    danger.style.cssText = `margin-top:18px; border:1px solid ${RED}; border-radius:8px; padding:10px 12px; background:rgba(229,72,77,0.07); display:flex; flex-direction:column; gap:8px;`;
+    const dangerTitle = document.createElement("div");
+    dangerTitle.style.cssText = `font-size:12px; font-weight:700; color:${RED}; display:flex; align-items:center; gap:6px;`;
+    dangerTitle.innerHTML = `<span aria-hidden="true">⚠️</span> Danger zone`;
+    const dangerDesc = document.createElement("div");
+    dangerDesc.className = "muted";
+    dangerDesc.style.cssText = "font-size:11px;";
+    dangerDesc.textContent = "Permanently delete every saved config in this archive. This cannot be undone.";
+    const deleteAllBtn = document.createElement("button");
+    deleteAllBtn.type = "button";
+    deleteAllBtn.style.cssText = `align-self:flex-start; font-size:11px; font-weight:600; padding:4px 12px; border:1px solid ${RED}; border-radius:6px; background:${RED}; color:#fff; cursor:pointer;`;
+    deleteAllBtn.textContent = "🗑 Delete all saved configs";
+    deleteAllBtn.addEventListener("click", () => {
+      const n = load().length;
+      if (!n) { importMsg.textContent = ""; return; }
+      if (!confirm(`Delete all ${n} saved config${n === 1 ? "" : "s"}? This cannot be undone.`)) return;
+      save([]);
+      renderAll();
+    });
+    danger.append(dangerTitle, dangerDesc, deleteAllBtn);
+
+    wrap.append(saveBtn, copyBtn, importBtn, importPanel, chartsLabel, xToggle, techRow, legend, chartsWrap, mkLabel("Cost vs capacity"), costVsMbpsWrap, mkLabel("Saved configs"), listEl, danger);
     host.appendChild(wrap);
     setXMode(xMode);
     renderAll();
@@ -3644,7 +4063,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=4.28");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=4.31");
     let result = null;
     try {
       result = await solveBandDistribution({
@@ -3800,6 +4219,9 @@ export class SimUi {
     // Save the new internal value to localStorage
     localStorage.setItem(sliderId, value);
 
+    // Keep derived read-outs (e.g. the laser-terminal total) in sync with this change.
+    this._refreshComputedReadouts();
+
     const [section, specificSliderId] = sliderId.split(".");
     if (this.slidersData[section] && this.slidersData[section][specificSliderId]) {
       const slider = this.slidersData[section][specificSliderId];
@@ -3896,7 +4318,7 @@ export class SimUi {
         case "circular_rings.distance-sun-slider-inner-au":
         case "circular_rings.inring-interring-bias-pct":
         case "circular_rings.earth-mars-orbit-inclination-pct":
-        case "adapted_rings.laser-ports-per-satellite":
+        case "adapted_rings.extra-terminals":
         case "adapted_rings.lattice":
         case "adapted_rings.ringcount":
         case "adapted_rings.trim-rings":
@@ -3928,7 +4350,7 @@ export class SimUi {
         case "eccentric_rings.eccentricity":
         case "eccentric_rings.argument-of-perihelion":
         case "eccentric_rings.earth-mars-orbit-inclination-pct":
-        case "adapted_eccentric_rings.laser-ports-per-satellite":
+        case "adapted_eccentric_rings.extra-terminals":
         case "adapted_eccentric_rings.cross-ring-links":
         case "adapted_eccentric_rings.ringcount":
         case "adapted_eccentric_rings.argument-of-perihelion":
@@ -3969,6 +4391,7 @@ export class SimUi {
         case "economics.fuel-cost-argon":
         case "economics.wrights-law-factor":
         case "economics.solar-cost-per-kw":
+        case "economics.radiator-cost-per-kw":
         case "satellite.satellite-empty-mass":
           this.simMain.setCosts(this.getGroupsConfig(["economics"]));
           break;
@@ -3992,17 +4415,57 @@ export class SimUi {
         this.dependencies[sliderId].forEach((depId) => {
           const [depSec, depSlid] = depId.split(".");
           const depSlider = this.slidersData[depSec][depSlid];
-          const condition = depSlider.displayCondition;
-          const refValue = this.slidersData[depSec][condition.slider].value;
           const container = this.sliderContainers[depSec][depSlid];
-          if (refValue === condition.value) {
-            container.style.display = "block";
-          } else {
-            container.style.display = "none";
+          if (!container) return;
+          if (depSlider.displayCondition) {
+            const c = depSlider.displayCondition;
+            const refValue = this.slidersData[depSec][c.slider].value;
+            container.style.display = refValue === c.value ? "block" : "none";
+          }
+          if (depSlider.disabledCondition) {
+            const c = depSlider.disabledCondition;
+            const refValue = this.slidersData[depSec][c.slider].value;
+            const on = refValue === c.value;
+            container.style.opacity = on ? "" : "0.4";
+            container.style.pointerEvents = on ? "" : "none";
           }
         });
       }
     }
+  }
+
+  /** Re-evaluate every live "computed" readout row (e.g. the laser-terminal total). */
+  _refreshComputedReadouts() {
+    if (!this._computedReadouts) return;
+    for (const r of this._computedReadouts) {
+      if (!r || !r.el || !r.compute) continue;
+      try { r.el.textContent = String(r.compute(this)); } catch {}
+    }
+  }
+
+  /** Current "Extra terminals (spacecraft)" count for an adapted ring family (≥0 int). */
+  _extraTerminals(section) {
+    const inp = this.sliders?.[section]?.["extra-terminals"];
+    let v = inp ? parseFloat(inp.value) : this.slidersData?.[section]?.["extra-terminals"]?.value;
+    v = Math.round(Number(v));
+    return Number.isFinite(v) && v > 0 ? v : 0;
+  }
+
+  /** Circular-lattice terminal count for adapted concentric: No=0 / Half=1 / Full=2. */
+  _latticeTerminals() {
+    const c = this.sliders?.adapted_rings?.lattice;
+    let val = this.slidersData?.adapted_rings?.lattice?.value;
+    if (c && c.querySelector) { const r = c.querySelector("input[type=radio]:checked"); if (r) val = r.value; }
+    val = String(val || "");
+    return /^No/.test(val) ? 0 : /^Half/.test(val) ? 1 : 2;
+  }
+
+  /** Total per-sat laser terminals for an adapted ring family (base + spacecraft extras). */
+  _adaptedTerminalTotal(section) {
+    const extra = this._extraTerminals(section);
+    // concentric: 2 radial + lattice (0/1/2); eccentric: 2 in-ring + 1 junction.
+    const base = section === "adapted_rings" ? 2 + this._latticeTerminals() : 3;
+    return base + extra;
   }
 
   getGroupsConfig(categoryKeys) {
@@ -4010,6 +4473,8 @@ export class SimUi {
     for (const categoryKey of categoryKeys) {
       const group = this.slidersData[categoryKey];
       for (const [sliderKey, sliderData] of Object.entries(group)) {
+        // Non-input rows (section headers, derived read-outs) carry no config value.
+        if (sliderData.type === "header" || sliderData.type === "computed") continue;
         // Safely access the value, defaulting to sliderData.value if undefined
         const value =
           this.sliders?.[categoryKey]?.[sliderKey]?.value !== undefined ? this.sliders[categoryKey][sliderKey].value : sliderData.value;

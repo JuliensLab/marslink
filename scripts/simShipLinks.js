@@ -17,8 +17,8 @@
 // "Connected to both Earth and Mars" is read directly from the possibleLinks
 // graph (the physical/feasible backbone), independent of the max-flow solve.
 
-import { shipPositionAt } from "./simTransfer.js?v=4.28";
-import { allocateShipNetwork, accessChain } from "./simShipNetwork.js?v=4.28";
+import { shipPositionAt } from "./simTransfer.js?v=4.31";
+import { allocateShipNetwork, accessChain } from "./simShipNetwork.js?v=4.31";
 
 // ---------------------------------------------------------------------------
 // Connectivity helper

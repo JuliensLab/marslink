@@ -1202,6 +1202,20 @@ select.slider {
 .sens-mode-btn:hover { background: rgba(255, 255, 255, 0.06); color: var(--text-0); }
 .sens-mode-btn.active { background: var(--accent-dim); color: var(--accent-hot); }
 
+/* Sensitivity: Worker-pool / Main-thread execution segmented toggle (same look). */
+.sens-exec-btn {
+  padding: 6px 16px;
+  font-size: var(--fs-md);
+  color: var(--text-1);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.sens-exec-btn + .sens-exec-btn { border-left: 1px solid var(--border-2, #333); }
+.sens-exec-btn:hover { background: rgba(255, 255, 255, 0.06); color: var(--text-0); }
+.sens-exec-btn.active { background: var(--accent-dim); color: var(--accent-hot); }
+
 /* Sensitivity: toggle for the collapsible breakdown charts in a category. */
 .sens-charts-toggle {
   display: flex;

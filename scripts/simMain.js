@@ -1,23 +1,23 @@
 // simMain.js
 
-import { SimUi } from "./simUi.js?v=4.28";
-import { SimTime } from "./simTime.js?v=4.28";
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.28";
-import { SimSatellites } from "./simSatellites.js?v=4.28";
-import { SimDeployment } from "./simDeployment.js?v=4.28";
-import { SimMissionValidator } from "./simMissionValidator.js?v=4.28";
-import { SimLinkBudget } from "./simLinkBudget.js?v=4.28";
-import { SimNetwork } from "./simNetwork.js?v=4.28";
+import { SimUi } from "./simUi.js?v=4.31";
+import { SimTime } from "./simTime.js?v=4.31";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.31";
+import { SimSatellites } from "./simSatellites.js?v=4.31";
+import { SimDeployment } from "./simDeployment.js?v=4.31";
+import { SimMissionValidator } from "./simMissionValidator.js?v=4.31";
+import { SimLinkBudget } from "./simLinkBudget.js?v=4.31";
+import { SimNetwork } from "./simNetwork.js?v=4.31";
 // Import both SimDisplay implementations with unique names
-import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=4.28";
-import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=4.28";
-import { generateReport } from "./reportGenerator.js?v=4.28";
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.28";
-import { minOf, maxOf } from "./simMath.js?v=4.28";
-import { SimFlightController } from "./simFlightController.js?v=4.28";
-import { SimProbeController } from "./simProbeController.js?v=4.28";
-import { findDepartureWindows } from "./simTransfer.js?v=4.28";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.28";
+import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=4.31";
+import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=4.31";
+import { generateReport } from "./reportGenerator.js?v=4.31";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.31";
+import { minOf, maxOf } from "./simMath.js?v=4.31";
+import { SimFlightController } from "./simFlightController.js?v=4.31";
+import { SimProbeController } from "./simProbeController.js?v=4.31";
+import { findDepartureWindows } from "./simTransfer.js?v=4.31";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.31";
 
 export class SimMain {
   // Clamp argument to [-1, 1] to prevent NaN from Math.asin domain errors
@@ -70,7 +70,7 @@ export class SimMain {
     if (typeof window !== "undefined") window.simMain = this;
 
     // --- Worker + triple-buffered window cache (-1/0/+1) ---
-    this.simWorker = new Worker(new URL("./simWorker.js?v=4.28", import.meta.url), { type: "module" });
+    this.simWorker = new Worker(new URL("./simWorker.js?v=4.31", import.meta.url), { type: "module" });
     this.simWorker.onmessage = (event) => this.handleWorkerMessage(event);
     this.simWorker.onerror = (event) => console.error("[Marslink] Worker error:", event.message);
     this.simWorker.postMessage({ type: "init" });
@@ -369,17 +369,13 @@ export class SimMain {
       isp: uiConfig["satellite.satellite-isp"] || 2500,
       capacity: uiConfig["satellite.satellite-propellant-capacity"] || 1500,
     };
+    // Per-ring TOTAL terminal counts (radial/in-ring + lattice/junction + spacecraft
+    // extras) live on simLinkBudget after setTechnologyConfig above; use them so dry mass
+    // matches the cost/topology terminal budget for the adapted families too.
     this.simDeployment.setSatelliteMassConfig(
       uiConfig["satellite.satellite-empty-mass"],
       uiConfig["laser_technology.laser-terminal-mass"],
-      {
-        ring_earth: uiConfig["ring_earth.laser-ports-per-satellite"],
-        ring_mars: uiConfig["ring_mars.laser-ports-per-satellite"],
-        circular_rings: uiConfig["circular_rings.laser-ports-per-satellite"],
-        eccentric_rings: uiConfig["eccentric_rings.laser-ports-per-satellite"],
-        adapted_rings: uiConfig["adapted_rings.laser-ports-per-satellite"],
-        adapted_eccentric_rings: uiConfig["adapted_eccentric_rings.laser-ports-per-satellite"],
-      }
+      this.simLinkBudget.maxLinksPerRing
     );
 
     this.simSatellites.setMaxSatCount(uiConfig["simulation.maxSatCount"]);
@@ -488,7 +484,8 @@ export class SimMain {
       "CH4/O2": costConfig["economics.fuel-cost-ch4o2"],
       Argon: costConfig["economics.fuel-cost-argon"],
     };
-    this.solarCostPerKw = costConfig["economics.solar-cost-per-kw"]; // $M per kW
+    this.solarCostPerKw = costConfig["economics.solar-cost-per-kw"]; // $M per kW (at Earth aphelion; scaled by apoapsis²)
+    this.radiatorCostPerKw = costConfig["economics.radiator-cost-per-kw"]; // $M per kW (at Earth aphelion; scaled by 1/perihelion²)
     // Rebuild resultTrees so propellant costs are recalculated from current slider values
     if (this.missionProfiles) {
       this.resultTrees = new SimMissionValidator(this.missionProfiles, {
@@ -550,16 +547,40 @@ export class SimMain {
       }
     }
 
-    // Solar arrays: cost scales with per-satellite power (kW) × specific cost ($M/kW).
-    const totalSolarCost = totalSatellitesCount * (this.satellitePowerKw || 0) * (this.solarCostPerKw || 0) * 1_000_000;
+    // Thermal hardware, distance-scaled and launch-independent (apples-to-apples across orbit
+    // families). Solar array is sized for the LOWEST flux (aphelion) → cost ∝ apoapsis²; the
+    // radiator is sized for the HIGHEST flux (perihelion) → cost ∝ 1/perihelion². Both are
+    // normalized to Earth's aphelion (matching solarPanelMassKg). An eccentric ring pays BOTH
+    // extremes at once (big array AND big radiator); a concentric ring, at a single radius, pays
+    // only one — so this charges the eccentric dual-thermal premium as hardware, not via launch.
+    const els = (this.simSatellites && this.simSatellites.getOrbitalElements && this.simSatellites.getOrbitalElements()) || [];
+    const earthApo = (this.simSatellites && this.simSatellites.apsidesEarth && this.simSatellites.apsidesEarth.apoapsis) || 1;
+    const apsisByRing = {};
+    for (const el of els) {
+      if (!el || !el.ringName || !el.apsides) continue;
+      const apoPct = el.apsides.apo_pctEarth > 0 ? el.apsides.apo_pctEarth : 1;
+      const periPct = el.apsides.periapsis > 0 ? el.apsides.periapsis / earthApo : apoPct;
+      apsisByRing[el.ringName] = { apoPct, periPct: Math.max(0.1, periPct) };
+    }
+    const powerKw = this.satellitePowerKw || 0;
+    const solarPerKw = (this.solarCostPerKw || 0) * 1_000_000;
+    const radPerKw = (this.radiatorCostPerKw || 0) * 1_000_000;
+    let totalSolarCost = 0;
+    let totalRadiatorCost = 0;
+    for (const orbit of resultTrees) {
+      const n = orbit.satCount || 0;
+      const ap = apsisByRing[orbit.ringName] || { apoPct: 1, periPct: 1 };
+      totalSolarCost += n * powerKw * solarPerKw * ap.apoPct * ap.apoPct; // array ∝ apoapsis²
+      totalRadiatorCost += (n * powerKw * radPerKw) / (ap.periPct * ap.periPct); // radiator ∝ 1/perihelion²
+    }
 
-    const totalCosts = totalLaunchCost + totalPropellantCost + totalSatellitesCost + totalLaserTerminalsCost + totalSolarCost;
+    const totalCosts = totalLaunchCost + totalPropellantCost + totalSatellitesCost + totalLaserTerminalsCost + totalSolarCost + totalRadiatorCost;
 
     // Wright's law savings: difference between no-learning cost (c1 * n) and actual
     const noLearningLaunch = (this.costPerLaunch || 0) * 1_000_000 * totalLaunchCount;
     const noLearningSat = (this.costPerSatellite || 0) * 1_000_000 * totalSatellitesCount;
     const noLearningLaser = (this.costPerLaserTerminal || 0) * 1_000_000 * totalLaserCount;
-    const noLearningTotal = noLearningLaunch + noLearningSat + noLearningLaser + totalPropellantCost + totalSolarCost;
+    const noLearningTotal = noLearningLaunch + noLearningSat + noLearningLaser + totalPropellantCost + totalSolarCost + totalRadiatorCost;
     const wrightSavings = noLearningTotal - totalCosts;
 
     let costPerMbps = Infinity;
@@ -576,6 +597,7 @@ export class SimMain {
       satellitesCost: totalSatellitesCost,
       laserTerminalsCost: totalLaserTerminalsCost,
       solarCost: totalSolarCost,
+      radiatorCost: totalRadiatorCost,
       totalCosts,
       costPerMbps,
       propellantCostBreakdown,
@@ -1375,6 +1397,9 @@ export class SimMain {
       html += `<div class="detail-row"><span class="detail-label">Laser terminals <span style="color:var(--text-3)">${costs.laserCount.toLocaleString()}</span></span><span class="detail-value">${fmtM(costs.laserTerminalsCost)}</span></div>`;
       if (costs.solarCost > 0) {
         html += `<div class="detail-row"><span class="detail-label">Solar arrays</span><span class="detail-value">${fmtM(costs.solarCost)}</span></div>`;
+      }
+      if (costs.radiatorCost > 0) {
+        html += `<div class="detail-row"><span class="detail-label">Radiators</span><span class="detail-value">${fmtM(costs.radiatorCost)}</span></div>`;
       }
       html += `<div class="detail-row"><span class="detail-label">Propellant</span><span class="detail-value">${fmtM(costs.propellantCost)}</span></div>`;
       for (const [type, cost] of Object.entries(costs.propellantCostBreakdown)) {

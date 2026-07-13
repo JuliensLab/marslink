@@ -1,6 +1,6 @@
 // simTopology.js — Topology building logic extracted from SimNetwork.
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.28";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.31";
 
 export class TopologyBuilder {
   constructor(simLinkBudget, simSatellites) {
@@ -87,7 +87,7 @@ export class TopologyBuilder {
       // Cache the ring's max-links value once (was called 3× per inner iteration)
       const maxLinksPerRing = this.simLinkBudget.getMaxLinksPerRing(ringName);
       // Circular (azimuthal/lattice) link cap per satellite:
-      //  - Adapted concentric: the "Circular lattice" setting (0 none / 1 half / 2 full).
+      //  - Contoured concentric: the "Circular lattice" setting (0 none / 1 half / 2 full).
       //    The radial backbone ran first (interAdaptedRings), so these fill spare ports up
       //    to the cap; terminals left after radial + lattice are spacecraft-accessible.
       //  - Other families: legacy behaviour — skip 2-port rings (all radial), else a full
@@ -205,6 +205,7 @@ export class TopologyBuilder {
     const mode = (this.simLinkBudget && this.simLinkBudget.interRingMatcher) || "linear-merge";
     if (mode === "max-throughput") return this._interAdaptedRings_maxThroughput(...args);
     if (mode === "greedy-nearest") return this._interAdaptedRings_greedyWindowed(...args);
+    if (mode === "greedy-pairs") return this._interAdaptedRings_greedyPairs(...args);
     if (mode === "greedy-merge") return this._interAdaptedRings_greedyMerge(...args);
     if (mode === "monotonic-wrap") return this._interAdaptedRings_monotonic(...args);
     if (mode === "periapsis-chain") return this._interAdaptedRings_periapsisChain(...args);
@@ -657,6 +658,151 @@ export class TopologyBuilder {
         to.inwards = from.name;
         used.add(from.name);
         used.add(to.name);
+      }
+    }
+  }
+
+  // Matcher "greedy-pairs": a per-ring-pair restructuring of greedy-nearest, built so each adjacent
+  // pair (ring N, ring N+1) is an INDEPENDENT unit of work. A pair touches only the inner ring's
+  // OUTWARD ports and the outer ring's INWARD ports; adjacent pairs therefore touch disjoint port
+  // sets on the shared middle ring, so the pairs could later be farmed out one-per-Web-Worker with no
+  // cross-pair contention (each worker proposes links for its pair; the main thread merges them). For
+  // now the pairs run in a plain sequential for-loop. The per-pair work (`proposePair`) is kept as a
+  // self-contained closure that reads ring geometry + linkCounts but never mutates the shared link
+  // state — that mutation happens only in the merge loop below — so it is the natural seam to hand to
+  // a worker. Per pair: for every inner sat with a free outward port, take the 3 nearest outer sats by
+  // true 3D distance (sqrt(dx²+dy²+dz²)) that clear every filter (free inward port, link budget, range,
+  // solar-blinding cone), then pool them, sort shortest-first, and assign greedily within the pair.
+  // Candidate selection is distance-only — solar angle is NOT consulted (it is retained solely to
+  // order the ring for 3-port premark, which never fires on adapted rings). Unlike greedy-nearest there
+  // is no departure-angle tilt and no inline radial-continuity check — pruneIncompleteRadialChains
+  // enforces continuity globally afterward.
+  _interAdaptedRings_greedyPairs(rings, positions, linkCounts, finalLinks, targetDepartureAngle = 0, satellites, existingLinks) {
+    const circularRingNames = Object.keys(rings).filter(
+      (ringName) => ringName.startsWith("ring_adapt_") || ringName.startsWith("ring_circ_")
+    );
+    if (circularRingNames.length === 0) return;
+    const parseIndex = (name) => { const match = name.match(/_(\d+)$/); return match ? parseInt(match[1], 10) : -1; };
+    const ringList = circularRingNames
+      .map((name) => ({ name, index: parseIndex(name) }))
+      .filter((r) => r.index >= 0);
+    ringList.sort((a, b) => a.index - b.index);
+    const AU_IN_KM = this.AU_IN_KM;
+    const maxDistanceAU = this.simLinkBudget.maxDistanceAU;
+    const normalizeAngle = (deg) => ((deg % 360) + 360) % 360;
+
+    // Initial step: derive each relay sat's solar angle straight from its (x, y) position — the
+    // azimuth of the ecliptic-plane projection, z dropped — instead of trusting the stored
+    // position.solarAngle (the in-plane true longitude, which diverges from the projected azimuth
+    // for inclined orbits). This recalculated angle is the angular key used everywhere below:
+    // ring ordering and nearest-angle candidate selection. (For near-coplanar concentric rings the
+    // two agree to ~0.01°; the recalculation only matters once rings carry inclination.)
+    const solarAngleFromXYZ = (pos) => normalizeAngle((Math.atan2(pos.y, pos.x) * 180) / Math.PI);
+    const angleOf = new Map();
+
+    const ringSatellites = {};
+    ringList.forEach((ring) => {
+      const sats = rings[ring.name].filter((sat) => sat.orbitalZone === "BETWEEN_EARTH_AND_MARS").slice();
+      for (const sat of sats) { const pos = positions[sat.name]; if (pos) angleOf.set(sat.name, solarAngleFromXYZ(pos)); }
+      sats.sort((a, b) => (angleOf.get(a.name) ?? 0) - (angleOf.get(b.name) ?? 0));
+      ringSatellites[ring.name] = sats;
+    });
+    const ringMaxLinks = new Map();
+    ringList.forEach((ring) => { ringMaxLinks.set(ring.name, this._radialMaxLinks(ring.name)); });
+    // 3-port rings alternate which port each sat exposes to the radial backbone. Kept for budget
+    // correctness; adapted rings have a fixed 2-port radial budget so this never fires for them.
+    ringList.forEach((ring) => {
+      const maxLinks = ringMaxLinks.get(ring.name);
+      if (maxLinks !== 3) return;
+      ringSatellites[ring.name].forEach((sat, i) => { if (i % 2 === 0) sat.outwards = "premarked"; else sat.inwards = "premarked"; });
+    });
+    const satByName = new Map();
+    for (const ring of ringList) for (const s of ringSatellites[ring.name]) satByName.set(s.name, s);
+
+    // The independent unit of work for one adjacent ring pair. Returns the proposed links, already
+    // greedily de-conflicted WITHIN the pair, as [{ fromName, toName, distanceAU }]. Reads shared
+    // ring/link state but never writes it.
+    const proposePair = (inner, outer) => {
+      const innerSats = ringSatellites[inner.name];
+      const outerSats = ringSatellites[outer.name];
+      if (!innerSats.length || !outerSats.length) return [];
+      const oLen = outerSats.length;
+      const innerMaxLinks = ringMaxLinks.get(inner.name);
+      const outerMaxLinks = ringMaxLinks.get(outer.name);
+      const isFirstRing = inner.index === ringList[0].index;
+
+      const candidates = [];
+      for (let idx = 0; idx < innerSats.length; idx++) {
+        const innerSat = innerSats[idx];
+        const canConnectOut = isFirstRing && innerMaxLinks === 3 ? idx % 2 === 1 : linkCounts[innerSat.name] < innerMaxLinks;
+        if (!canConnectOut || innerSat.outwards !== null) continue;
+        const innerPos = positions[innerSat.name];
+        if (!innerPos) continue;
+        // Candidate selection by 3D distance ONLY — solar angle is no longer consulted. Scan every
+        // outer sat that clears the cheap filters (free inward port, budget, range), record its true
+        // sqrt(dx²+dy²+dz²) distance, sort ascending, then take the 3 nearest that also clear the
+        // solar-blinding cone (the cone check is deferred to the shortlist so it runs only a few times
+        // per inner sat rather than over the whole ring).
+        const reachable = [];
+        for (let o = 0; o < oLen; o++) {
+          const outerSat = outerSats[o];
+          if (outerSat.inwards !== null) continue;
+          if (linkCounts[outerSat.name] >= outerMaxLinks) continue;
+          const outerPos = positions[outerSat.name];
+          if (!outerPos) continue;
+          const distanceAU = this.calculateDistanceAU(innerPos, outerPos);
+          if (distanceAU > maxDistanceAU) continue;
+          reachable.push({ outerSat, distanceAU });
+        }
+        reachable.sort((a, b) => a.distanceAU - b.distanceAU);
+        const MAX_OUTER_CANDIDATES = 3;
+        let found = 0;
+        for (let k = 0; k < reachable.length && found < MAX_OUTER_CANDIDATES; k++) {
+          const { outerSat, distanceAU } = reachable[k];
+          if (this.isSolarBlinded(innerPos, positions[outerSat.name])) continue;
+          candidates.push({ fromName: innerSat.name, toName: outerSat.name, distanceAU });
+          found++;
+        }
+      }
+      // Greedy shortest-first assignment within this pair.
+      candidates.sort((a, b) => a.distanceAU - b.distanceAU);
+      const used = new Set();
+      const proposals = [];
+      for (const c of candidates) {
+        if (used.has(c.fromName) || used.has(c.toName)) continue;
+        proposals.push(c);
+        used.add(c.fromName);
+        used.add(c.toName);
+      }
+      return proposals;
+    };
+
+    // Sequential loop over pairs (worker-ready: disjoint ports on the shared middle ring make the
+    // iterations independent). Merge each pair's proposals into the shared link state.
+    for (let i = 0; i < ringList.length - 1; i++) {
+      const inner = ringList[i];
+      const outer = ringList[i + 1];
+      if (outer.index !== inner.index + 1) continue;
+      const innerMaxLinks = ringMaxLinks.get(inner.name);
+      const outerMaxLinks = ringMaxLinks.get(outer.name);
+      const proposals = proposePair(inner, outer);
+      for (const { fromName, toName, distanceAU } of proposals) {
+        const from = satByName.get(fromName);
+        const to = satByName.get(toName);
+        if (!from || !to) continue;
+        if (from.outwards !== null || to.inwards !== null) continue;
+        if (linkCounts[fromName] >= innerMaxLinks || linkCounts[toName] >= outerMaxLinks) continue;
+        const [fId, tId] = fromName < toName ? [fromName, toName] : [toName, fromName];
+        const key = `${fId}-${tId}`;
+        if (existingLinks.has(key)) continue;
+        const distanceKm = distanceAU * AU_IN_KM;
+        const gbps = this.calculateGbps(distanceKm);
+        finalLinks.push({ fromId: fId, toId: tId, distanceAU, distanceKm, latencySeconds: this.calculateLatency(distanceKm), gbpsCapacity: gbps });
+        linkCounts[fromName]++;
+        linkCounts[toName]++;
+        existingLinks.add(key);
+        from.outwards = toName;
+        to.inwards = fromName;
       }
     }
   }

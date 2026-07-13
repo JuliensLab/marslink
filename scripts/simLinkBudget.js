@@ -1,6 +1,6 @@
 // simLinkBudget.js
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.28";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.31";
 
 export class SimLinkBudget {
   constructor() {
@@ -22,13 +22,30 @@ export class SimLinkBudget {
     this.baseDistanceKm = technologyConfig["laser_technology.current-distance-km"];
     this.maxDistanceAU = technologyConfig["simulation.maxDistanceAU"];
     this.calctimeMs = technologyConfig["simulation.calctimeSec"] * 1000;
+    // Adapted-concentric "Circular lattice": how many laser terminals each sat spends on
+    // intra-ring (azimuthal) links — 0 none, 1 half (matching), 2 full ring. Built on top
+    // of the fixed radial backbone; computed up here so the adapted port totals below can
+    // include it. Mapped from the radio label to a count.
+    {
+      const opt = technologyConfig["adapted_rings.lattice"] || "Full lattice (2 laser terminals)";
+      this.adaptedLattice = opt.startsWith("No") ? 0 : opt.startsWith("Half") ? 1 : 2;
+    }
+
+    // The adapted families' port slider was repurposed to mean EXTRA terminals for
+    // spacecraft-in-transit links, on TOP of the fixed topology terminals. Total per-sat
+    // terminals = topology base + extra:
+    //   • adapted concentric: 2 radial  + lattice (0/1/2) + extra
+    //   • adapted eccentric:  2 in-ring + 1 junction      + extra
+    const adaptExtra = Math.max(0, Math.round(+technologyConfig["adapted_rings.extra-terminals"] || 0));
+    const adeccExtra = Math.max(0, Math.round(+technologyConfig["adapted_eccentric_rings.extra-terminals"] || 0));
+
     this.maxLinksPerRing = {
       ring_earth: technologyConfig["ring_earth.laser-ports-per-satellite"],
       ring_mars: technologyConfig["ring_mars.laser-ports-per-satellite"],
       circular_rings: technologyConfig["circular_rings.laser-ports-per-satellite"],
       eccentric_rings: technologyConfig["eccentric_rings.laser-ports-per-satellite"],
-      adapted_rings: technologyConfig["adapted_rings.laser-ports-per-satellite"],
-      adapted_eccentric_rings: technologyConfig["adapted_eccentric_rings.laser-ports-per-satellite"],
+      adapted_rings: 2 + this.adaptedLattice + adaptExtra,
+      adapted_eccentric_rings: 2 + 1 + adeccExtra,
     };
 
     // Global cap = max of all per-ring values (used as fallback and topology cap)
@@ -45,8 +62,8 @@ export class SimLinkBudget {
     // relay family's "<section>.flow-solver" (with a per-family code default so legacy
     // configs without the key still pick a working solver).
     const RELAY_SECTION = {
-      "Adapted concentric": "adapted_rings",
-      "Adapted eccentric": "adapted_eccentric_rings",
+      "Contoured concentric": "adapted_rings",
+      "Contoured eccentric": "adapted_eccentric_rings",
       "Circular": "circular_rings",
       "Eccentric": "eccentric_rings",
     };
@@ -81,17 +98,6 @@ export class SimLinkBudget {
     // two rings where their tracks cross in the xy plane, using the spare radial
     // laser. Default on (only affects topologies that actually use eccentric rings).
     this.eccentricCrossRingLinks = technologyConfig["adapted_eccentric_rings.cross-ring-links"] !== "no";
-
-    // Adapted-concentric "Circular lattice": caps how many laser terminals each sat
-    // spends on intra-ring (azimuthal) links — 0 none, 1 half lattice (matching), 2 full
-    // ring. Built on top of the radial backbone (allocated first); terminals left after
-    // radial + lattice are the spare ports spacecraft can attach to. Lowering it below
-    // the greedy max frees ports for ship access at a fixed terminal count. Default Full
-    // (= the prior greedy-fill behaviour). Mapped from the radio label to a count.
-    {
-      const opt = technologyConfig["adapted_rings.lattice"] || "Full lattice (2 laser terminals)";
-      this.adaptedLattice = opt.startsWith("No") ? 0 : opt.startsWith("Half") ? 1 : 2;
-    }
 
     // Invalidate Gbps cache when tech config changes
     this._gbpsCache = new Map();

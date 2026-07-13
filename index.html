@@ -24,8 +24,8 @@
   <!-- Inline SVG favicon — no extra request, scales nicely. Same ◉ as the brand. -->
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230b0f1a'/%3E%3Ccircle cx='16' cy='16' r='8' fill='none' stroke='%23ff6b35' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='3' fill='%23ff6b35'/%3E%3C/svg%3E">
 
-  <script src="scripts/imported/chart/chart.js?v=4.28"></script>
-  <link rel="stylesheet" href="styles.css?v=4.28">
+  <script src="scripts/imported/chart/chart.js?v=4.31"></script>
+  <link rel="stylesheet" href="styles.css?v=4.31">
 </head>
 
 <body>
@@ -163,6 +163,22 @@
           </div>
         </div>
 
+        <div class="form-group" id="sens-route-group">
+          <label>
+            <input type="checkbox" id="sens-route-enable">
+            <span id="sens-route-label">Route count</span>
+          </label>
+          <div class="sens-row" style="display:flex; gap:var(--s-2); align-items:center;">
+            <input type="number" id="sens-route-start" value="50" min="1" max="100000" style="width:60px;">
+            <span class="muted">to</span>
+            <input type="number" id="sens-route-end" value="500" min="1" max="100000" style="width:60px;">
+            <span class="muted">step</span>
+            <input type="number" id="sens-route-step" value="50" min="1" max="100000" style="width:50px;">
+            <span class="muted" id="sens-route-unit">routes</span>
+          </div>
+          <div class="muted" id="sens-route-note" style="font-size:11px; margin-top:2px;"></div>
+        </div>
+
         <div class="form-group">
           <label>
             <input type="checkbox" id="sens-tech-enable">
@@ -199,17 +215,39 @@
           <button type="button" id="sens-mode-optimized" class="sens-mode-btn" data-mode="optimized" title="Run the curve optimizer for each scenario (one at a time), resize Earth/Mars, and archive each result.">Optimized</button>
         </div>
 
+        <div class="form-group" id="sens-archive-group">
+          <label style="display:flex; align-items:center; gap:6px;"><input type="checkbox" id="opt-archive" checked> Add each result to the archive</label>
+        </div>
+
         <div class="form-group" id="sens-opt-controls" style="display:none;">
           <label style="display:flex; align-items:center; gap:6px;"><input type="checkbox" id="opt-reset" checked> Reset selected curves to default each step</label>
-          <label style="display:flex; align-items:center; gap:6px;"><input type="checkbox" id="opt-archive" checked> Add each result to the archive</label>
           <div class="muted" style="font-size:11px; margin-top:4px;">Optimizer depth (evals / points / geoms) is configured in the Adapted rings → Optimize panel. Optimized mode runs one scenario at a time.</div>
         </div>
 
         <div class="form-group" id="sens-worker-group" style="margin-top:var(--s-2);">
-          <div class="sens-row" style="display:flex; gap:var(--s-2); align-items:center;">
+          <div class="sens-mode-toggle" role="tablist" style="display:flex; margin-bottom:var(--s-2); border:1px solid var(--border-2,#333); border-radius:6px; overflow:hidden; width:fit-content;">
+            <button type="button" id="sens-exec-worker" class="sens-exec-btn active" data-exec="worker" title="Run scenarios in parallel across Web Workers — fast and never blocks the UI.">Worker pool</button>
+            <button type="button" id="sens-exec-main" class="sens-exec-btn" data-exec="main" title="Run scenarios one at a time on the main thread. Blocks the UI during each solve, but there is no parallel-worker memory contention — large constellations that time out under the worker pool can finish here.">Main thread</button>
+          </div>
+          <div class="sens-row" id="sens-worker-count-row" style="display:flex; gap:var(--s-2); align-items:center;">
             <span class="muted">Worker threads</span>
             <input type="number" id="sens-worker-count" value="0" min="1" max="64" style="width:50px;" title="Parallel workers for the sweep (ignored when displaying each step)">
             <span id="sens-thread-avail" class="muted"></span>
+          </div>
+          <div id="sens-main-opts" style="display:none;">
+            <label style="display:flex; align-items:center; gap:6px;"><input type="checkbox" id="sens-mt-render"> Display each constellation while solving</label>
+            <div class="sens-row" id="sens-mt-dwell-row" style="display:flex; gap:var(--s-2); align-items:center; margin-top:var(--s-2);">
+              <span class="muted">Dwell per scenario</span>
+              <input type="number" id="sens-mt-dwell" value="1" min="0" max="120" step="0.5" style="width:55px;" title="How long to keep each built constellation on screen before moving to the next scenario.">
+              <span class="muted">sec</span>
+            </div>
+          </div>
+        </div>
+        <div class="form-group" id="sens-flow-budget-group" style="margin-top:var(--s-2);">
+          <div class="sens-row" style="display:flex; gap:var(--s-2); align-items:center;">
+            <span class="muted">Max-flow time budget</span>
+            <input type="number" id="sens-flow-budget" value="20" min="0" max="600" step="1" style="width:55px;" title="Per-scenario wall-clock budget for the max-flow solve. Scenarios whose solve exceeds it are shown as gaps (flow unknown, not 0) — raise it to resolve larger constellations, at the cost of slower sweeps. 0 = no limit: grind each solve to completion like the live sim (may take very long or never finish — best paired with Main thread). Separate from the live view's 'Allowed flow calc time'.">
+            <span class="muted">sec <span style="opacity:0.7;">(0 = no limit)</span></span>
           </div>
         </div>
         <div id="sens-estimate" class="muted" style="margin-top:var(--s-2);"></div>
@@ -363,7 +401,7 @@
       }
     }
   </script>
-  <script type="module" src="scripts/simMain.js?v=4.28"></script>
+  <script type="module" src="scripts/simMain.js?v=4.31"></script>
 </body>
 
 </html>

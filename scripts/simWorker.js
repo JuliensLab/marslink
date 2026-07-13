@@ -9,14 +9,14 @@
 // Loaded as an ES module worker:
 //   new Worker(new URL("./simWorker.js", import.meta.url), { type: "module" })
 
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.28";
-import { SimSatellites } from "./simSatellites.js?v=4.28";
-import { SimLinkBudget } from "./simLinkBudget.js?v=4.28";
-import { SimNetwork } from "./simNetwork.js?v=4.28";
-import { SimDeployment } from "./simDeployment.js?v=4.28";
-import { SimMissionValidator } from "./simMissionValidator.js?v=4.28";
-import { minOf } from "./simMath.js?v=4.28";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.28";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.31";
+import { SimSatellites } from "./simSatellites.js?v=4.31";
+import { SimLinkBudget } from "./simLinkBudget.js?v=4.31";
+import { SimNetwork } from "./simNetwork.js?v=4.31";
+import { SimDeployment } from "./simDeployment.js?v=4.31";
+import { SimMissionValidator } from "./simMissionValidator.js?v=4.31";
+import { minOf } from "./simMath.js?v=4.31";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.31";
 
 // --- State (initialized lazily on the first compute) ---
 let simLinkBudget = null;
@@ -101,14 +101,7 @@ function runPipeline({ requestId, windowIdx, configEpoch, uiConfig, satellitesCo
   simDeployment.setSatelliteMassConfig(
     uiConfig["satellite.satellite-empty-mass"],
     uiConfig["laser_technology.laser-terminal-mass"],
-    {
-      ring_earth: uiConfig["ring_earth.laser-ports-per-satellite"],
-      ring_mars: uiConfig["ring_mars.laser-ports-per-satellite"],
-      circular_rings: uiConfig["circular_rings.laser-ports-per-satellite"],
-      eccentric_rings: uiConfig["eccentric_rings.laser-ports-per-satellite"],
-      adapted_rings: uiConfig["adapted_rings.laser-ports-per-satellite"],
-      adapted_eccentric_rings: uiConfig["adapted_eccentric_rings.laser-ports-per-satellite"],
-    }
+    simLinkBudget.maxLinksPerRing
   );
 
   // 2. Apply satellite config
@@ -292,14 +285,7 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
   simDeployment.setSatelliteMassConfig(
     uiConfig["satellite.satellite-empty-mass"],
     uiConfig["laser_technology.laser-terminal-mass"],
-    {
-      ring_earth: uiConfig["ring_earth.laser-ports-per-satellite"],
-      ring_mars: uiConfig["ring_mars.laser-ports-per-satellite"],
-      circular_rings: uiConfig["circular_rings.laser-ports-per-satellite"],
-      eccentric_rings: uiConfig["eccentric_rings.laser-ports-per-satellite"],
-      adapted_rings: uiConfig["adapted_rings.laser-ports-per-satellite"],
-      adapted_eccentric_rings: uiConfig["adapted_eccentric_rings.laser-ports-per-satellite"],
-    }
+    simLinkBudget.maxLinksPerRing
   );
   simSatellites.setMaxSatCount(uiConfig["simulation.maxSatCount"]);
 
@@ -432,7 +418,10 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
   const capacityInfo = calculateCapacityInfo(possibleLinks);
 
   const fullNetworkData = simNetwork.getNetworkData(planets, satellites, possibleLinks, flowCalctimeMs);
-  const maxFlowGbps = fullNetworkData.error ? 0 : (fullNetworkData.maxFlowGbps || 0);
+  // A timed-out max-flow solve is "too large to solve", NOT "0 Gbps achievable" — flag it
+  // so the caller can show a gap instead of a misleading drop to zero (see buildScenarioMetrics).
+  const flowError = fullNetworkData.error || null;
+  const maxFlowGbps = flowError ? 0 : (fullNetworkData.maxFlowGbps || 0);
   let latencyData = null;
   if (!fullNetworkData.error) latencyData = simNetwork.calculateLatencies(fullNetworkData);
 
@@ -457,6 +446,7 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
     scenarioId,
     satellitesCount,
     maxFlowGbps,
+    flowError,
     capacityInfo,
     routeSummary: routeSummaryClone,
     resultTreesData,
@@ -472,7 +462,16 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
   };
 }
 
-self.onmessage = (event) => {
+// Exported so the main thread can run the IDENTICAL scenario pipeline in-process
+// (sensitivity "Main thread" mode) instead of dispatching to a worker. These use this
+// module's own sim-state singletons, independent of SimMain's display instances.
+export { ensureState, runScenario };
+
+// Only wire the worker message handler in a real Worker context — when this module is
+// imported on the main thread (for "Main thread" sweeps) `self` is `window`, and we must
+// not hijack window.onmessage.
+const inWorker = typeof WorkerGlobalScope !== "undefined" && self instanceof WorkerGlobalScope;
+if (inWorker) self.onmessage = (event) => {
   const msg = event.data;
   if (!msg || typeof msg !== "object") return;
 

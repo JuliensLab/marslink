@@ -1,7 +1,7 @@
 // simSatellites.js
 
-import { helioCoords, positionFromSolarAngle } from "./simOrbits.js?v=4.28";
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.28";
+import { helioCoords, positionFromSolarAngle } from "./simOrbits.js?v=4.31";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.31";
 
 export class SimSatellites {
   constructor(simLinkBudget, planets) {
@@ -90,14 +90,14 @@ export class SimSatellites {
     const satellitesConfig = [];
     // Exactly one relay family is active, chosen by the relay_type selector. Build only
     // that one (falling back to adapted concentric for legacy configs without the key).
-    const relayType = uiConfig["relay_type.selected"] || "Adapted concentric";
+    const relayType = uiConfig["relay_type.selected"] || "Contoured concentric";
     const relayBuilders = {
       "Circular": () => this._buildCircularRings(uiConfig),
       "Eccentric": () => this._buildEccentricRings(uiConfig),
-      "Adapted concentric": () => this._buildAdaptedRings(uiConfig),
-      "Adapted eccentric": () => this._buildAdaptedEccentricRings(uiConfig),
+      "Contoured concentric": () => this._buildAdaptedRings(uiConfig),
+      "Contoured eccentric": () => this._buildAdaptedEccentricRings(uiConfig),
     };
-    const build = relayBuilders[relayType] || relayBuilders["Adapted concentric"];
+    const build = relayBuilders[relayType] || relayBuilders["Contoured concentric"];
     satellitesConfig.push(...build());
     if (uiConfig["ring_mars.side-extension-degrees-slider"]) satellitesConfig.push(...this._buildPlanetRing(uiConfig, "ring_mars"));
     if (uiConfig["ring_earth.side-extension-degrees-slider"]) satellitesConfig.push(...this._buildPlanetRing(uiConfig, "ring_earth"));
