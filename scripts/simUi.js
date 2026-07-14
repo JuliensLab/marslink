@@ -1,11 +1,11 @@
 // simUi.js
-import { slidersData } from "./slidersData.js?v=4.33";
-import { LukashianClock } from "./lukashianTime.js?v=4.33";
-import { wireAuthUi } from "./auth.js?v=4.33";
-import { SensitivityPool } from "./sensitivityPool.js?v=4.33";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.33";
-import { minOf } from "./simMath.js?v=4.33";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.33";
+import { slidersData } from "./slidersData.js?v=4.34";
+import { LukashianClock } from "./lukashianTime.js?v=4.34";
+import { wireAuthUi } from "./auth.js?v=4.34";
+import { SensitivityPool } from "./sensitivityPool.js?v=4.34";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.34";
+import { minOf } from "./simMath.js?v=4.34";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.34";
 
 export class SimUi {
   constructor(simMain) {
@@ -1775,9 +1775,11 @@ export class SimUi {
             for (const s of scenarios) {
               if (stopRequested) break;
               if (renderMT) {
-                // Rebuild the VISIBLE constellation for this scenario, then dwell so it paints.
+                // Rebuild the VISIBLE constellation for this scenario; yield once so the
+                // satellites start painting while the solve runs. The dwell itself moves to
+                // AFTER the solve, when the routes are known and can be shown too.
                 try { this.simMain.setSatellitesConfig(s.uiConfig); } catch (e) { console.warn("[Sensitivity] display build failed:", e?.message); }
-                if (dwellMs > 0) await new Promise((r) => setTimeout(r, dwellMs));
+                await new Promise((r) => setTimeout(r, 0));
               }
               let res;
               try {
@@ -1789,6 +1791,7 @@ export class SimUi {
                   simDate: s.placement.simDate, sizingDate: placements[0].simDate,
                   earthAngleOffset: s.placement.earthAngleOffset, marsAngleOffset: s.placement.marsAngleOffset,
                   flowCalctimeMs: flowMs,
+                  includeLinks: renderMT,
                 });
               } catch (err) {
                 console.error(`[Sensitivity] main-thread scenario ${s.scenarioId} failed:`, err);
@@ -1796,6 +1799,12 @@ export class SimUi {
                 continue;
               }
               if (stopRequested || !res) { completed++; renderProgress(); continue; }
+              if (renderMT && Array.isArray(res.possibleLinks) && res.possibleLinks.length) {
+                // Show the scenario's solved links (flow-annotated) alongside the displayed
+                // satellites, THEN dwell — so the dwell shows the routes, not just the sats.
+                try { this.simMain.simDisplay?.updatePossibleLinks(res.possibleLinks); } catch (e) {}
+                if (dwellMs > 0) await new Promise((r) => setTimeout(r, dwellMs));
+              }
               recordScenarioResult(res, s);
               completed++; renderProgress();
               // Yield so the progress bar + charts paint between scenarios.
@@ -4067,7 +4076,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=4.33");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=4.34");
     let result = null;
     try {
       result = await solveBandDistribution({

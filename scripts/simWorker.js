@@ -9,14 +9,14 @@
 // Loaded as an ES module worker:
 //   new Worker(new URL("./simWorker.js", import.meta.url), { type: "module" })
 
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.33";
-import { SimSatellites } from "./simSatellites.js?v=4.33";
-import { SimLinkBudget } from "./simLinkBudget.js?v=4.33";
-import { SimNetwork } from "./simNetwork.js?v=4.33";
-import { SimDeployment } from "./simDeployment.js?v=4.33";
-import { SimMissionValidator } from "./simMissionValidator.js?v=4.33";
-import { minOf } from "./simMath.js?v=4.33";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.33";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.34";
+import { SimSatellites } from "./simSatellites.js?v=4.34";
+import { SimLinkBudget } from "./simLinkBudget.js?v=4.34";
+import { SimNetwork } from "./simNetwork.js?v=4.34";
+import { SimDeployment } from "./simDeployment.js?v=4.34";
+import { SimMissionValidator } from "./simMissionValidator.js?v=4.34";
+import { minOf } from "./simMath.js?v=4.34";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.34";
 
 // --- State (initialized lazily on the first compute) ---
 let simLinkBudget = null;
@@ -275,7 +275,7 @@ function applyGeometryOffsets(earthAngleOffset, marsAngleOffset) {
  * @param {number} msg.flowCalctimeMs    max-flow time budget (longTermRun uses 20000)
  * @param {number} msg.maxIterations     feedback-loop cap (100, matching the serial path)
  */
-function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flowCalctimeMs = 20000, maxIterations = 15, sizingBudgetMs = 6000, objectiveOnly = false, earthAngleOffset = null, marsAngleOffset = null }) {
+function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flowCalctimeMs = 20000, maxIterations = 15, sizingBudgetMs = 6000, objectiveOnly = false, earthAngleOffset = null, marsAngleOffset = null, includeLinks = false }) {
   ensureState();
   const t0 = performance.now();
   const date = new Date(simDate);
@@ -454,6 +454,10 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
     scenarioId,
     satellitesCount,
     maxFlowGbps,
+    // Solved links (flow-annotated when the flow finished) — opt-in ONLY: the in-process
+    // main-thread sensitivity path uses them to display each scenario's routes during the
+    // dwell. The worker/pool path never sets includeLinks (postMessage clone weight).
+    possibleLinks: includeLinks ? ((fullNetworkData.links && fullNetworkData.links.length) ? fullNetworkData.links : possibleLinks) : undefined,
     flowError,
     capacityInfo,
     routeSummary: routeSummaryClone,
