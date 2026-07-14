@@ -1,6 +1,6 @@
 // simTopology.js — Topology building logic extracted from SimNetwork.
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.31";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.32";
 
 export class TopologyBuilder {
   constructor(simLinkBudget, simSatellites) {
@@ -2216,6 +2216,15 @@ export class TopologyBuilder {
           // and the max-flow sees 0 through it. Such "Earth-suitable but not Earth-
           // connected" chains were silently inflating the displayed capacity.
           if (isFinite(earthCap) && isFinite(marsCap)) {
+            // Relay-intrinsic capacity: the chain's own bottleneck BEFORE the planet-ring
+            // hops are folded in. The Earth/Mars auto-sizer must consume THIS number —
+            // sizing the planet rings from the planet-hop-inclusive total feeds the
+            // previous planet-ring size back into the next sizing (hysteresis, with a
+            // downward ratchet). Routing/optimization effects are still captured: this is
+            // measured on the real routed graph, not a formula.
+            route.relayOnlyMbps = isFinite(route.throughputMbps)
+              ? route.throughputMbps
+              : Math.min(earthCap, marsCap);
             route.throughputMbps = Math.min(route.throughputMbps, earthCap, marsCap);
             routes.push(route);
           }
@@ -2226,6 +2235,10 @@ export class TopologyBuilder {
     // Calculate and return summary + individual routes
     if (routes.length > 0) {
       const totalThroughput = routes.reduce((sum, r) => sum + r.throughputMbps, 0);
+      // Intrinsic relay-network capacity (planet-ring gateway hops excluded) — the
+      // deterministic sizing input for the Earth/Mars auto-sizer.
+      const relayOnlyThroughput = routes.reduce(
+        (sum, r) => sum + (isFinite(r.relayOnlyMbps) ? r.relayOnlyMbps : r.throughputMbps), 0);
       const throughputs = routes.map((r) => r.throughputMbps);
       const minThroughput = Math.min(...throughputs);
       const maxThroughput = Math.max(...throughputs);
@@ -2237,6 +2250,7 @@ export class TopologyBuilder {
 
       return {
         totalThroughput,
+        relayOnlyThroughput,
         routeCount: routes.length,
         minThroughput,
         avgThroughput: weightedAvgThroughput,
@@ -2332,6 +2346,9 @@ export class TopologyBuilder {
     const latencies = routes.map((r) => r.latencySeconds);
     return {
       totalThroughput,
+      // Eccentric routes already exclude the junction hops from capacity (latency-only
+      // above), so the total IS the relay-intrinsic number; alias it for a uniform API.
+      relayOnlyThroughput: totalThroughput,
       routeCount: routes.length,
       minThroughput: Math.min(...throughputs),
       avgThroughput: totalThroughput > 0 ? routes.reduce((s, r) => s + r.throughputMbps * r.throughputMbps, 0) / totalThroughput : 0,

@@ -1,11 +1,11 @@
 // simUi.js
-import { slidersData } from "./slidersData.js?v=4.31";
-import { LukashianClock } from "./lukashianTime.js?v=4.31";
-import { wireAuthUi } from "./auth.js?v=4.31";
-import { SensitivityPool } from "./sensitivityPool.js?v=4.31";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.31";
-import { minOf } from "./simMath.js?v=4.31";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.31";
+import { slidersData } from "./slidersData.js?v=4.32";
+import { LukashianClock } from "./lukashianTime.js?v=4.32";
+import { wireAuthUi } from "./auth.js?v=4.32";
+import { SensitivityPool } from "./sensitivityPool.js?v=4.32";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.32";
+import { minOf } from "./simMath.js?v=4.32";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.32";
 
 export class SimUi {
   constructor(simMain) {
@@ -750,9 +750,10 @@ export class SimUi {
 
   /**
    * Earth/Mars auto-size — called by simMain on every links-ready, but only acts once per
-   * design change (when ARMED) and only in 'auto'. Plugs HALF the live relay capacity
-   * (routeSummary.totalThroughput — the Capacity card's relay number, computed independently
-   * of the planet rings) into each planet ring's worst-case in-ring rate
+   * design change (when ARMED) and only in 'auto'. Plugs HALF the live RELAY-INTRINSIC
+   * capacity (routeSummary.relayOnlyThroughput — each route's bottleneck over relay-chain
+   * hops only, planet-ring gateway hops excluded, so the sizing input cannot depend on the
+   * previous planet-ring size) into each planet ring's worst-case in-ring rate
    * (ring_earth/ring_mars.requiredmbpsbetweensats). A planet injects at one gateway and its
    * ring carries the traffic two ways, so half the relay capacity per side sizes the ring to
    * deliver the full relay capacity. 'off' leaves the rings to the user.
@@ -771,7 +772,10 @@ export class SimUi {
     const rs = this.simMain?.routeSummary;
     if (!rs || !(rs.totalThroughput > 0)) return; // capacity not ready → stay armed, retry next
     this._planetSizeArmed = false;                // consume the arm: one re-size per design change
-    this._writePlanetSizing(rs.totalThroughput);
+    // Relay-intrinsic capacity (planet hops excluded): sizing from the end-to-end number
+    // fed the previous planet-ring size back into the next sizing — the satCount
+    // "hysteresis" at fixed ring count. Fallback covers stale worker payloads.
+    this._writePlanetSizing(rs.relayOnlyThroughput ?? rs.totalThroughput);
   }
 
   /**
@@ -4063,7 +4067,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=4.31");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=4.32");
     let result = null;
     try {
       result = await solveBandDistribution({

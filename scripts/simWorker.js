@@ -9,14 +9,14 @@
 // Loaded as an ES module worker:
 //   new Worker(new URL("./simWorker.js", import.meta.url), { type: "module" })
 
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.31";
-import { SimSatellites } from "./simSatellites.js?v=4.31";
-import { SimLinkBudget } from "./simLinkBudget.js?v=4.31";
-import { SimNetwork } from "./simNetwork.js?v=4.31";
-import { SimDeployment } from "./simDeployment.js?v=4.31";
-import { SimMissionValidator } from "./simMissionValidator.js?v=4.31";
-import { minOf } from "./simMath.js?v=4.31";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.31";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.32";
+import { SimSatellites } from "./simSatellites.js?v=4.32";
+import { SimLinkBudget } from "./simLinkBudget.js?v=4.32";
+import { SimNetwork } from "./simNetwork.js?v=4.32";
+import { SimDeployment } from "./simDeployment.js?v=4.32";
+import { SimMissionValidator } from "./simMissionValidator.js?v=4.32";
+import { minOf } from "./simMath.js?v=4.32";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.32";
 
 // --- State (initialized lazily on the first compute) ---
 let simLinkBudget = null;
@@ -172,6 +172,10 @@ function runPipeline({ requestId, windowIdx, configEpoch, uiConfig, satellitesCo
   if (routeSummary) {
     routeSummaryClone = {
       totalThroughput: routeSummary.totalThroughput,
+      // Relay-intrinsic capacity (planet-ring hops excluded) — the deterministic input
+      // for the Earth/Mars auto-sizer; must survive the clone or the sizer falls back
+      // to the planet-hop-contaminated total (the satCount-hysteresis bug).
+      relayOnlyThroughput: routeSummary.relayOnlyThroughput,
       routeCount: routeSummary.routeCount,
       minThroughput: routeSummary.minThroughput,
       avgThroughput: routeSummary.avgThroughput,
@@ -429,6 +433,10 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
   if (routeSummary) {
     routeSummaryClone = {
       totalThroughput: routeSummary.totalThroughput,
+      // Relay-intrinsic capacity (planet-ring hops excluded) — the deterministic input
+      // for the Earth/Mars auto-sizer; must survive the clone or the sizer falls back
+      // to the planet-hop-contaminated total (the satCount-hysteresis bug).
+      relayOnlyThroughput: routeSummary.relayOnlyThroughput,
       routeCount: routeSummary.routeCount,
       minThroughput: routeSummary.minThroughput,
       avgThroughput: routeSummary.avgThroughput,
