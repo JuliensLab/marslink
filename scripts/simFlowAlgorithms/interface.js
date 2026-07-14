@@ -53,9 +53,9 @@
 //
 // ============================================================
 
-import { edmondsKarp } from "./edmondsKarp.js?v=4.37";
-import { pushRelabel } from "./pushRelabel.js?v=4.37";
-import { topologyAware } from "./topologyAware.js?v=4.37";
+import { edmondsKarp } from "./edmondsKarp.js?v=4.38";
+import { pushRelabel } from "./pushRelabel.js?v=4.38";
+import { topologyAware } from "./topologyAware.js?v=4.38";
 
 /** Registry of available max-flow algorithms. */
 export const FLOW_ALGORITHMS = {
