@@ -347,7 +347,7 @@ export const slidersData = {
     },
     "wrights-law-factor": {
       label: "Wright's Law Factor",
-      description: "Learning rate: each doubling of cumulative production reduces unit cost by this %. 100% = no learning.",
+      description: "Progress ratio: each doubling of cumulative production multiplies unit cost by this % (85% = a 15% learning rate). 100% = no learning.",
       min: 75,
       max: 100,
       value: 85,
