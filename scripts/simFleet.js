@@ -15,7 +15,7 @@
 // this module owns only the discrete-event population dynamics. Pure logic, no
 // DOM — runnable/testable in Node.
 
-import { solveTransfer, findDepartureWindows } from "./simTransfer.js?v=4.32";
+import { solveTransfer, findDepartureWindows } from "./simTransfer.js?v=4.33";
 
 const MS_PER_DAY = 86400000;
 

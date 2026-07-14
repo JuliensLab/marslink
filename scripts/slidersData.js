@@ -1,6 +1,6 @@
 // slidersData.js
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.32";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.33";
 
 export const slidersData = {
   display: {
@@ -208,9 +208,9 @@ export const slidersData = {
       type: "radio",
       label: "Inter-ring matcher",
       description:
-        "Algorithm pairing inner-ring sats with outer-ring sats for the concentric relay families' radial backbone. Kept selectable for comparison. linear-merge = current (forward-only merge); monotonic-wrap = forward pointer with wraparound; greedy-nearest = original shortest-distance greedy (can emit long cross-route links); greedy-pairs = greedy-nearest restructured into independent per-ring-pair units (each inner sat takes the 3 sun-angle-nearest outer sats, scored by true 3D distance, greedily assigned per pair; no departure tilt or inline continuity — the route-continuity post-pass handles that). Built to be farmed one-pair-per-worker later; runs as a sequential loop for now; greedy-merge = greedy-nearest plus an island-merge repair — an augmenting-path pass that shifts the routes between an inner-rooted partial (stalagmite) and an outer-rooted partial (stalactite) so they meet into a complete Earth→Mars route, maximising the complete-route count while preserving greedy's existing routes; periapsis-chain / periapsis-radial = seed route at the Mars-periapsis angle then a parallel neighbour sweep using every satellite — the seed hop picks the nearest sat to the previous sat (chain) or to the periapsis angle itself (radial); max-throughput = pools all rings (routes may skip rings) and greedily packs the fattest node-disjoint Earth→Mars routes first to maximise aggregate Gbps (Σ capacity of each route's longest segment); logs its realised total vs. a max-flow upper bound to the console.",
+        "Algorithm pairing inner-ring sats with outer-ring sats for the concentric relay families' radial backbone. Kept selectable for comparison. linear-merge = forward-only merge; monotonic-wrap = forward pointer with wraparound; greedy-nearest = original shortest-distance greedy (can emit long cross-route links); greedy-pairs = greedy-nearest restructured into independent per-ring-pair units (each inner sat takes the 3 sun-angle-nearest outer sats, scored by true 3D distance, greedily assigned per pair; no departure tilt or inline continuity — the route-continuity post-pass handles that). Built to be farmed one-pair-per-worker later; runs as a sequential loop for now; greedy-merge (default) = greedy-nearest plus an island-merge repair — an augmenting-path pass that shifts the routes between an inner-rooted partial (stalagmite) and an outer-rooted partial (stalactite) so they meet into a complete Earth→Mars route, maximising the complete-route count while preserving greedy's existing routes; periapsis-chain / periapsis-radial = seed route at the Mars-periapsis angle then a parallel neighbour sweep using every satellite — the seed hop picks the nearest sat to the previous sat (chain) or to the periapsis angle itself (radial); max-throughput = pools all rings (routes may skip rings) and greedily packs the fattest node-disjoint Earth→Mars routes first to maximise aggregate Gbps (Σ capacity of each route's longest segment); logs its realised total vs. a max-flow upper bound to the console.",
       options: ["linear-merge", "monotonic-wrap", "greedy-nearest", "greedy-pairs", "greedy-merge", "periapsis-chain", "periapsis-radial", "max-throughput"],
-      value: "linear-merge",
+      value: "greedy-merge",
       unit: "",
       updateLongTermScore: true,
     },
