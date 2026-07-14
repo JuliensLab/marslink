@@ -404,11 +404,11 @@ export class SimDeployment {
   }
 
   /**
-   * Adds station-keeping argon budget for 15-year lifetime
+   * Adds station-keeping argon budget for the design lifetime
    * Includes Jupiter secular, SRP, and Earth/Mars co-orbital penalty
    */
   /**
-   * Pure station-keeping argon budget (kg) for a 15-yr (default) lifetime, from
+   * Pure station-keeping argon budget (kg) for a 10-yr (default) lifetime, from
    * Jupiter secular + SRP + Earth/Mars co-orbital Δv. Single source of truth —
    * reused by the display for the satellite mass/thrust colour schemes.
    * @param {number} r_au - orbit semi-major axis (AU)
@@ -416,7 +416,7 @@ export class SimDeployment {
    * @param {number} i_deg - inclination (deg)
    * @param {number} dryMass_kg - satellite dry mass
    */
-  stationKeepingArgonKg(r_au, ringType, i_deg, dryMass_kg, lifetime_years = 15) {
+  stationKeepingArgonKg(r_au, ringType, i_deg, dryMass_kg, lifetime_years = 10) {
     if (!(r_au > 0) || !(dryMass_kg > 0)) return 0;
     const isEarthRing = ringType === "Earth";
     const isMarsRing = ringType === "Mars";
@@ -503,7 +503,7 @@ export class SimDeployment {
     return ringData;
   }
 
-  addStationKeepingPropellant(vehicles, vehicleId, targetOrbitElements, lifetime_years = 15) {
+  addStationKeepingPropellant(vehicles, vehicleId, targetOrbitElements, lifetime_years = 10) {
     const sat = vehicles[vehicleId];
     if (!sat || sat.propellantType !== "Argon") return;
 
@@ -649,7 +649,7 @@ export class SimDeployment {
     this.addDeorbitManeuver(vehicles, "Satellites", targetOrbitElements);
 
     // Station-keeping for 15 years (Jupiter + SRP + proximity)
-    this.addStationKeepingPropellant(vehicles, "Satellites", targetOrbitElements, 15);
+    this.addStationKeepingPropellant(vehicles, "Satellites", targetOrbitElements, 10);
 
     this.addManeuverByDeltaVRequired(vehicles, "Satellites", "Inclination change", outboundDeltaV_km_per_s.deltaV_inclination);
     this.addManeuverByDeltaVRequired(vehicles, "Satellites", "2nd Hohmann maneuver", outboundDeltaV2);
