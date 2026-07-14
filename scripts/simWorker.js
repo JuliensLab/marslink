@@ -9,14 +9,14 @@
 // Loaded as an ES module worker:
 //   new Worker(new URL("./simWorker.js", import.meta.url), { type: "module" })
 
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.35";
-import { SimSatellites } from "./simSatellites.js?v=4.35";
-import { SimLinkBudget } from "./simLinkBudget.js?v=4.35";
-import { SimNetwork } from "./simNetwork.js?v=4.35";
-import { SimDeployment } from "./simDeployment.js?v=4.35";
-import { SimMissionValidator } from "./simMissionValidator.js?v=4.35";
-import { minOf } from "./simMath.js?v=4.35";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.35";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.37";
+import { SimSatellites } from "./simSatellites.js?v=4.37";
+import { SimLinkBudget } from "./simLinkBudget.js?v=4.37";
+import { SimNetwork } from "./simNetwork.js?v=4.37";
+import { SimDeployment } from "./simDeployment.js?v=4.37";
+import { SimMissionValidator } from "./simMissionValidator.js?v=4.37";
+import { minOf } from "./simMath.js?v=4.37";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.37";
 
 // --- State (initialized lazily on the first compute) ---
 let simLinkBudget = null;
@@ -308,7 +308,10 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
   const seenStates = new Set();
   for (let i = 0; i < maxIterations; i++) {
     iterations = i + 1;
-    if (performance.now() - t0 > sizingBudgetMs) break; // wall-clock guard
+    if (performance.now() - t0 > sizingBudgetMs) {
+      console.log(`[ScenarioSizing] #${scenarioId} BUDGET-STOP after ${i} update(s), elapsed=${Math.round(performance.now() - t0)}ms of ${sizingBudgetMs}ms`);
+      break; // wall-clock guard
+    }
     const planets = Object.values(simSolarSystem.updatePlanetsPositions(sizeDate));
     const satellites = simSatellites.updateSatellitesPositions(sizeDate);
     const links = simNetwork.getPossibleLinks(planets, satellites);
@@ -342,6 +345,7 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
     const aim = target * 1.03;
     const newEarth = earthMin > 0 ? Math.max(1, Math.round(oldEarth * aim / earthMin)) : oldEarth;
     const newMars = marsMin > 0 ? Math.max(1, Math.round(oldMars * aim / marsMin)) : oldMars;
+    console.log(`[ScenarioSizing] #${scenarioId} it=${i} target=${Math.round(target)} earthMin=${Math.round(earthMin)} marsMin=${Math.round(marsMin)} rate E ${Math.round(oldEarth)}->${newEarth} M ${Math.round(oldMars)}->${newMars} elapsed=${Math.round(performance.now() - t0)}ms`);
     if (newEarth === oldEarth && newMars === oldMars) break; // converged (no slider move)
 
     uiConfig["ring_earth.requiredmbpsbetweensats"] = newEarth;

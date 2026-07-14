@@ -8,7 +8,7 @@
 // (they don't compete or relay), so per-frame work is nil: the cloud is sampled
 // once per (count, seed) and re-measured on demand against the live backbone.
 
-import { sampleProbeVolume, measureProbes } from "./simProbeField.js?v=4.35";
+import { sampleProbeVolume, measureProbes } from "./simProbeField.js?v=4.37";
 
 export class SimProbeController {
   constructor() {

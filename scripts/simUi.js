@@ -1,11 +1,11 @@
 // simUi.js
-import { slidersData } from "./slidersData.js?v=4.35";
-import { LukashianClock } from "./lukashianTime.js?v=4.35";
-import { wireAuthUi } from "./auth.js?v=4.35";
-import { SensitivityPool } from "./sensitivityPool.js?v=4.35";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.35";
-import { minOf } from "./simMath.js?v=4.35";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.35";
+import { slidersData } from "./slidersData.js?v=4.37";
+import { LukashianClock } from "./lukashianTime.js?v=4.37";
+import { wireAuthUi } from "./auth.js?v=4.37";
+import { SensitivityPool } from "./sensitivityPool.js?v=4.37";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.37";
+import { minOf } from "./simMath.js?v=4.37";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.37";
 
 export class SimUi {
   constructor(simMain) {
@@ -1774,13 +1774,11 @@ export class SimUi {
             console.log(`[Sensitivity] main thread: ${scenarios.length} scenarios serially${renderMT ? " (displaying)" : ""}`);
             for (const s of scenarios) {
               if (stopRequested) break;
-              if (renderMT) {
-                // Rebuild the VISIBLE constellation for this scenario; yield once so the
-                // satellites start painting while the solve runs. The dwell itself moves to
-                // AFTER the solve, when the routes are known and can be shown too.
-                try { this.simMain.setSatellitesConfig(s.uiConfig); } catch (e) { console.warn("[Sensitivity] display build failed:", e?.message); }
-                await new Promise((r) => setTimeout(r, 0));
-              }
+              // (Display build happens AFTER the solve, from the SIZED config — building
+              // s.uiConfig here would show the seed-rated planet rings, which the sizing
+              // loop inside runScenario corrects on its own copy. Seed rates come from the
+              // analytic _relayThroughputMbps prediction, ~3-4x optimistic vs the routed
+              // graph, so the seed build's planet rings are visibly over-provisioned.)
               let res;
               try {
                 res = runScenarioInProcess({
@@ -1800,11 +1798,14 @@ export class SimUi {
               }
               if (stopRequested || !res) { completed++; renderProgress(); continue; }
               if (renderMT && Array.isArray(res.possibleLinks) && res.possibleLinks.length) {
-                // Show the scenario's solved links AND sync the right panel (capacity card,
-                // costs, latency chart) to the displayed scenario via the same consolidated
-                // apply the window cache uses — THEN dwell, so the 3D view and the panel
-                // data can be cross-checked together. The next live worker window naturally
-                // restores the panel after the sweep.
+                // Rebuild the VISIBLE constellation from the scenario's SIZED config (the
+                // Earth/Mars rates runScenario's feedback loop converged to), then show the
+                // solved links and sync the right panel via the same consolidated apply the
+                // window cache uses — THEN dwell. View, links, and panel now all describe
+                // the same sized constellation, and simMain's own async worker (fed the same
+                // sized config) later agrees instead of overwriting with seed-rated data.
+                try { this.simMain.setSatellitesConfig({ ...s.uiConfig, ...(res.sizedConfig || {}) }); } catch (e) { console.warn("[Sensitivity] display build failed:", e?.message); }
+                await new Promise((r) => setTimeout(r, 0));
                 try {
                   this.simMain.applyWindowResult({
                     networkData: { maxFlowGbps: res.maxFlowGbps || 0, links: res.possibleLinks },
@@ -4090,7 +4091,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=4.35");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=4.37");
     let result = null;
     try {
       result = await solveBandDistribution({

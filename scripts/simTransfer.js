@@ -19,9 +19,9 @@
 // Lambert (local or the nyx API) can replace the refined-Hohmann internals
 // without touching the fleet, topology, or UI layers.
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.35";
-import { helioCoords } from "./simOrbits.js?v=4.35";
-import { hohmannGeometry, hohmannEllipsePoints, computeHohmannRefined } from "./hohmannTransfer.js?v=4.35";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.37";
+import { helioCoords } from "./simOrbits.js?v=4.37";
+import { hohmannGeometry, hohmannEllipsePoints, computeHohmannRefined } from "./hohmannTransfer.js?v=4.37";
 
 const MS_PER_DAY = 86400000;
 const SECONDS_PER_DAY = 86400;
