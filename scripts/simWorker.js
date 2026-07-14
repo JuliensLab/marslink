@@ -9,14 +9,14 @@
 // Loaded as an ES module worker:
 //   new Worker(new URL("./simWorker.js", import.meta.url), { type: "module" })
 
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.34";
-import { SimSatellites } from "./simSatellites.js?v=4.34";
-import { SimLinkBudget } from "./simLinkBudget.js?v=4.34";
-import { SimNetwork } from "./simNetwork.js?v=4.34";
-import { SimDeployment } from "./simDeployment.js?v=4.34";
-import { SimMissionValidator } from "./simMissionValidator.js?v=4.34";
-import { minOf } from "./simMath.js?v=4.34";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.34";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.35";
+import { SimSatellites } from "./simSatellites.js?v=4.35";
+import { SimLinkBudget } from "./simLinkBudget.js?v=4.35";
+import { SimNetwork } from "./simNetwork.js?v=4.35";
+import { SimDeployment } from "./simDeployment.js?v=4.35";
+import { SimMissionValidator } from "./simMissionValidator.js?v=4.35";
+import { minOf } from "./simMath.js?v=4.35";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.35";
 
 // --- State (initialized lazily on the first compute) ---
 let simLinkBudget = null;
@@ -458,13 +458,18 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
     // main-thread sensitivity path uses them to display each scenario's routes during the
     // dwell. The worker/pool path never sets includeLinks (postMessage clone weight).
     possibleLinks: includeLinks ? ((fullNetworkData.links && fullNetworkData.links.length) ? fullNetworkData.links : possibleLinks) : undefined,
+    // In-process display mode also gets the mission profiles (right-panel costs need them
+    // for the fuel/report paths). By reference — never crosses postMessage.
+    missionProfilesData: includeLinks ? missionProfilesData : undefined,
     flowError,
     capacityInfo,
     routeSummary: routeSummaryClone,
     resultTreesData,
-    latencyData: latencyData
-      ? { bestLatency: latencyData.bestLatency, medianLatency: latencyData.medianLatency, averageLatency: latencyData.averageLatency }
-      : null,
+    latencyData: includeLinks
+      ? latencyData // in-process display mode: full object so the latency chart can render
+      : latencyData
+        ? { bestLatency: latencyData.bestLatency, medianLatency: latencyData.medianLatency, averageLatency: latencyData.averageLatency }
+        : null,
     sizedConfig: {
       "ring_earth.requiredmbpsbetweensats": uiConfig["ring_earth.requiredmbpsbetweensats"],
       "ring_mars.requiredmbpsbetweensats": uiConfig["ring_mars.requiredmbpsbetweensats"],

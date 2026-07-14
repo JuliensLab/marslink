@@ -1,11 +1,11 @@
 // simUi.js
-import { slidersData } from "./slidersData.js?v=4.34";
-import { LukashianClock } from "./lukashianTime.js?v=4.34";
-import { wireAuthUi } from "./auth.js?v=4.34";
-import { SensitivityPool } from "./sensitivityPool.js?v=4.34";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.34";
-import { minOf } from "./simMath.js?v=4.34";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.34";
+import { slidersData } from "./slidersData.js?v=4.35";
+import { LukashianClock } from "./lukashianTime.js?v=4.35";
+import { wireAuthUi } from "./auth.js?v=4.35";
+import { SensitivityPool } from "./sensitivityPool.js?v=4.35";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.35";
+import { minOf } from "./simMath.js?v=4.35";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.35";
 
 export class SimUi {
   constructor(simMain) {
@@ -1800,9 +1800,23 @@ export class SimUi {
               }
               if (stopRequested || !res) { completed++; renderProgress(); continue; }
               if (renderMT && Array.isArray(res.possibleLinks) && res.possibleLinks.length) {
-                // Show the scenario's solved links (flow-annotated) alongside the displayed
-                // satellites, THEN dwell — so the dwell shows the routes, not just the sats.
-                try { this.simMain.simDisplay?.updatePossibleLinks(res.possibleLinks); } catch (e) {}
+                // Show the scenario's solved links AND sync the right panel (capacity card,
+                // costs, latency chart) to the displayed scenario via the same consolidated
+                // apply the window cache uses — THEN dwell, so the 3D view and the panel
+                // data can be cross-checked together. The next live worker window naturally
+                // restores the panel after the sweep.
+                try {
+                  this.simMain.applyWindowResult({
+                    networkData: { maxFlowGbps: res.maxFlowGbps || 0, links: res.possibleLinks },
+                    latencyData: res.latencyData || null,
+                    capacityInfo: res.capacityInfo || null,
+                    routeSummary: res.routeSummary || null,
+                    missionProfilesData: res.missionProfilesData || null,
+                    resultTreesData: res.resultTreesData || [],
+                    satellitesCount: res.satellitesCount,
+                    possibleLinks: res.possibleLinks,
+                  });
+                } catch (e) { console.warn("[Sensitivity] scenario panel sync failed:", e?.message); }
                 if (dwellMs > 0) await new Promise((r) => setTimeout(r, dwellMs));
               }
               recordScenarioResult(res, s);
@@ -4076,7 +4090,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=4.34");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=4.35");
     let result = null;
     try {
       result = await solveBandDistribution({
