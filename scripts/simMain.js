@@ -1,23 +1,23 @@
 // simMain.js
 
-import { SimUi } from "./simUi.js?v=4.39";
-import { SimTime } from "./simTime.js?v=4.39";
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.39";
-import { SimSatellites } from "./simSatellites.js?v=4.39";
-import { SimDeployment } from "./simDeployment.js?v=4.39";
-import { SimMissionValidator } from "./simMissionValidator.js?v=4.39";
-import { SimLinkBudget } from "./simLinkBudget.js?v=4.39";
-import { SimNetwork } from "./simNetwork.js?v=4.39";
+import { SimUi } from "./simUi.js?v=4.40";
+import { SimTime } from "./simTime.js?v=4.40";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.40";
+import { SimSatellites } from "./simSatellites.js?v=4.40";
+import { SimDeployment } from "./simDeployment.js?v=4.40";
+import { SimMissionValidator } from "./simMissionValidator.js?v=4.40";
+import { SimLinkBudget } from "./simLinkBudget.js?v=4.40";
+import { SimNetwork } from "./simNetwork.js?v=4.40";
 // Import both SimDisplay implementations with unique names
-import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=4.39";
-import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=4.39";
-import { generateReport } from "./reportGenerator.js?v=4.39";
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.39";
-import { minOf, maxOf } from "./simMath.js?v=4.39";
-import { SimFlightController } from "./simFlightController.js?v=4.39";
-import { SimProbeController } from "./simProbeController.js?v=4.39";
-import { findDepartureWindows } from "./simTransfer.js?v=4.39";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.39";
+import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=4.40";
+import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=4.40";
+import { generateReport } from "./reportGenerator.js?v=4.40";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.40";
+import { minOf, maxOf } from "./simMath.js?v=4.40";
+import { SimFlightController } from "./simFlightController.js?v=4.40";
+import { SimProbeController } from "./simProbeController.js?v=4.40";
+import { findDepartureWindows } from "./simTransfer.js?v=4.40";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.40";
 
 export class SimMain {
   // Clamp argument to [-1, 1] to prevent NaN from Math.asin domain errors
@@ -70,7 +70,7 @@ export class SimMain {
     if (typeof window !== "undefined") window.simMain = this;
 
     // --- Worker + triple-buffered window cache (-1/0/+1) ---
-    this.simWorker = new Worker(new URL("./simWorker.js?v=4.39", import.meta.url), { type: "module" });
+    this.simWorker = new Worker(new URL("./simWorker.js?v=4.40", import.meta.url), { type: "module" });
     this.simWorker.onmessage = (event) => this.handleWorkerMessage(event);
     this.simWorker.onerror = (event) => console.error("[Marslink] Worker error:", event.message);
     this.simWorker.postMessage({ type: "init" });
@@ -718,7 +718,7 @@ export class SimMain {
             relayRingCount, bottleneckLine, eJct, mJct, fmtMbps, fmtRange, fmtNum } = d;
     // Junction label: link count, total capacity, min|avg|max per link (from interCap).
     const jctCapLabel = (j, prefix) => (j && j.count
-      ? `${prefix}${j.count} links · ${fmtMbps(j.sum)} · ${fmtRange(j.min, j.sum / j.count, j.max)}`
+      ? `${fmtMbps(j.sum)} · ${prefix}${j.count} links · ${fmtRange(j.min, j.sum / j.count, j.max)}`
       : null);
 
     // ring↔relay junction aggregates (eccentric: from ringDetail; null otherwise).
@@ -769,7 +769,7 @@ export class SimMain {
     // Junction label: active links, total flow, utilization vs junction capacity,
     // and min|avg|max flow per active link.
     const jctFlowLabel = (f, cap) => (f && f.count
-      ? `${f.count} active · ${fmtMbps(f.sum)}${cap && cap.sum ? " · " + pct(f.sum, cap.sum) : ""} · ${fmtRange(f.min, f.avg, f.max)}`
+      ? `${fmtMbps(f.sum)}${cap && cap.sum ? " · " + pct(f.sum, cap.sum) : ""} · ${f.count} active · ${fmtRange(f.min, f.avg, f.max)}`
       : null);
 
     const stat = (arr) => (arr && arr.length ? { lo: minOf(arr), hi: maxOf(arr), avg: arr.reduce((a, b) => a + b, 0) / arr.length } : null);

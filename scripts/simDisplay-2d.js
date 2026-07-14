@@ -5,10 +5,10 @@
  * with pan and zoom (mouse & touch).
  ***********************************************/
 
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.39";
-import { createCarModel } from "./modelCar.js?v=4.39";
-import { positionFromSolarAngle } from "./simOrbits.js?v=4.39";
-import { stationKeepingAccel, GM, sampleThrustField, marchingSquares, satSchemeT, rampRGB, OVER_BUDGET_RGB, isThrustScheme, satStationKeeping, satTotalProp, G0, SECONDS_PER_YEAR } from "./simStationKeeping.js?v=4.39";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.40";
+import { createCarModel } from "./modelCar.js?v=4.40";
+import { positionFromSolarAngle } from "./simOrbits.js?v=4.40";
+import { stationKeepingAccel, GM, sampleThrustField, marchingSquares, satSchemeT, rampRGB, OVER_BUDGET_RGB, isThrustScheme, satStationKeeping, satTotalProp, G0, SECONDS_PER_YEAR } from "./simStationKeeping.js?v=4.40";
 
 // Per-option style for the Display "Reference lines". tag===null → label both endpoints
 // with their angle (a symmetric node line); otherwise label only the n1 end with the tag.
