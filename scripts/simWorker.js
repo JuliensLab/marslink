@@ -9,14 +9,14 @@
 // Loaded as an ES module worker:
 //   new Worker(new URL("./simWorker.js", import.meta.url), { type: "module" })
 
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.38";
-import { SimSatellites } from "./simSatellites.js?v=4.38";
-import { SimLinkBudget } from "./simLinkBudget.js?v=4.38";
-import { SimNetwork } from "./simNetwork.js?v=4.38";
-import { SimDeployment } from "./simDeployment.js?v=4.38";
-import { SimMissionValidator } from "./simMissionValidator.js?v=4.38";
-import { minOf } from "./simMath.js?v=4.38";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.38";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.39";
+import { SimSatellites } from "./simSatellites.js?v=4.39";
+import { SimLinkBudget } from "./simLinkBudget.js?v=4.39";
+import { SimNetwork } from "./simNetwork.js?v=4.39";
+import { SimDeployment } from "./simDeployment.js?v=4.39";
+import { SimMissionValidator } from "./simMissionValidator.js?v=4.39";
+import { minOf } from "./simMath.js?v=4.39";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.39";
 
 // --- State (initialized lazily on the first compute) ---
 let simLinkBudget = null;
@@ -77,9 +77,11 @@ function calculateCapacityInfo(links) {
         if (fromRing === "ring_earth") ringCapacities["ring_earth"].planetLinks.push({ cap, satId: link.toId });
         if (fromRing === "ring_mars") ringCapacities["ring_mars"].planetLinks.push({ cap, satId: link.toId });
         const key = [fromRing, toRing].sort().join("-");
-        if (!interCap[key]) interCap[key] = { sum: 0, count: 0 };
+        if (!interCap[key]) interCap[key] = { sum: 0, count: 0, min: Infinity, max: 0 };
         interCap[key].sum += cap;
         interCap[key].count += 1;
+        if (cap < interCap[key].min) interCap[key].min = cap;
+        if (cap > interCap[key].max) interCap[key].max = cap;
       }
     }
   });

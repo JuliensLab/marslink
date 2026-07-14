@@ -1,7 +1,7 @@
 // simDeployment.js
 
-import { calculateHohmannDeltaV_km_s } from "./simDeltaV.js?v=4.38";
-import { stationKeepingAccel, ringBaseline, satStationKeeping } from "./simStationKeeping.js?v=4.38";
+import { calculateHohmannDeltaV_km_s } from "./simDeltaV.js?v=4.39";
+import { stationKeepingAccel, ringBaseline, satStationKeeping } from "./simStationKeeping.js?v=4.39";
 
 // Default launch-to-LEO Δv (km/s). Configurable via the Launch Vehicle category
 // (see setVehicleConfig); this is the fallback before any config is applied.
