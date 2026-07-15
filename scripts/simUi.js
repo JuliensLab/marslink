@@ -1,11 +1,11 @@
 // simUi.js
-import { slidersData } from "./slidersData.js?v=4.40";
-import { LukashianClock } from "./lukashianTime.js?v=4.40";
-import { wireAuthUi } from "./auth.js?v=4.40";
-import { SensitivityPool } from "./sensitivityPool.js?v=4.40";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.40";
-import { minOf } from "./simMath.js?v=4.40";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.40";
+import { slidersData } from "./slidersData.js?v=4.41";
+import { LukashianClock } from "./lukashianTime.js?v=4.41";
+import { wireAuthUi } from "./auth.js?v=4.41";
+import { SensitivityPool } from "./sensitivityPool.js?v=4.41";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.41";
+import { minOf } from "./simMath.js?v=4.41";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.41";
 
 export class SimUi {
   constructor(simMain) {
@@ -1749,6 +1749,10 @@ export class SimUi {
                 costPerMbps: Number.isFinite(costs?.costPerMbps) ? costs.costPerMbps : null,
                 launches: costs?.launchCount ?? null,
                 lasers: costs?.laserCount ?? null,
+                // Junction-pair sun angles (per junction: planet-side deg, relay-side deg,
+                // per-link Gbps + planet angles) — for measuring the used angular window
+                // around the tangent point (knee/N_max analysis).
+                junctionAngles: res.capacityInfo?.junctionAngles || null,
               };
               const tag = `sweep: ${s.ringCount ?? "cur"} rings${s.techUserVal != null ? " · " + s.techUserVal + "x" : ""}${s.routeCount != null ? " · " + s.routeCount + " " + secondAxisMeta.unit : ""} · ${s.placement.label}`;
               this._archiveAppend({ id: Date.now() + s.scenarioId, name: tag, ts: new Date().toISOString(), config: s.archiveConfig || {}, metrics: m });
@@ -1950,6 +1954,7 @@ export class SimUi {
                       costPerMbps: Number.isFinite(costs?.costPerMbps) ? costs.costPerMbps : null,
                       launches: costs?.launchCount ?? null,
                       lasers: costs?.laserCount ?? null,
+                      junctionAngles: res.capacityInfo?.junctionAngles || null,
                     };
                     const tag = `opt: ${ringCount ?? "cur"} rings${techUserVal != null ? " · " + techUserVal + "x" : ""}${routeCount != null ? " · " + routeCount + " " + secondAxisMeta.unit : ""} · ${placement.label}`;
                     this._archiveAppend({ id: Date.now() + scenarioId, name: tag, ts: new Date().toISOString(), config: this._archiveSnapshotConfig?.() || {}, metrics: m });
@@ -4091,7 +4096,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=4.40");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=4.41");
     let result = null;
     try {
       result = await solveBandDistribution({

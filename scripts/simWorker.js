@@ -9,14 +9,14 @@
 // Loaded as an ES module worker:
 //   new Worker(new URL("./simWorker.js", import.meta.url), { type: "module" })
 
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.40";
-import { SimSatellites } from "./simSatellites.js?v=4.40";
-import { SimLinkBudget } from "./simLinkBudget.js?v=4.40";
-import { SimNetwork } from "./simNetwork.js?v=4.40";
-import { SimDeployment } from "./simDeployment.js?v=4.40";
-import { SimMissionValidator } from "./simMissionValidator.js?v=4.40";
-import { minOf } from "./simMath.js?v=4.40";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.40";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.41";
+import { SimSatellites } from "./simSatellites.js?v=4.41";
+import { SimLinkBudget } from "./simLinkBudget.js?v=4.41";
+import { SimNetwork } from "./simNetwork.js?v=4.41";
+import { SimDeployment } from "./simDeployment.js?v=4.41";
+import { SimMissionValidator } from "./simMissionValidator.js?v=4.41";
+import { minOf } from "./simMath.js?v=4.41";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.41";
 
 // --- State (initialized lazily on the first compute) ---
 let simLinkBudget = null;
@@ -86,6 +86,39 @@ function calculateCapacityInfo(links) {
     }
   });
   return { ringCapacities, interCap };
+}
+
+/**
+ * Sun angles (ecliptic longitude, degrees) of the satellites participating in each
+ * planet-ring <-> relay junction, with per-link capacity, plus each planet's own sun
+ * angle. Archived with the results so the junction-pair distribution around the
+ * tangent/closest-approach point can be measured offline (knee model validation).
+ */
+function collectJunctionAngles(links, satellites, planets) {
+  const ang = (p) => Math.round((Math.atan2(p.y, p.x) * 18000) / Math.PI) / 100; // deg, 0.01 res
+  const satAng = new Map();
+  for (const s of satellites) if (s && s.name && s.position) satAng.set(s.name, ang(s.position));
+  const isRelay = (id) => id && id.startsWith("ring_") && !id.startsWith("ring_earth") && !id.startsWith("ring_mars");
+  const out = { earth: { deg: [], relayDeg: [], gbps: [] }, mars: { deg: [], relayDeg: [], gbps: [] } };
+  for (const l of links) {
+    let planetSide = null, side = null;
+    if (l.fromId.startsWith("ring_earth") && isRelay(l.toId)) { planetSide = l.fromId; side = "earth"; }
+    else if (l.toId.startsWith("ring_earth") && isRelay(l.fromId)) { planetSide = l.toId; side = "earth"; }
+    else if (l.fromId.startsWith("ring_mars") && isRelay(l.toId)) { planetSide = l.fromId; side = "mars"; }
+    else if (l.toId.startsWith("ring_mars") && isRelay(l.fromId)) { planetSide = l.toId; side = "mars"; }
+    if (!side) continue;
+    const relaySide = planetSide === l.fromId ? l.toId : l.fromId;
+    const a = satAng.get(planetSide), b = satAng.get(relaySide);
+    if (a == null || b == null) continue;
+    out[side].deg.push(a);
+    out[side].relayDeg.push(b);
+    out[side].gbps.push(Math.round((l.gbpsCapacity || 0) * 1000) / 1000);
+  }
+  for (const p of planets) {
+    if (p && p.name === "Earth" && p.position) out.earthPlanetDeg = ang(p.position);
+    if (p && p.name === "Mars" && p.position) out.marsPlanetDeg = ang(p.position);
+  }
+  return out;
 }
 
 /**
@@ -167,6 +200,7 @@ function runPipeline({ requestId, windowIdx, configEpoch, uiConfig, satellitesCo
   // 6. Capacity info
   t = performance.now();
   const capacityInfo = calculateCapacityInfo(possibleLinks);
+  capacityInfo.junctionAngles = collectJunctionAngles(possibleLinks, satellites, planets);
   mark("calculateCapacityInfo", t);
 
   // 7. Strip routeSummary to clonable data
@@ -426,6 +460,7 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
   const possibleLinks = simNetwork.getPossibleLinks(planets, satellites);
   const routeSummary = simNetwork.routeSummary;
   const capacityInfo = calculateCapacityInfo(possibleLinks);
+  capacityInfo.junctionAngles = collectJunctionAngles(possibleLinks, satellites, planets);
 
   const fullNetworkData = simNetwork.getNetworkData(planets, satellites, possibleLinks, flowCalctimeMs);
   // A timed-out max-flow solve is "too large to solve", NOT "0 Gbps achievable" — flag it
