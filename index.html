@@ -24,8 +24,8 @@
   <!-- Inline SVG favicon — no extra request, scales nicely. Same ◉ as the brand. -->
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230b0f1a'/%3E%3Ccircle cx='16' cy='16' r='8' fill='none' stroke='%23ff6b35' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='3' fill='%23ff6b35'/%3E%3C/svg%3E">
 
-  <script src="scripts/imported/chart/chart.js?v=4.41"></script>
-  <link rel="stylesheet" href="styles.css?v=4.41">
+  <script src="scripts/imported/chart/chart.js?v=4.42"></script>
+  <link rel="stylesheet" href="styles.css?v=4.42">
 </head>
 
 <body>
@@ -244,7 +244,8 @@
           </div>
         </div>
         <div class="form-group" id="sens-flow-budget-group" style="margin-top:var(--s-2);">
-          <div class="sens-row" style="display:flex; gap:var(--s-2); align-items:center;">
+          <label style="display:flex; align-items:center; gap:6px;" title="Run the max-flow solve (and its flow-weighted latency histogram) for each scenario. With the relay-first design process — relay network sets the capacity, planetary rings are sized to match — the solve just re-derives the relay network's routed capacity, so sweeps are much faster with this off. Capacity then comes from the routing calc; the flow metric and P50 latency show as gaps."><input type="checkbox" id="sens-calc-flow"> Calculate flow (max-flow solve)</label>
+          <div class="sens-row" id="sens-flow-budget-row" style="display:none; gap:var(--s-2); align-items:center; margin-top:var(--s-2);">
             <span class="muted">Max-flow time budget</span>
             <input type="number" id="sens-flow-budget" value="20" min="0" max="600" step="1" style="width:55px;" title="Per-scenario wall-clock budget for the max-flow solve. Scenarios whose solve exceeds it are shown as gaps (flow unknown, not 0) — raise it to resolve larger constellations, at the cost of slower sweeps. 0 = no limit: grind each solve to completion like the live sim (may take very long or never finish — best paired with Main thread). Separate from the live view's 'Allowed flow calc time'.">
             <span class="muted">sec <span style="opacity:0.7;">(0 = no limit)</span></span>
@@ -401,7 +402,7 @@
       }
     }
   </script>
-  <script type="module" src="scripts/simMain.js?v=4.41"></script>
+  <script type="module" src="scripts/simMain.js?v=4.42"></script>
 </body>
 
 </html>

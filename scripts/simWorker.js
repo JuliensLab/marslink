@@ -9,14 +9,14 @@
 // Loaded as an ES module worker:
 //   new Worker(new URL("./simWorker.js", import.meta.url), { type: "module" })
 
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.41";
-import { SimSatellites } from "./simSatellites.js?v=4.41";
-import { SimLinkBudget } from "./simLinkBudget.js?v=4.41";
-import { SimNetwork } from "./simNetwork.js?v=4.41";
-import { SimDeployment } from "./simDeployment.js?v=4.41";
-import { SimMissionValidator } from "./simMissionValidator.js?v=4.41";
-import { minOf } from "./simMath.js?v=4.41";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.41";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.42";
+import { SimSatellites } from "./simSatellites.js?v=4.42";
+import { SimLinkBudget } from "./simLinkBudget.js?v=4.42";
+import { SimNetwork } from "./simNetwork.js?v=4.42";
+import { SimDeployment } from "./simDeployment.js?v=4.42";
+import { SimMissionValidator } from "./simMissionValidator.js?v=4.42";
+import { minOf } from "./simMath.js?v=4.42";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.42";
 
 // --- State (initialized lazily on the first compute) ---
 let simLinkBudget = null;
@@ -311,7 +311,7 @@ function applyGeometryOffsets(earthAngleOffset, marsAngleOffset) {
  * @param {number} msg.flowCalctimeMs    max-flow time budget (longTermRun uses 20000)
  * @param {number} msg.maxIterations     feedback-loop cap (100, matching the serial path)
  */
-function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flowCalctimeMs = 20000, maxIterations = 15, sizingBudgetMs = 6000, objectiveOnly = false, earthAngleOffset = null, marsAngleOffset = null, includeLinks = false }) {
+function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flowCalctimeMs = 20000, maxIterations = 15, sizingBudgetMs = 6000, objectiveOnly = false, earthAngleOffset = null, marsAngleOffset = null, includeLinks = false, computeFlow = true }) {
   ensureState();
   const t0 = performance.now();
   const date = new Date(simDate);
@@ -462,13 +462,19 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
   const capacityInfo = calculateCapacityInfo(possibleLinks);
   capacityInfo.junctionAngles = collectJunctionAngles(possibleLinks, satellites, planets);
 
-  const fullNetworkData = simNetwork.getNetworkData(planets, satellites, possibleLinks, flowCalctimeMs);
-  // A timed-out max-flow solve is "too large to solve", NOT "0 Gbps achievable" — flag it
-  // so the caller can show a gap instead of a misleading drop to zero (see buildScenarioMetrics).
-  const flowError = fullNetworkData.error || null;
-  const maxFlowGbps = flowError ? 0 : (fullNetworkData.maxFlowGbps || 0);
-  let latencyData = null;
-  if (!fullNetworkData.error) latencyData = simNetwork.calculateLatencies(fullNetworkData);
+  // Max-flow is optional: once the design process is relay-network-first (planet rings
+  // sized to match the relay capacity), the solve just re-derives routeSummary's
+  // throughput — skipping it makes sweeps far cheaper. maxFlowGbps === null then means
+  // "not computed" (vs 0 = solved to zero), and consumers fall back to routeSummary.
+  let fullNetworkData = null, flowError = null, maxFlowGbps = null, latencyData = null;
+  if (computeFlow) {
+    fullNetworkData = simNetwork.getNetworkData(planets, satellites, possibleLinks, flowCalctimeMs);
+    // A timed-out max-flow solve is "too large to solve", NOT "0 Gbps achievable" — flag it
+    // so the caller can show a gap instead of a misleading drop to zero (see buildScenarioMetrics).
+    flowError = fullNetworkData.error || null;
+    maxFlowGbps = flowError ? 0 : (fullNetworkData.maxFlowGbps || 0);
+    if (!fullNetworkData.error) latencyData = simNetwork.calculateLatencies(fullNetworkData);
+  }
 
   let routeSummaryClone = null;
   if (routeSummary) {
@@ -498,7 +504,7 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
     // Solved links (flow-annotated when the flow finished) — opt-in ONLY: the in-process
     // main-thread sensitivity path uses them to display each scenario's routes during the
     // dwell. The worker/pool path never sets includeLinks (postMessage clone weight).
-    possibleLinks: includeLinks ? ((fullNetworkData.links && fullNetworkData.links.length) ? fullNetworkData.links : possibleLinks) : undefined,
+    possibleLinks: includeLinks ? ((fullNetworkData && fullNetworkData.links && fullNetworkData.links.length) ? fullNetworkData.links : possibleLinks) : undefined,
     // In-process display mode also gets the mission profiles (right-panel costs need them
     // for the fuel/report paths). By reference — never crosses postMessage.
     missionProfilesData: includeLinks ? missionProfilesData : undefined,

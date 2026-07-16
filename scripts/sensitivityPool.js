@@ -41,7 +41,7 @@ export class SensitivityPool {
     // utilization: ({ active, size, queued, pending, inFlightMB, memBudgetMB }) => void
     this.onActivity = null;
     for (let i = 0; i < this.size; i++) {
-      const worker = new Worker(new URL("./simWorker.js?v=4.41", import.meta.url), { type: "module" });
+      const worker = new Worker(new URL("./simWorker.js?v=4.42", import.meta.url), { type: "module" });
       const slot = { worker, busy: false };
       worker.onmessage = (e) => this._onMessage(slot, e.data);
       worker.onerror = (e) => this._onWorkerError(slot, e);

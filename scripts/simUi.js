@@ -1,11 +1,11 @@
 // simUi.js
-import { slidersData } from "./slidersData.js?v=4.41";
-import { LukashianClock } from "./lukashianTime.js?v=4.41";
-import { wireAuthUi } from "./auth.js?v=4.41";
-import { SensitivityPool } from "./sensitivityPool.js?v=4.41";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.41";
-import { minOf } from "./simMath.js?v=4.41";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.41";
+import { slidersData } from "./slidersData.js?v=4.42";
+import { LukashianClock } from "./lukashianTime.js?v=4.42";
+import { wireAuthUi } from "./auth.js?v=4.42";
+import { SensitivityPool } from "./sensitivityPool.js?v=4.42";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.42";
+import { minOf } from "./simMath.js?v=4.42";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.42";
 
 export class SimUi {
   constructor(simMain) {
@@ -1216,6 +1216,13 @@ export class SimUi {
     for (const b of execBtns) b.addEventListener("click", () => { this._sensExec = b.dataset.exec; syncExec(); });
     syncExec();
 
+    // --- Optional max-flow solve: budget row only matters when the solve runs ---
+    const calcFlowCb = document.getElementById("sens-calc-flow");
+    const flowBudgetRow = document.getElementById("sens-flow-budget-row");
+    const syncCalcFlow = () => { if (flowBudgetRow) flowBudgetRow.style.display = calcFlowCb?.checked ? "flex" : "none"; };
+    calcFlowCb?.addEventListener("change", syncCalcFlow);
+    syncCalcFlow();
+
     // --- Geometry explainer popover (ⓘ): renders what the selected mode samples,
     //     and re-renders live when the mode changes while open. ---
     const geomInfoBtn = document.getElementById("sens-geom-info");
@@ -1549,6 +1556,9 @@ export class SimUi {
         this.simMain._sensitivityRunning = !optimizedMode;
         secondAxisMeta = this._sensSecondAxis(); // relay family fixed for the run
         const flowMs = flowBudgetMs(); // per-scenario max-flow budget, fixed for the run
+        // Optional max-flow solve (off by default): with the relay-first design process the
+        // solve only re-derives routeSummary's capacity, so sweeps skip it unless asked.
+        const calcFlow = document.getElementById("sens-calc-flow")?.checked === true;
         const ringValues = buildRingValues();
         const techValues = buildTechValues();
         const routeValues = buildRouteValues();
@@ -1622,10 +1632,16 @@ export class SimUi {
         // Post-process a worker scenario result into chart metrics (shared by both
         // the parallel and serial paths). Returns { scenario, metrics }.
         const buildScenarioMetrics = (res, ringCount, techUserVal, dateStr, routeCount) => {
-          const costs = this.simMain.calculateCosts(res.maxFlowGbps, res.resultTreesData || []);
           const capacityInfo = res.capacityInfo;
           const rs = res.routeSummary;
           const ld = res.latencyData;
+          // maxFlowGbps === null means the solve was skipped (sens-calc-flow off), not 0 —
+          // cost-per-Mbps then uses the routed relay capacity, which the relay-first design
+          // process makes equivalent (planet rings are sized to match it).
+          const flowSkipped = res.maxFlowGbps == null;
+          const costs = this.simMain.calculateCosts(
+            flowSkipped ? (rs?.totalThroughput || 0) / 1000 : res.maxFlowGbps,
+            res.resultTreesData || []);
           const ringMin = (name) => {
             const a = capacityInfo?.ringCapacities?.[name]?.inring;
             return a && a.length ? 2 * minOf(a) : null;
@@ -1643,13 +1659,17 @@ export class SimUi {
             earthSats, relaySats, marsSats,
             // A timed-out max-flow solve (too large to solve in the budget) is unknown, not
             // zero — emit null so the chart shows a gap instead of a misleading drop to 0.
-            flow: res.flowError ? null : (res.maxFlowGbps ?? 0) * 1000,
+            // Same for a skipped solve (sens-calc-flow off): relayFlow carries the capacity.
+            flow: (res.flowError || flowSkipped) ? null : res.maxFlowGbps * 1000,
             earthFlow: ringMin("ring_earth"),
             marsFlow: ringMin("ring_mars"),
             relayFlow: rs?.totalThroughput ?? null,
             cost: costs.totalCosts,
             cpf: costs.costPerMbps,
-            latMin: ld?.bestLatency != null ? ld.bestLatency / 60 : null,
+            // Flow skipped: best latency falls back to the routing calc's fastest route
+            // (same definition); P50 stays null — the flow-weighted median has no
+            // routing-only equivalent (rs.avgLatency is an unweighted route mean).
+            latMin: ld?.bestLatency != null ? ld.bestLatency / 60 : (rs?.minLatency != null ? rs.minLatency / 60 : null),
             latP50: ld?.medianLatency != null ? ld.medianLatency / 60 : null,
           };
           const scenario = {
@@ -1793,6 +1813,7 @@ export class SimUi {
                   simDate: s.placement.simDate, sizingDate: placements[0].simDate,
                   earthAngleOffset: s.placement.earthAngleOffset, marsAngleOffset: s.placement.marsAngleOffset,
                   flowCalctimeMs: flowMs,
+                  computeFlow: calcFlow,
                   includeLinks: renderMT,
                 });
               } catch (err) {
@@ -1861,6 +1882,7 @@ export class SimUi {
                 earthAngleOffset: s.placement.earthAngleOffset,
                 marsAngleOffset: s.placement.marsAngleOffset,
                 flowCalctimeMs: flowMs,
+                computeFlow: calcFlow,
               }, s.estMB).then((res) => {
                 if (stopRequested || !res) return;
                 recordScenarioResult(res, s);
@@ -1923,6 +1945,7 @@ export class SimUi {
                     simDate: placement.simDate, sizingDate: placements[0].simDate,
                     earthAngleOffset: placement.earthAngleOffset, marsAngleOffset: placement.marsAngleOffset,
                     flowCalctimeMs: flowMs,
+                    computeFlow: calcFlow,
                   }, estMBfor(cfg));
                   if (stopRequested || !res) { completed++; renderProgress(); continue; }
                   if (res.flowError) flowTimeouts++;
@@ -4096,7 +4119,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=4.41");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=4.42");
     let result = null;
     try {
       result = await solveBandDistribution({
