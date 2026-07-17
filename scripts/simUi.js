@@ -1,11 +1,11 @@
 // simUi.js
-import { slidersData } from "./slidersData.js?v=4.42";
-import { LukashianClock } from "./lukashianTime.js?v=4.42";
-import { wireAuthUi } from "./auth.js?v=4.42";
-import { SensitivityPool } from "./sensitivityPool.js?v=4.42";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.42";
-import { minOf } from "./simMath.js?v=4.42";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.42";
+import { slidersData } from "./slidersData.js?v=4.43";
+import { LukashianClock } from "./lukashianTime.js?v=4.43";
+import { wireAuthUi } from "./auth.js?v=4.43";
+import { SensitivityPool } from "./sensitivityPool.js?v=4.43";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.43";
+import { minOf } from "./simMath.js?v=4.43";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.43";
 
 export class SimUi {
   constructor(simMain) {
@@ -1654,9 +1654,13 @@ export class SimUi {
             else if (rn === "ring_mars") marsSats += c;
             else relaySats += c;
           }
+          // Per-ring satellite breakdown for the archive: one entry per orbit tree
+          // (ring_earth / ring_mars / every individual relay ring), in build order.
+          // The flat satCount alone forced chord-law reconstruction in the analysis.
+          const ringSats = (res.resultTreesData || []).map((o) => ({ ring: o.ringName || "?", sats: o.satCount || 0 }));
           const metrics = {
             sats: res.satellitesCount,
-            earthSats, relaySats, marsSats,
+            earthSats, relaySats, marsSats, ringSats,
             // A timed-out max-flow solve (too large to solve in the budget) is unknown, not
             // zero — emit null so the chart shows a gap instead of a misleading drop to 0.
             // Same for a skipped solve (sens-calc-flow off): relayFlow carries the capacity.
@@ -1762,6 +1766,10 @@ export class SimUi {
                 ringCount: s.resolvedRingCount,
                 routeCount: s.routeCount ?? null,
                 satCount: res.satellitesCount || 0,
+                // Population split + per-ring counts (earth/mars/each relay ring):
+                // theory's S is relay-only, so archives must carry the separation.
+                earthSats: metrics.earthSats, marsSats: metrics.marsSats, relaySats: metrics.relaySats,
+                ringSats: metrics.ringSats,
                 gbps: Math.round(gbpsVal * 1000) / 1000,
                 latMinMin: metrics.latMin != null ? Math.round(metrics.latMin * 10) / 10 : null,
                 latP50Min: metrics.latP50 != null ? Math.round(metrics.latP50 * 10) / 10 : null,
@@ -1970,6 +1978,8 @@ export class SimUi {
                       routeCount: routeCount ?? null,
                       latticeCount: this._latticeTerminals(),
                       satCount: res.satellitesCount || 0,
+                      earthSats: metrics.earthSats, marsSats: metrics.marsSats, relaySats: metrics.relaySats,
+                      ringSats: metrics.ringSats,
                       gbps: Math.round(gbpsVal * 1000) / 1000,
                       latMinMin: metrics.latMin != null ? Math.round(metrics.latMin * 10) / 10 : null,
                       latP50Min: metrics.latP50 != null ? Math.round(metrics.latP50 * 10) / 10 : null,
@@ -4119,7 +4129,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=4.42");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=4.43");
     let result = null;
     try {
       result = await solveBandDistribution({

@@ -9,14 +9,14 @@
 // Loaded as an ES module worker:
 //   new Worker(new URL("./simWorker.js", import.meta.url), { type: "module" })
 
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.42";
-import { SimSatellites } from "./simSatellites.js?v=4.42";
-import { SimLinkBudget } from "./simLinkBudget.js?v=4.42";
-import { SimNetwork } from "./simNetwork.js?v=4.42";
-import { SimDeployment } from "./simDeployment.js?v=4.42";
-import { SimMissionValidator } from "./simMissionValidator.js?v=4.42";
-import { minOf } from "./simMath.js?v=4.42";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.42";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.43";
+import { SimSatellites } from "./simSatellites.js?v=4.43";
+import { SimLinkBudget } from "./simLinkBudget.js?v=4.43";
+import { SimNetwork } from "./simNetwork.js?v=4.43";
+import { SimDeployment } from "./simDeployment.js?v=4.43";
+import { SimMissionValidator } from "./simMissionValidator.js?v=4.43";
+import { minOf } from "./simMath.js?v=4.43";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.43";
 
 // --- State (initialized lazily on the first compute) ---
 let simLinkBudget = null;

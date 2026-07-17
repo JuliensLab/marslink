@@ -2,7 +2,7 @@
 // Walks the flows dict to find source→sink paths with positive flow,
 // tracks their latency, and produces a histogram. Runs after any max-flow algorithm.
 
-import { SIM_CONSTANTS } from "../simConstants.js?v=4.42";
+import { SIM_CONSTANTS } from "../simConstants.js?v=4.43";
 
 /**
  * Calculates latencies for the network flows and aggregates the gbps per latency bin.
