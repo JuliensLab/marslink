@@ -1,11 +1,11 @@
 // simUi.js
-import { slidersData } from "./slidersData.js?v=4.43";
-import { LukashianClock } from "./lukashianTime.js?v=4.43";
-import { wireAuthUi } from "./auth.js?v=4.43";
-import { SensitivityPool } from "./sensitivityPool.js?v=4.43";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.43";
-import { minOf } from "./simMath.js?v=4.43";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.43";
+import { slidersData } from "./slidersData.js?v=4.44";
+import { LukashianClock } from "./lukashianTime.js?v=4.44";
+import { wireAuthUi } from "./auth.js?v=4.44";
+import { SensitivityPool } from "./sensitivityPool.js?v=4.44";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.44";
+import { minOf } from "./simMath.js?v=4.44";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.44";
 
 export class SimUi {
   constructor(simMain) {
@@ -1770,6 +1770,16 @@ export class SimUi {
                 // theory's S is relay-only, so archives must carry the separation.
                 earthSats: metrics.earthSats, marsSats: metrics.marsSats, relaySats: metrics.relaySats,
                 ringSats: metrics.ringSats,
+                // Per-element capacity chain, flow-free: planetary rings per side (2×min
+                // in-ring, the sizer's own measure) + per-eccentric-ring junction bundles
+                // (in-ring two-arc capacity vs grown Earth/Mars junction sums).
+                earthRingMbps: metrics.earthFlow, marsRingMbps: metrics.marsFlow,
+                ringJunctions: (rs?.ringDetail || []).map((d) => ({
+                  ring: d.ringName, argP: d.argP,
+                  inringMbps: Math.round(d.routesMbps), routes: d.routesCount,
+                  earthMbps: Math.round(d.earth?.mbps || 0), earthLinks: d.earth?.count || 0,
+                  marsMbps: Math.round(d.mars?.mbps || 0), marsLinks: d.mars?.count || 0,
+                })),
                 gbps: Math.round(gbpsVal * 1000) / 1000,
                 latMinMin: metrics.latMin != null ? Math.round(metrics.latMin * 10) / 10 : null,
                 latP50Min: metrics.latP50 != null ? Math.round(metrics.latP50 * 10) / 10 : null,
@@ -1980,6 +1990,13 @@ export class SimUi {
                       satCount: res.satellitesCount || 0,
                       earthSats: metrics.earthSats, marsSats: metrics.marsSats, relaySats: metrics.relaySats,
                       ringSats: metrics.ringSats,
+                      earthRingMbps: metrics.earthFlow, marsRingMbps: metrics.marsFlow,
+                      ringJunctions: (rs?.ringDetail || []).map((d) => ({
+                        ring: d.ringName, argP: d.argP,
+                        inringMbps: Math.round(d.routesMbps), routes: d.routesCount,
+                        earthMbps: Math.round(d.earth?.mbps || 0), earthLinks: d.earth?.count || 0,
+                        marsMbps: Math.round(d.mars?.mbps || 0), marsLinks: d.mars?.count || 0,
+                      })),
                       gbps: Math.round(gbpsVal * 1000) / 1000,
                       latMinMin: metrics.latMin != null ? Math.round(metrics.latMin * 10) / 10 : null,
                       latP50Min: metrics.latP50 != null ? Math.round(metrics.latP50 * 10) / 10 : null,
@@ -4129,7 +4146,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=4.43");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=4.44");
     let result = null;
     try {
       result = await solveBandDistribution({

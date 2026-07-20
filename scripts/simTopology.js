@@ -1,6 +1,6 @@
 // simTopology.js — Topology building logic extracted from SimNetwork.
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.43";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.44";
 
 export class TopologyBuilder {
   constructor(simLinkBudget, simSatellites) {
@@ -2307,13 +2307,14 @@ export class TopologyBuilder {
       if (!earthSat || !marsSat) continue;
 
       // The two loop arcs: follow prograde one way, retrograde the other.
+      const ringRoutes = [];
       for (const dir of ["prograde", "retrograde"]) {
         const path = [earthRingSat, earthSat.name];
         let minMbps = Infinity, sumLat = 0;
 
-        // Junction links count toward LATENCY but NOT capacity: the junction is a parallel
-        // bundle of k links (sized ≥ the ring's route capacity, shown separately), so a
-        // single tangent link must not cap the route — the route's capacity is its arc.
+        // Junction links count toward LATENCY here; their CAPACITY is enforced below as a
+        // per-ring cap — the junction is a parallel bundle of k links, so a single tangent
+        // link must not cap the route, but the bundle's summed capacity must.
         const earthLink = linkByPair.get(earthRingSat + "|" + earthSat.name);
         if (earthLink) sumLat += earthLink.latencySeconds;
 
@@ -2330,12 +2331,30 @@ export class TopologyBuilder {
         if (!reached) continue;
 
         const marsLink = linkByPair.get(marsSat.name + "|" + marsRingSat);
-        if (marsLink) sumLat += marsLink.latencySeconds; // junction: latency only, not capacity
+        if (marsLink) sumLat += marsLink.latencySeconds;
         path.push(marsRingSat);
 
         if (isFinite(minMbps)) {
-          routes.push({ path, throughputMbps: minMbps, latencySeconds: sumLat, origin: earthRingSat, destination: marsRingSat });
+          ringRoutes.push({ path, throughputMbps: minMbps, latencySeconds: sumLat, origin: earthRingSat, destination: marsRingSat });
         }
+      }
+
+      // Per-ring junction cap: delivered = min(two-arc in-ring capacity, Earth junction
+      // bundle, Mars junction bundle) — the bundles' grown capacities live in eccRingDetail
+      // (planetToEccentricRings). The cap is inert when growth matched the ring (the normal
+      // case) and binds exactly when it fell short, which the old latency-only accounting
+      // silently ignored. relayOnlyMbps keeps the uncapped ring-intrinsic value: it is the
+      // planetary-ring auto-sizer's input, and sizing planet rings from the intrinsic number
+      // is what lets the junction grow in the first place.
+      const detail = this.eccRingDetail.get(ringName);
+      const jEarth = detail && detail.earth ? detail.earth.mbps : Infinity;
+      const jMars = detail && detail.mars ? detail.mars.mbps : Infinity;
+      const arcSum = ringRoutes.reduce((s, r) => s + r.throughputMbps, 0);
+      const capped = Math.min(arcSum, jEarth, jMars);
+      for (const r of ringRoutes) {
+        r.relayOnlyMbps = r.throughputMbps;
+        if (arcSum > 0 && capped < arcSum) r.throughputMbps *= capped / arcSum;
+        routes.push(r);
       }
     }
 
@@ -2345,10 +2364,10 @@ export class TopologyBuilder {
     const throughputs = routes.map((r) => r.throughputMbps);
     const latencies = routes.map((r) => r.latencySeconds);
     return {
+      // Junction-capped deliverable (per-ring min of arcs and junction bundles above).
       totalThroughput,
-      // Eccentric routes already exclude the junction hops from capacity (latency-only
-      // above), so the total IS the relay-intrinsic number; alias it for a uniform API.
-      relayOnlyThroughput: totalThroughput,
+      // Ring-intrinsic (junction-uncapped) — the planetary-ring auto-sizer's input.
+      relayOnlyThroughput: routes.reduce((sum, r) => sum + (isFinite(r.relayOnlyMbps) ? r.relayOnlyMbps : r.throughputMbps), 0),
       routeCount: routes.length,
       minThroughput: Math.min(...throughputs),
       avgThroughput: totalThroughput > 0 ? routes.reduce((s, r) => s + r.throughputMbps * r.throughputMbps, 0) / totalThroughput : 0,
