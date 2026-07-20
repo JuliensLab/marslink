@@ -1,11 +1,11 @@
 // simUi.js
-import { slidersData } from "./slidersData.js?v=4.45";
-import { LukashianClock } from "./lukashianTime.js?v=4.45";
-import { wireAuthUi } from "./auth.js?v=4.45";
-import { SensitivityPool } from "./sensitivityPool.js?v=4.45";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.45";
-import { minOf } from "./simMath.js?v=4.45";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.45";
+import { slidersData } from "./slidersData.js?v=4.46";
+import { LukashianClock } from "./lukashianTime.js?v=4.46";
+import { wireAuthUi } from "./auth.js?v=4.46";
+import { SensitivityPool } from "./sensitivityPool.js?v=4.46";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.46";
+import { minOf } from "./simMath.js?v=4.46";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.46";
 
 export class SimUi {
   constructor(simMain) {
@@ -1683,7 +1683,64 @@ export class SimUi {
             launchDate: dateStr,
             satellites: res.satellitesCount,
           };
-          return { scenario, metrics, costs, capacityInfo, rs };
+          // ── The right-panel cards, archived (what the live Capacity/Flow/Latency
+          //    cards display, as compact aggregates — never the raw link arrays). ──
+          const stat = (arr) => arr && arr.length
+            ? { links: arr.length, min: Math.round(minOf(arr)),
+                avg: Math.round(arr.reduce((s, v) => s + v, 0) / arr.length),
+                max: Math.round(arr.reduce((m, v) => (v > m ? v : m), 0)) }
+            : null;
+          let capacityCard = null;
+          if (capacityInfo) {
+            const rc = capacityInfo.ringCapacities || {};
+            const ground = (name) => {
+              const caps = (rc[name]?.planetLinks || []).map((l) => l.cap).sort((a, b) => b - a);
+              return { side1: Math.round(caps[0] || 0), side2: Math.round(caps[1] || 0), links: caps.length };
+            };
+            const jct = (planetRing) => {
+              let sum = 0, count = 0, min = Infinity, max = 0;
+              for (const [key, v] of Object.entries(capacityInfo.interCap || {})) {
+                if (!key.includes(planetRing)) continue;
+                sum += v.sum; count += v.count;
+                if (v.min != null && v.min < min) min = v.min;
+                if (v.max != null && v.max > max) max = v.max;
+              }
+              return { sumMbps: Math.round(sum), links: count, min: count ? Math.round(min) : 0, max: Math.round(max) };
+            };
+            const eg = ground("ring_earth"), mg = ground("ring_mars");
+            // Same bottleneck rule as the live card: earth ground / relay / mars ground.
+            const segments = [];
+            if (eg.side1 + eg.side2 > 0) segments.push(["earth ground", eg.side1 + eg.side2]);
+            if (rs) segments.push(["relay", rs.totalThroughput]);
+            if (mg.side1 + mg.side2 > 0) segments.push(["mars ground", mg.side1 + mg.side2]);
+            let bottleneck = null;
+            if (segments.length > 1) {
+              const minSeg = segments.reduce((a, b) => (a[1] < b[1] ? a : b));
+              const maxCap = segments.reduce((m, s) => (s[1] > m ? s[1] : m), 0);
+              bottleneck = { name: maxCap > 0 && (maxCap - minSeg[1]) / maxCap > 0.05 ? minSeg[0] : "balanced", mbps: Math.round(minSeg[1]) };
+            }
+            capacityCard = {
+              earthGround: eg, marsGround: mg,
+              earthRingInring: stat(rc.ring_earth?.inring), marsRingInring: stat(rc.ring_mars?.inring),
+              earthJunction: jct("ring_earth"), marsJunction: jct("ring_mars"),
+              relayTotalMbps: rs ? Math.round(rs.totalThroughput) : null,
+              relayIntrinsicMbps: rs ? Math.round(rs.relayOnlyThroughput ?? rs.totalThroughput) : null,
+              routes: rs ? rs.routeCount : null,
+              routeMbps: rs ? { min: Math.round(rs.minThroughput), avg: Math.round(rs.avgThroughput), max: Math.round(rs.maxThroughput) } : null,
+              // Expanded-diagram rows: every relay↔relay inter-ring bundle (concentric).
+              interRingPairs: Object.entries(capacityInfo.interCap || {})
+                .filter(([k]) => !k.includes("ring_earth") && !k.includes("ring_mars"))
+                .map(([k, v]) => ({ pair: k, sumMbps: Math.round(v.sum), links: v.count,
+                                    min: Math.round(v.min), avg: v.count ? Math.round(v.sum / v.count) : 0, max: Math.round(v.max) })),
+              bottleneck,
+            };
+          }
+          const latencyCard = ld
+            ? { bestS: ld.bestLatency, medianS: ld.medianLatency, averageS: ld.averageLatency,
+                histogram: ld.histogram || null }
+            : null;
+          const cards = { capacityCard, flowCard: res.flowSummary || null, latencyCard };
+          return { scenario, metrics, costs, capacityInfo, rs, cards };
         };
 
         const allCats = [
@@ -1747,7 +1804,7 @@ export class SimUi {
           // pool and the in-process Main-thread path; does not touch progress counters.
           const recordScenarioResult = (res, s) => {
             if (res.flowError) flowTimeouts++;
-            const { scenario, metrics, costs, capacityInfo, rs } = buildScenarioMetrics(res, s.ringCount, s.techUserVal, s.placement.label, s.routeCount);
+            const { scenario, metrics, costs, capacityInfo, rs, cards } = buildScenarioMetrics(res, s.ringCount, s.techUserVal, s.placement.label, s.routeCount);
             resultArray.push({
               scenario,
               liveMetrics: {
@@ -1783,6 +1840,9 @@ export class SimUi {
                   earthMbps: Math.round(d.earth?.mbps || 0), earthLinks: d.earth?.count || 0,
                   marsMbps: Math.round(d.mars?.mbps || 0), marsLinks: d.mars?.count || 0,
                 })),
+                // The live right-panel cards, as archived aggregates (flowCard/latencyCard
+                // null when the max-flow solve was off).
+                capacityCard: cards.capacityCard, flowCard: cards.flowCard, latencyCard: cards.latencyCard,
                 gbps: Math.round(gbpsVal * 1000) / 1000,
                 latMinMin: metrics.latMin != null ? Math.round(metrics.latMin * 10) / 10 : null,
                 latP50Min: metrics.latP50 != null ? Math.round(metrics.latP50 * 10) / 10 : null,
@@ -1970,7 +2030,7 @@ export class SimUi {
                   }, estMBfor(cfg));
                   if (stopRequested || !res) { completed++; renderProgress(); continue; }
                   if (res.flowError) flowTimeouts++;
-                  const { scenario, metrics, costs, capacityInfo, rs } = buildScenarioMetrics(res, ringCount, techUserVal, placement.label, routeCount);
+                  const { scenario, metrics, costs, capacityInfo, rs, cards } = buildScenarioMetrics(res, ringCount, techUserVal, placement.label, routeCount);
                   resultArray.push({
                     scenario,
                     liveMetrics: {
@@ -2001,6 +2061,7 @@ export class SimUi {
                         earthMbps: Math.round(d.earth?.mbps || 0), earthLinks: d.earth?.count || 0,
                         marsMbps: Math.round(d.mars?.mbps || 0), marsLinks: d.mars?.count || 0,
                       })),
+                      capacityCard: cards.capacityCard, flowCard: cards.flowCard, latencyCard: cards.latencyCard,
                       gbps: Math.round(gbpsVal * 1000) / 1000,
                       latMinMin: metrics.latMin != null ? Math.round(metrics.latMin * 10) / 10 : null,
                       latP50Min: metrics.latP50 != null ? Math.round(metrics.latP50 * 10) / 10 : null,
@@ -4150,7 +4211,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=4.45");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=4.46");
     let result = null;
     try {
       result = await solveBandDistribution({

@@ -9,14 +9,14 @@
 // Loaded as an ES module worker:
 //   new Worker(new URL("./simWorker.js", import.meta.url), { type: "module" })
 
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.45";
-import { SimSatellites } from "./simSatellites.js?v=4.45";
-import { SimLinkBudget } from "./simLinkBudget.js?v=4.45";
-import { SimNetwork } from "./simNetwork.js?v=4.45";
-import { SimDeployment } from "./simDeployment.js?v=4.45";
-import { SimMissionValidator } from "./simMissionValidator.js?v=4.45";
-import { minOf } from "./simMath.js?v=4.45";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.45";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.46";
+import { SimSatellites } from "./simSatellites.js?v=4.46";
+import { SimLinkBudget } from "./simLinkBudget.js?v=4.46";
+import { SimNetwork } from "./simNetwork.js?v=4.46";
+import { SimDeployment } from "./simDeployment.js?v=4.46";
+import { SimMissionValidator } from "./simMissionValidator.js?v=4.46";
+import { minOf } from "./simMath.js?v=4.46";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.46";
 
 // --- State (initialized lazily on the first compute) ---
 let simLinkBudget = null;
@@ -466,7 +466,7 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
   // sized to match the relay capacity), the solve just re-derives routeSummary's
   // throughput — skipping it makes sweeps far cheaper. maxFlowGbps === null then means
   // "not computed" (vs 0 = solved to zero), and consumers fall back to routeSummary.
-  let fullNetworkData = null, flowError = null, maxFlowGbps = null, latencyData = null;
+  let fullNetworkData = null, flowError = null, maxFlowGbps = null, latencyData = null, flowSummary = null;
   if (computeFlow) {
     fullNetworkData = simNetwork.getNetworkData(planets, satellites, possibleLinks, flowCalctimeMs);
     // A timed-out max-flow solve is "too large to solve", NOT "0 Gbps achievable" — flag it
@@ -474,6 +474,33 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
     flowError = fullNetworkData.error || null;
     maxFlowGbps = flowError ? 0 : (fullNetworkData.maxFlowGbps || 0);
     if (!fullNetworkData.error) latencyData = simNetwork.calculateLatencies(fullNetworkData);
+    // Flow-card aggregates (ground-link flows + junction flow bundles per side): the
+    // links they derive from never cross postMessage in sweeps, so summarize here.
+    if (!flowError && Array.isArray(fullNetworkData.links)) {
+      const links = fullNetworkData.links;
+      const isRelay = (id) => id && id.startsWith("ring_") && !id.startsWith("ring_earth") && !id.startsWith("ring_mars");
+      const ground = (planet) => {
+        const flows = links.filter((l) => l.fromId === planet || l.toId === planet)
+          .map((l) => (l.gbpsFlow || 0) * 1000).sort((a, b) => b - a);
+        return { side1: Math.round(flows[0] || 0), side2: Math.round(flows[1] || 0), links: flows.length };
+      };
+      const jct = (prefix) => {
+        let sum = 0, n = 0, min = Infinity, max = 0;
+        for (const l of links) {
+          const isJ = (l.fromId.startsWith(prefix) && isRelay(l.toId)) || (l.toId.startsWith(prefix) && isRelay(l.fromId));
+          if (!isJ) continue;
+          const f = (l.gbpsFlow || 0) * 1000;
+          if (f <= 0) continue;
+          sum += f; n++;
+          if (f < min) min = f;
+          if (f > max) max = f;
+        }
+        return { sumMbps: Math.round(sum), links: n, min: n ? Math.round(min) : 0,
+                 avg: n ? Math.round(sum / n) : 0, max: Math.round(max) };
+      };
+      flowSummary = { maxFlowGbps, earthGround: ground("Earth"), marsGround: ground("Mars"),
+                      earthJunction: jct("ring_earth"), marsJunction: jct("ring_mars") };
+    }
   }
 
   let routeSummaryClone = null;
@@ -509,13 +536,18 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
     // for the fuel/report paths). By reference — never crosses postMessage.
     missionProfilesData: includeLinks ? missionProfilesData : undefined,
     flowError,
+    // Flow-card aggregates (null when the solve was skipped, errored, or links missing).
+    flowSummary,
     capacityInfo,
     routeSummary: routeSummaryClone,
     resultTreesData,
     latencyData: includeLinks
       ? latencyData // in-process display mode: full object so the latency chart can render
       : latencyData
-        ? { bestLatency: latencyData.bestLatency, medianLatency: latencyData.medianLatency, averageLatency: latencyData.averageLatency }
+        ? { bestLatency: latencyData.bestLatency, medianLatency: latencyData.medianLatency,
+            averageLatency: latencyData.averageLatency,
+            // Latency-card histogram: [{latency (bin start, s), totalGbps}] — small, archived.
+            histogram: latencyData.histogram || null }
         : null,
     sizedConfig: {
       "ring_earth.requiredmbpsbetweensats": uiConfig["ring_earth.requiredmbpsbetweensats"],
