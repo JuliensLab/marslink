@@ -1,11 +1,11 @@
 // simUi.js
-import { slidersData } from "./slidersData.js?v=4.44";
-import { LukashianClock } from "./lukashianTime.js?v=4.44";
-import { wireAuthUi } from "./auth.js?v=4.44";
-import { SensitivityPool } from "./sensitivityPool.js?v=4.44";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.44";
-import { minOf } from "./simMath.js?v=4.44";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.44";
+import { slidersData } from "./slidersData.js?v=4.45";
+import { LukashianClock } from "./lukashianTime.js?v=4.45";
+import { wireAuthUi } from "./auth.js?v=4.45";
+import { SensitivityPool } from "./sensitivityPool.js?v=4.45";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.45";
+import { minOf } from "./simMath.js?v=4.45";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.45";
 
 export class SimUi {
   constructor(simMain) {
@@ -1774,6 +1774,9 @@ export class SimUi {
                 // in-ring, the sizer's own measure) + per-eccentric-ring junction bundles
                 // (in-ring two-arc capacity vs grown Earth/Mars junction sums).
                 earthRingMbps: metrics.earthFlow, marsRingMbps: metrics.marsFlow,
+                // Max-flow result when the solve ran (null = skipped or timed out): the
+                // exact global reference the topology metric can be validated against.
+                flowGbps: res.flowError || res.maxFlowGbps == null ? null : res.maxFlowGbps,
                 ringJunctions: (rs?.ringDetail || []).map((d) => ({
                   ring: d.ringName, argP: d.argP,
                   inringMbps: Math.round(d.routesMbps), routes: d.routesCount,
@@ -1991,6 +1994,7 @@ export class SimUi {
                       earthSats: metrics.earthSats, marsSats: metrics.marsSats, relaySats: metrics.relaySats,
                       ringSats: metrics.ringSats,
                       earthRingMbps: metrics.earthFlow, marsRingMbps: metrics.marsFlow,
+                      flowGbps: res.flowError || res.maxFlowGbps == null ? null : res.maxFlowGbps,
                       ringJunctions: (rs?.ringDetail || []).map((d) => ({
                         ring: d.ringName, argP: d.argP,
                         inringMbps: Math.round(d.routesMbps), routes: d.routesCount,
@@ -4146,7 +4150,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=4.44");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=4.45");
     let result = null;
     try {
       result = await solveBandDistribution({
