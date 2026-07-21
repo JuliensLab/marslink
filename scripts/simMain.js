@@ -1,23 +1,23 @@
 // simMain.js
 
-import { SimUi } from "./simUi.js?v=4.50";
-import { SimTime } from "./simTime.js?v=4.50";
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.50";
-import { SimSatellites } from "./simSatellites.js?v=4.50";
-import { SimDeployment } from "./simDeployment.js?v=4.50";
-import { SimMissionValidator } from "./simMissionValidator.js?v=4.50";
-import { SimLinkBudget } from "./simLinkBudget.js?v=4.50";
-import { SimNetwork } from "./simNetwork.js?v=4.50";
+import { SimUi } from "./simUi.js?v=4.51";
+import { SimTime } from "./simTime.js?v=4.51";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.51";
+import { SimSatellites } from "./simSatellites.js?v=4.51";
+import { SimDeployment } from "./simDeployment.js?v=4.51";
+import { SimMissionValidator } from "./simMissionValidator.js?v=4.51";
+import { SimLinkBudget } from "./simLinkBudget.js?v=4.51";
+import { SimNetwork } from "./simNetwork.js?v=4.51";
 // Import both SimDisplay implementations with unique names
-import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=4.50";
-import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=4.50";
-import { generateReport } from "./reportGenerator.js?v=4.50";
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.50";
-import { minOf, maxOf } from "./simMath.js?v=4.50";
-import { SimFlightController } from "./simFlightController.js?v=4.50";
-import { SimProbeController } from "./simProbeController.js?v=4.50";
-import { findDepartureWindows } from "./simTransfer.js?v=4.50";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.50";
+import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=4.51";
+import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=4.51";
+import { generateReport } from "./reportGenerator.js?v=4.51";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.51";
+import { minOf, maxOf } from "./simMath.js?v=4.51";
+import { SimFlightController } from "./simFlightController.js?v=4.51";
+import { SimProbeController } from "./simProbeController.js?v=4.51";
+import { findDepartureWindows } from "./simTransfer.js?v=4.51";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.51";
 
 export class SimMain {
   // Clamp argument to [-1, 1] to prevent NaN from Math.asin domain errors
@@ -70,7 +70,7 @@ export class SimMain {
     if (typeof window !== "undefined") window.simMain = this;
 
     // --- Worker + triple-buffered window cache (-1/0/+1) ---
-    this.simWorker = new Worker(new URL("./simWorker.js?v=4.50", import.meta.url), { type: "module" });
+    this.simWorker = new Worker(new URL("./simWorker.js?v=4.51", import.meta.url), { type: "module" });
     this.simWorker.onmessage = (event) => this.handleWorkerMessage(event);
     this.simWorker.onerror = (event) => console.error("[Marslink] Worker error:", event.message);
     this.simWorker.postMessage({ type: "init" });
@@ -750,9 +750,9 @@ export class SimMain {
         ringEarth: eS ? `ring Earth ${fmtRange(eS.lo, eS.avg, eS.hi)}` : null,
         earthJunction: jctCapLabel(eJct, eJuncN != null ? `${eJuncRings} junctions · ` : "") || (eJuncN != null ? `${eJuncRings} junctions · ${eJuncN} links · ${fmtMbps(eJuncCap)}` : `ring \u2192 relay`),
         earthJunction2: jctCapLabel2(eJct),
-        relayMain: rs ? fmtMbps(rs.totalThroughput) : null,
+        relayMain: rs ? fmtMbps(rs.relayOnlyThroughput ?? rs.totalThroughput) : null,
         relayL1: rs ? `${relayRingCount} rings, ${rs.routeCount} routes` : null,
-        relayL2: rs ? fmtRange(rs.minThroughput, rs.avgThroughput, rs.maxThroughput) : null,
+        relayL2: rs ? fmtRange(rs.relayOnlyMin ?? rs.minThroughput, rs.relayOnlyAvg ?? rs.avgThroughput, rs.relayOnlyMax ?? rs.maxThroughput) : null,
         relayL3: rs ? `${(rs.minLatency / 60).toFixed(1)}|${(rs.avgLatency / 60).toFixed(1)}|${(rs.maxLatency / 60).toFixed(1)} min` : null,
         marsJunction: jctCapLabel(mJct, mJuncN != null ? `${mJuncRings} junctions · ` : "") || (mJuncN != null ? `${mJuncRings} junctions · ${mJuncN} links · ${fmtMbps(mJuncCap)}` : `relay \u2192 ring`),
         marsJunction2: jctCapLabel2(mJct),
@@ -1510,8 +1510,18 @@ export class SimMain {
         const maxCap = maxOf(segments.map((s) => s.cap));
         if (maxCap > 0 && (maxCap - minCap) / maxCap > 0.05) {
           const bottleneck = segments.reduce((a, b) => (a.cap < b.cap ? a : b));
-          bottleneckLine = `Bottleneck: ${bottleneck.name}`;
-          this._bottleneckInfo = { name: bottleneck.name, cap: bottleneck.cap, relayCap: rs ? rs.totalThroughput : 0 };
+          let name = bottleneck.name;
+          // When the relay segment binds but its capped total sits below the ring-intrinsic
+          // capacity (eccentric), the true bottleneck is a JUNCTION, not the relay family —
+          // the relay row now displays the intrinsic number, so name the binding side.
+          if (rs && bottleneck.cap === rs.totalThroughput && rs.ringDetail && rs.ringDetail.length &&
+              (rs.relayOnlyThroughput ?? rs.totalThroughput) > rs.totalThroughput * 1.02) {
+            const eSum = rs.ringDetail.reduce((s2, d) => s2 + (d.earth?.mbps || 0), 0);
+            const mSum = rs.ringDetail.reduce((s2, d) => s2 + (d.mars?.mbps || 0), 0);
+            name = `${eSum <= mSum ? "Earth" : "Mars"} junction`;
+          }
+          bottleneckLine = `Bottleneck: ${name}`;
+          this._bottleneckInfo = { name, cap: bottleneck.cap, relayCap: rs ? rs.totalThroughput : 0 };
         } else {
           bottleneckLine = `Balanced`;
         }

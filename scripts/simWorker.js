@@ -9,15 +9,15 @@
 // Loaded as an ES module worker:
 //   new Worker(new URL("./simWorker.js", import.meta.url), { type: "module" })
 
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.50";
-import { SimSatellites } from "./simSatellites.js?v=4.50";
-import { SimLinkBudget } from "./simLinkBudget.js?v=4.50";
-import { SimNetwork } from "./simNetwork.js?v=4.50";
-import { SimDeployment } from "./simDeployment.js?v=4.50";
-import { SimMissionValidator } from "./simMissionValidator.js?v=4.50";
-import { minOf } from "./simMath.js?v=4.50";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.50";
-import { planetRingRequiredMbps } from "./slidersData.js?v=4.50";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.51";
+import { SimSatellites } from "./simSatellites.js?v=4.51";
+import { SimLinkBudget } from "./simLinkBudget.js?v=4.51";
+import { SimNetwork } from "./simNetwork.js?v=4.51";
+import { SimDeployment } from "./simDeployment.js?v=4.51";
+import { SimMissionValidator } from "./simMissionValidator.js?v=4.51";
+import { minOf } from "./simMath.js?v=4.51";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.51";
+import { planetRingRequiredMbps } from "./slidersData.js?v=4.51";
 
 // --- State (initialized lazily on the first compute) ---
 let simLinkBudget = null;
@@ -217,6 +217,9 @@ function runPipeline({ requestId, windowIdx, configEpoch, uiConfig, satellitesCo
       minThroughput: routeSummary.minThroughput,
       avgThroughput: routeSummary.avgThroughput,
       maxThroughput: routeSummary.maxThroughput,
+      relayOnlyMin: routeSummary.relayOnlyMin,
+      relayOnlyAvg: routeSummary.relayOnlyAvg,
+      relayOnlyMax: routeSummary.relayOnlyMax,
       minLatency: routeSummary.minLatency,
       avgLatency: routeSummary.avgLatency,
       maxLatency: routeSummary.maxLatency,
@@ -486,6 +489,9 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
       minThroughput: routeSummary.minThroughput,
       avgThroughput: routeSummary.avgThroughput,
       maxThroughput: routeSummary.maxThroughput,
+      relayOnlyMin: routeSummary.relayOnlyMin,
+      relayOnlyAvg: routeSummary.relayOnlyAvg,
+      relayOnlyMax: routeSummary.relayOnlyMax,
       minLatency: routeSummary.minLatency,
       avgLatency: routeSummary.avgLatency,
       maxLatency: routeSummary.maxLatency,

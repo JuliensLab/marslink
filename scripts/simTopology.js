@@ -1,6 +1,6 @@
 // simTopology.js — Topology building logic extracted from SimNetwork.
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.50";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.51";
 
 export class TopologyBuilder {
   constructor(simLinkBudget, simSatellites) {
@@ -2255,8 +2255,8 @@ export class TopologyBuilder {
       const totalThroughput = routes.reduce((sum, r) => sum + r.throughputMbps, 0);
       // Intrinsic relay-network capacity (planet-ring gateway hops excluded) — the
       // deterministic sizing input for the Earth/Mars auto-sizer.
-      const relayOnlyThroughput = routes.reduce(
-        (sum, r) => sum + (isFinite(r.relayOnlyMbps) ? r.relayOnlyMbps : r.throughputMbps), 0);
+      const intrinsic = routes.map((r) => (isFinite(r.relayOnlyMbps) ? r.relayOnlyMbps : r.throughputMbps));
+      const relayOnlyThroughput = intrinsic.reduce((s, v) => s + v, 0);
       const throughputs = routes.map((r) => r.throughputMbps);
       const minThroughput = Math.min(...throughputs);
       const maxThroughput = Math.max(...throughputs);
@@ -2273,6 +2273,10 @@ export class TopologyBuilder {
         minThroughput,
         avgThroughput: weightedAvgThroughput,
         maxThroughput,
+        // Ring-intrinsic per-route stats (the relay stage's OWN capacities, gateway-free).
+        relayOnlyMin: Math.min(...intrinsic),
+        relayOnlyAvg: relayOnlyThroughput > 0 ? intrinsic.reduce((s, v) => s + v * v, 0) / relayOnlyThroughput : 0,
+        relayOnlyMax: Math.max(...intrinsic),
         minLatency,
         avgLatency: weightedAvgLatency,
         maxLatency,
@@ -2388,16 +2392,23 @@ export class TopologyBuilder {
 
     const totalThroughput = routes.reduce((sum, r) => sum + r.throughputMbps, 0);
     const throughputs = routes.map((r) => r.throughputMbps);
+    const intrinsic = routes.map((r) => (isFinite(r.relayOnlyMbps) ? r.relayOnlyMbps : r.throughputMbps));
+    const relayOnlyThroughput = intrinsic.reduce((s, v) => s + v, 0);
     const latencies = routes.map((r) => r.latencySeconds);
     return {
       // Junction-capped deliverable (per-ring min of arcs and junction bundles above).
       totalThroughput,
-      // Ring-intrinsic (junction-uncapped) — the planetary-ring auto-sizer's input.
-      relayOnlyThroughput: routes.reduce((sum, r) => sum + (isFinite(r.relayOnlyMbps) ? r.relayOnlyMbps : r.throughputMbps), 0),
+      // Ring-intrinsic (junction-uncapped) — the planetary-ring auto-sizer's input and the
+      // capacity card's relay-stage number: tangent-to-tangent arcs, all routes summed.
+      relayOnlyThroughput,
       routeCount: routes.length,
       minThroughput: Math.min(...throughputs),
       avgThroughput: totalThroughput > 0 ? routes.reduce((s, r) => s + r.throughputMbps * r.throughputMbps, 0) / totalThroughput : 0,
       maxThroughput: Math.max(...throughputs),
+      // Ring-intrinsic per-route stats (the relay stage's OWN capacities, junction-free).
+      relayOnlyMin: Math.min(...intrinsic),
+      relayOnlyAvg: relayOnlyThroughput > 0 ? intrinsic.reduce((s, v) => s + v * v, 0) / relayOnlyThroughput : 0,
+      relayOnlyMax: Math.max(...intrinsic),
       minLatency: Math.min(...latencies),
       avgLatency: totalThroughput > 0 ? routes.reduce((s, r) => s + r.latencySeconds * r.throughputMbps, 0) / totalThroughput : 0,
       maxLatency: Math.max(...latencies),
