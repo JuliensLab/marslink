@@ -1,7 +1,7 @@
 // simDeployment.js
 
-import { calculateHohmannDeltaV_km_s } from "./simDeltaV.js?v=4.65";
-import { stationKeepingAccel, ringBaseline, satStationKeeping } from "./simStationKeeping.js?v=4.65";
+import { calculateHohmannDeltaV_km_s } from "./simDeltaV.js?v=4.72";
+import { stationKeepingAccel, ringBaseline, satStationKeeping } from "./simStationKeeping.js?v=4.72";
 
 // Default launch-to-LEO Δv (km/s). Configurable via the Launch Vehicle category
 // (see setVehicleConfig); this is the fallback before any config is applied.
@@ -119,7 +119,8 @@ export class SimDeployment {
   getDryMassForRing(ringName) {
     if (ringName === "ring_earth") return this.dryMasses.ring_earth;
     if (ringName === "ring_mars") return this.dryMasses.ring_mars;
-    if (ringName.startsWith("ring_jct")) return this.dryMasses.ring_earth; // Earth-ring clones
+    if (ringName.startsWith("ring_jctm")) return this.dryMasses.ring_mars; // Mars-side junction rings
+    if (ringName.startsWith("ring_jct")) return this.dryMasses.ring_earth; // Earth-side junction rings
     if (ringName.startsWith("ring_circ")) return this.dryMasses.circular_rings;
     if (ringName.startsWith("ring_adecc")) return this.dryMasses.adapted_eccentric_rings;
     if (ringName.startsWith("ring_ecce")) return this.dryMasses.eccentric_rings;

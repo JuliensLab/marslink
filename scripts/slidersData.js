@@ -1,6 +1,6 @@
 // slidersData.js
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.65";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.72";
 
 export const slidersData = {
   display: {
@@ -1171,17 +1171,30 @@ export const slidersData = {
       type: "radio",
       label: "Junction rings sizing",
       description:
-        "manual: set the intermediate junction ring count with the slider below. auto: follows the canonical order — relay network assignment, planetary ring sizing, then junction links starting with 0 junction rings; while the Earth junction still bottlenecks the deliverable, one ring is added and the topology rebuilt, until the junction no longer binds (or the slider max is reached).",
+        "manual: set the intermediate junction ring counts with the sliders below. auto: follows the canonical order — relay network assignment, planetary ring sizing, then junction links starting with 0 junction rings on both sides; while a side's junction still bottlenecks the deliverable, that side gains one ring and the topology is rebuilt, until the junction no longer binds (or the slider max is reached).",
       options: ["manual", "auto"],
       value: "manual",
       unit: "",
       updateLongTermScore: true,
     },
     "junction-ring-count": {
-      label: "Intermediate junction rings",
+      label: "Intermediate junction rings (Earth)",
       disabledCondition: { slider: "junction-ring-mode", value: "manual" },
       description:
-        "Rings between the Earth ring and the eccentric relay rings that carry the junction ring by ring. Each is a clone of the Earth ring (same orbital elements and satellite count) with RAAN on the Earth–Mars plane-node line and inclination stepped from Earth's (≈0) to the family's WORST-CASE inclination — the largest any eccentric ring can fly, computed from the tangency geometry over all apsis directions. The ladder pretends it has k+2 steps (step 0 = Earth ring, step k+1 = the worst-case plane) and keeps the k intermediates: ring j sits at j/(k+1). 0 = none.",
+        "Sparse rings between the Earth ring and the eccentric relay rings that carry the junction ring by ring. They ride Earth's orbit (same a/e/perihelion) with RAAN on the Earth–Mars plane-node line and inclination stepped from Earth's (≈0) to the family's WORST-CASE inclination (ring j of k at j/(k+1)). Satellites are placed only where needed: short arcs around each eccentric ring's tangent longitude, one chain column per would-be direct link, sized so the chains carry the ring's design capacity. 0 = none (direct links).",
+      min: 0,
+      max: 8,
+      value: 0,
+      step: 1,
+      unit: "",
+      scale: "linear",
+      updateLongTermScore: true,
+    },
+    "junction-ring-count-mars": {
+      label: "Intermediate junction rings (Mars)",
+      disabledCondition: { slider: "junction-ring-mode", value: "manual" },
+      description:
+        "Sparse rings between the Mars ring and the eccentric relay rings, mirroring the Earth-side ramp: they ride Mars's orbit (same a/e/perihelion, RAAN = Mars's) with inclination stepped from Mars's down to the family's worst-case MINIMUM (the flattest plane any eccentric ring can fly). Satellites are placed only where needed, around each ring's aphelion tangent longitude, sized to the ring's design capacity. 0 = none (direct links).",
       min: 0,
       max: 8,
       value: 0,
@@ -1264,4 +1277,19 @@ export function earthJunctionIsBottleneck(ringDetail) {
     cappedNoEarth += Math.min(arcs, m);
   }
   return capped < cappedNoEarth * 0.98;
+}
+
+// Mars-side mirror of earthJunctionIsBottleneck: true when the MARS junction binds
+// the deliverable, so adding a Mars-side intermediate junction ring can relieve it.
+export function marsJunctionIsBottleneck(ringDetail) {
+  if (!Array.isArray(ringDetail) || !ringDetail.length) return false;
+  let capped = 0, cappedNoMars = 0;
+  for (const d of ringDetail) {
+    const arcs = d.routesMbps || 0;
+    const e = d.earth && isFinite(d.earth.mbps) ? d.earth.mbps : Infinity;
+    const m = d.mars && isFinite(d.mars.mbps) ? d.mars.mbps : Infinity;
+    capped += Math.min(arcs, e, m);
+    cappedNoMars += Math.min(arcs, e);
+  }
+  return capped < cappedNoMars * 0.98;
 }

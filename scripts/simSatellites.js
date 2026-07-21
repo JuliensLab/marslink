@@ -1,7 +1,7 @@
 // simSatellites.js
 
-import { helioCoords, positionFromSolarAngle } from "./simOrbits.js?v=4.65";
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.65";
+import { helioCoords, positionFromSolarAngle } from "./simOrbits.js?v=4.72";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.72";
 
 export class SimSatellites {
   constructor(simLinkBudget, planets) {
@@ -86,7 +86,7 @@ export class SimSatellites {
    * Pure with respect to instance geometry (simLinkBudget + planet elements);
    * does not mutate satellite state.
    */
-  buildConfigFromUi(uiConfig) {
+  buildConfigFromUi(uiConfig, atDate) {
     const satellitesConfig = [];
     // Exactly one relay family is active, chosen by the relay_type selector. Build only
     // that one (falling back to adapted concentric for legacy configs without the key).
@@ -100,11 +100,11 @@ export class SimSatellites {
     const build = relayBuilders[relayType] || relayBuilders["Contoured concentric"];
     const relayConfigs = build();
     satellitesConfig.push(...relayConfigs);
-    // Intermediate junction rings (Contoured eccentric only): Earth-ring clones
-    // whose orbital plane (i, Ω) steps from the Earth ring toward the eccentric
-    // family, easing the junction's plane change.
+    // Sparse intermediate junction rings (Contoured eccentric only), both planet
+    // sides: plane-stepped arcs of chain columns around each eccentric ring's
+    // tangent longitudes, anchored at atDate (defaults to now).
     if (relayType === "Contoured eccentric") {
-      satellitesConfig.push(...this._buildIntermediateJunctionRings(uiConfig, relayConfigs));
+      satellitesConfig.push(...this._buildIntermediateJunctionRings(uiConfig, relayConfigs, atDate));
     }
     if (uiConfig["ring_mars.side-extension-degrees-slider"]) satellitesConfig.push(...this._buildPlanetRing(uiConfig, "ring_mars"));
     if (uiConfig["ring_earth.side-extension-degrees-slider"]) satellitesConfig.push(...this._buildPlanetRing(uiConfig, "ring_earth"));
@@ -258,7 +258,14 @@ export class SimSatellites {
     }
     const ringE = Math.min(0.97, Math.max(0, v / Ar)); // e = |V_r|/A_r = v/Ar
     const ringA = 1 / Ar / (1 - ringE * ringE); // a = p/(1−e²)
-    return { ringA, ringE };
+    // Closed-form CONTACT longitudes — where the ring actually touches each
+    // planet's (elliptical) orbit. NOT the ring's apsis longitudes: with the
+    // planet orbits eccentric the contact shifts away from the apsis line, and
+    // junction corridors must centre on the true contact, not on argPeri.
+    const deg = 180 / Math.PI;
+    const contactMarsDeg = ((Math.atan2(M.Vy - v * dy, M.Vx - v * dx) * deg) % 360 + 360) % 360;
+    const contactEarthDeg = ((Math.atan2(v * dy - E.Vy, v * dx - E.Vx) * deg) % 360 + 360) % 360;
+    return { ringA, ringE, contactEarthDeg, contactMarsDeg };
   }
 
   _buildAdaptedEccentricRings(uiConfig) {
@@ -299,56 +306,184 @@ export class SimSatellites {
     return satellitesConfig;
   }
 
-  // Intermediate junction rings: k clones of the Earth ring (same orbital elements,
-  // same satellite count and phasing) whose inclination interpolates from Earth's
-  // to the eccentric family's WORST-CASE value (the largest any family ring can
-  // fly, computed analytically below) — ring j of k sits at fraction j/(k+1)
-  // (1 ring → 50%, 2 rings → 33%/67%, ...). RAAN = the Earth–Mars plane-node
-  // longitude (see the "Junction" branch of getOrbitaElements), so the rings hinge
-  // about the axis where the two planes actually meet. They ease the junction's
-  // plane change ring by ring (buildJunctionRamp wires them into the topology).
-  _buildIntermediateJunctionRings(uiConfig, eccConfigs) {
-    const count = Math.round(uiConfig["adapted_eccentric_rings.junction-ring-count"] || 0);
-    if (!(count > 0) || !eccConfigs.length) return [];
-    // Clone the Earth ring's build; without an Earth ring there is nothing to bridge.
-    const template = uiConfig["ring_earth.side-extension-degrees-slider"] ? this._buildPlanetRing(uiConfig, "ring_earth")[0] : null;
-    if (!template) return [];
-    // 100% inclination target = the WORST-CASE family inclination: the largest any
-    // ring of the family CAN fly, over all apsis directions — not sampled from the
-    // built rings. i is monotone in the ring's semi-major axis (linear Earth→Mars
-    // interpolation + monotone bias), so scan the exact tangency construction for
-    // max a on a 0.25° grid. The ladder then pretends it has n+2 steps — step 0 =
-    // the Earth ring (i≈0), step n+1 = the worst-case eccentric plane — and keeps
-    // only the n intermediates as rings (the j/(n+1) mix below). Cached per
-    // clearance pair: the planets never change at runtime.
+  // Longitude of the Earth–Mars plane-node line (where the two orbital planes
+  // intersect): n_E × n_M points at the node where Mars's plane ascends through
+  // Earth's — with Earth ≈ the ecliptic this is ≈ Mars's RAAN (~49.6°). The
+  // Earth-side junction rings hinge about this axis; it is also where the
+  // inclination-driven plane separation goes to zero (∝ |sin(θ − node)|).
+  _planeNodeLon() {
+    if (this._jctNodeLon === undefined) {
+      const rad = Math.PI / 180;
+      const nrm = (iDeg, oDeg) => {
+        const i = iDeg * rad, o = oDeg * rad;
+        return [Math.sin(i) * Math.sin(o), -Math.sin(i) * Math.cos(o), Math.cos(i)];
+      };
+      const [ax, ay, az] = nrm(this.Earth.i, this.Earth.o);
+      const [bx, by, bz] = nrm(this.Mars.i, this.Mars.o);
+      const cx = ay * bz - az * by, cy = az * bx - ax * bz;
+      this._jctNodeLon = ((Math.atan2(cy, cx) / rad) % 360 + 360) % 360;
+    }
+    return this._jctNodeLon;
+  }
+
+  // Worst-case eccentric-family semi-major axes over ALL apsis directions (0.25°
+  // scan of the exact tangency construction, cached per clearance pair): aWorst
+  // (max a → the LARGEST inclination any family ring can fly, the Earth-side ramp
+  // endpoint) and aMin (min a → the FLATTEST plane, the Mars-side ramp endpoint).
+  _jctWorstCase(uiConfig) {
     const num = (v, d) => (typeof v === "number" && !Number.isNaN(v) ? v : d);
     const marsMargin = num(uiConfig["adapted_eccentric_rings.mars-side-clearance-x"], 0);
     const earthMargin = num(uiConfig["adapted_eccentric_rings.earth-side-clearance-x"], 0);
     const worstKey = marsMargin + "|" + earthMargin;
     if (!this._jctWorst || this._jctWorst.key !== worstKey) {
       const { M, E } = this._adaptedEccUParams();
-      let aWorst = 0;
+      let aWorst = 0, aMin = Infinity;
       for (let w = 0; w < 360; w += 0.25) {
         const { ringA } = this._adaptedEccRingGeometry(w, M, E, marsMargin, earthMargin);
         if (ringA > aWorst) aWorst = ringA;
+        if (ringA < aMin) aMin = ringA;
       }
-      this._jctWorst = { key: worstKey, aWorst };
+      this._jctWorst = { key: worstKey, aWorst, aMin };
     }
+    return this._jctWorst;
+  }
+
+  // Mean longitude (epoch element `l`) that puts a satellite of orbit (e, p=long.
+  // of perihelion, n, Dele) at inertial ecliptic longitude thetaDeg AT date atDate:
+  // theta → true anomaly → eccentric anomaly → mean anomaly → mean longitude at the
+  // date, rewound to the element epoch by n·(JD − Dele).
+  _epochMeanLongitudeFor(thetaDeg, e, pDeg, nDegPerDay, Dele, atDate) {
+    const rad = Math.PI / 180;
+    const nu = ((thetaDeg - pDeg) % 360 + 360) % 360 * rad;
+    const Ecc = 2 * Math.atan2(Math.sqrt(1 - e) * Math.sin(nu / 2), Math.sqrt(1 + e) * Math.cos(nu / 2));
+    const Mdeg = (Ecc - e * Math.sin(Ecc)) / rad;
+    const jd = SIM_CONSTANTS.JULIAN_DAY_UNIX_EPOCH + atDate.getTime() / 86400000;
+    return ((Mdeg + pDeg - nDegPerDay * (jd - Dele)) % 360 + 360) % 360;
+  }
+
+  // SPARSE intermediate junction rings, both sides. Each side's k rings ride the
+  // planet's own orbit (a/e/perihelion) with inclination stepped toward the
+  // eccentric family's worst-case plane — Earth: ~0 → i(aWorst) hinged on the
+  // Earth–Mars plane-node line; Mars: Mars.i → i(aMin) at Mars's own RAAN (the
+  // Mars ring and the family share that node) — ring j of k at j/(k+1).
+  // Satellites are placed ONLY WHERE NEEDED: short arcs centred on each eccentric
+  // ring's tangent longitude (perihelion for Earth, aphelion for Mars — the
+  // corridors the junctions live in, ~360/ringCount wide each), one chain column
+  // per would-be direct link, and no more columns than the ring's design capacity
+  // needs: chains = ceil(2·inRingRate / chainRate), where chainRate is the budget
+  // of one rung — all rungs step the same Δi about the same node axis, so at
+  // tangent longitude θ the rung length is ≈ a·sin(Δi)·|sin(θ − node)|. Placement
+  // is anchored AT atDate (satellites orbit, so sparse arcs drift off their
+  // corridors over days — sweeps re-anchor per scenario; the live view re-anchors
+  // on any config rebuild).
+  _buildIntermediateJunctionRings(uiConfig, eccConfigs, atDate) {
+    const kE = Math.round(uiConfig["adapted_eccentric_rings.junction-ring-count"] || 0);
+    const kM = Math.round(uiConfig["adapted_eccentric_rings.junction-ring-count-mars"] || 0);
+    if ((kE <= 0 && kM <= 0) || !eccConfigs.length) return [];
+    const date = atDate instanceof Date && !isNaN(atDate) ? atDate : new Date();
     const inclPct = eccConfigs[0].earthMarsInclinationPct;
-    this._jctPlaneEnd = {
-      i: this.addInterpolationBias(this.interpolateOrbitalElement(this._jctWorst.aWorst, "i"), inclPct, "i"),
+    const worst = this._jctWorstCase(uiConfig);
+    const iMax = this.addInterpolationBias(this.interpolateOrbitalElement(worst.aWorst, "i"), inclPct, "i");
+    const iMin = this.addInterpolationBias(this.interpolateOrbitalElement(worst.aMin, "i"), inclPct, "i");
+    this._jctPlaneEnd = { i: iMax, iMarsEnd: iMin };
+
+    const dRingMbps = 2 * (uiConfig["adapted_eccentric_rings.requiredmbpsbetweensats"] || 0);
+    const corridorDeg = 360 / eccConfigs.length;
+    const rad = Math.PI / 180;
+    const AU_IN_KM = SIM_CONSTANTS.AU_IN_KM;
+    const out = [];
+
+    const buildSide = (k, planet, planetEnabled, iFrom, iTo, nodeLon, ringPrefix, ringType) => {
+      if (!(k > 0) || !planetEnabled) return;
+      const planetTemplate = this._buildPlanetRing(uiConfig, planet === this.Earth ? "ring_earth" : "ring_mars")[0];
+      if (!planetTemplate || !(planetTemplate.satCount > 0)) return;
+      const stepI = Math.abs(iTo - iFrom) / (k + 1);
+      const iTop = iFrom + (iTo - iFrom) * (k / (k + 1));
+      const maxDistAU = uiConfig["simulation.maxDistanceAU"] || 1;
+      // Honest capacity of ONE chain column at offset φ from the tangent longitude:
+      // its weakest hop is the LONGEST of (a) a rung — the plane step Δi about the
+      // node axis — and (b) the top hop, which also carries the RADIAL lift-off of
+      // the eccentric ring away from the planet's orbit (≈ φ²/2·(1/p_planet −
+      // 1/p_ring), the tangency curvature mismatch — this is what bounds the
+      // useful arc width; no ramp count removes it). Hops floored at 1000 km; the
+      // terminal line-rate cap bounds the near-node rate.
+      const chainCapMbps = (thetaDeg, phiDeg, iEcc, pRing, pPlanet) => {
+        const sinNode = Math.abs(Math.sin((thetaDeg + phiDeg - nodeLon) * rad));
+        const rungKm = planet.a * AU_IN_KM * Math.sin(stepI * rad) * sinNode;
+        const topZKm = planet.a * AU_IN_KM * Math.sin(Math.abs(iEcc - iTop) * rad) * sinNode;
+        const drAU = ((phiDeg * rad) ** 2 / 2) * Math.abs(1 / pPlanet - 1 / pRing) * planet.a;
+        if (drAU > maxDistAU) return 0; // beyond link reach — no chain here
+        const topKm = Math.hypot(topZKm, drAU * AU_IN_KM);
+        const worstKm = Math.max(1000, rungKm, topKm);
+        return this.calculateGbps(worstKm) * 1000;
+      };
+      // Longitude columns: per eccentric ring, an arc centred on its tangent
+      // longitude with the chains its capacity needs (bounded by how many
+      // planet-spacing columns fit in its corridor). Columns are SNAPPED onto the
+      // planet ring's own mean-longitude grid (anchor = the planet's element l,
+      // step = the ring's spacing): both populations propagate at the planet's
+      // mean motion, so every column sits permanently above a planet-ring sat and
+      // the rungs stay purely vertical — arbitrary-phase arcs made the free-port
+      // pairing displace cumulatively toward the arc edges, halving chain rates.
+      // All k rings share the same columns — chains are vertical.
+      const oneSide = Math.max(1, Math.ceil(planetTemplate.satCount / 2));
+      const incDeg = (planetTemplate.sideExtensionDeg || 180) / oneSide; // the planet ring's grid step
+      const gridBase = planet.l; // the planet ring's grid anchor (element mean longitude)
+      const meanLongs = [];
+      const pPlanet = planet.a * (1 - planet.e * planet.e);
+      const { M: uM, E: uE } = this._adaptedEccUParams();
+      const num2 = (v, d2) => (typeof v === "number" && !Number.isNaN(v) ? v : d2);
+      const mMar = num2(uiConfig["adapted_eccentric_rings.mars-side-clearance-x"], 0);
+      const mEar = num2(uiConfig["adapted_eccentric_rings.earth-side-clearance-x"], 0);
+      for (const c of eccConfigs) {
+        // TRUE tangent longitude for this side (the closed-form contact of the
+        // ring with the planet's elliptical orbit — shifted from argPeri).
+        const geom = this._adaptedEccRingGeometry(c.argPeri, uM, uE, mMar, mEar);
+        const theta = planet === this.Earth ? geom.contactEarthDeg : geom.contactMarsDeg;
+        const iEcc = this.addInterpolationBias(this.interpolateOrbitalElement(c.satDistanceSun, "i"), inclPct, "i");
+        const pRing = (c.satDistanceSun || planet.a) * (1 - (c.eccentricity || 0) ** 2);
+        const corridorCap = Math.max(1, Math.floor(corridorDeg / incDeg));
+        // Widen the arc column by column (alternating sides of the tangent),
+        // accumulating each chain's HONEST capacity until the ring's demand is met
+        // (10% margin), the corridor is full, or the radial lift-off kills the
+        // reach. Surplus is impossible by construction — the arc holds exactly the
+        // columns the capacity accounting needs.
+        // Column i sits at grid offset 0, +1, −1, +2, −2, … from the tangent.
+        const off = (i2) => (i2 % 2 === 1 ? 1 : -1) * Math.ceil(i2 / 2);
+        let nChains = 0, served = 0;
+        while (nChains < corridorCap && served < dRingMbps * 1.1) {
+          const cap = chainCapMbps(theta, off(nChains) * incDeg, iEcc, pRing, pPlanet);
+          if (cap <= 0 && nChains > 2) break; // reach exhausted on both flanks
+          served += cap;
+          nChains++;
+        }
+        const mlCenter = this._epochMeanLongitudeFor(theta, planet.e, planet.p, planet.n, planet.Dele, date);
+        const centerIdx = Math.round(((((mlCenter - gridBase) % 360) + 360) % 360) / incDeg);
+        for (let i = 0; i < nChains; i++) {
+          const gi = centerIdx + off(i);
+          meanLongs.push(((gridBase + gi * incDeg) % 360 + 360) % 360);
+        }
+      }
+      for (let j = 1; j <= k; j++) {
+        out.push({
+          satCount: meanLongs.length,
+          satDistanceSun: null,
+          ringName: ringPrefix + (j - 1),
+          ringType,
+          sideExtensionDeg: null,
+          eccentricity: 0,
+          raan: 0,
+          argPeri: 0,
+          // Repurposed for junction rings: the planet→eccentric plane mix percentage.
+          earthMarsInclinationPct: (100 * j) / (k + 1),
+          satLongitudes: meanLongs,
+        });
+      }
     };
-    const rings = [];
-    for (let j = 1; j <= count; j++) {
-      rings.push({
-        ...template,
-        ringName: "ring_jct_" + (j - 1),
-        ringType: "Junction",
-        // Repurposed for Junction rings: the Earth→eccentric plane mix percentage.
-        earthMarsInclinationPct: (100 * j) / (count + 1),
-      });
-    }
-    return rings;
+
+    buildSide(kE, this.Earth, !!uiConfig["ring_earth.side-extension-degrees-slider"], this.Earth.i, iMax, this._planeNodeLon(), "ring_jct_", "Junction");
+    buildSide(kM, this.Mars, !!uiConfig["ring_mars.side-extension-degrees-slider"], this.Mars.i, iMin, this.Mars.o, "ring_jctm_", "JunctionMars");
+    return out;
   }
 
   _buildAdaptedRings(uiConfig) {
@@ -1242,6 +1377,19 @@ export class SimSatellites {
     } = config;
     if (satCount == 0) return [];
     const satellites = [];
+    // Sparse placement (junction rings): explicit epoch mean longitudes instead of
+    // even spacing. No in-ring neighbours — these sats are vertical chain rungs.
+    if (config.satLongitudes && config.satLongitudes.length) {
+      const { a, n } = this.getParams_a_n(ringType);
+      const orbitdays = 360 / n;
+      config.satLongitudes.forEach((ml, i) => {
+        const name = `${ringName}-${i}`;
+        satellites.push(
+          this.generateSatellite(ringName, ringType, a, n, eccentricity, argPeri, earthMarsInclinationPct, ml, orbitdays, name, [])
+        );
+      });
+      return satellites;
+    }
     if (ringType == "Circular") {
       const a = satDistanceSun;
       const n = this.meanMotion(a);
@@ -1540,11 +1688,12 @@ export class SimSatellites {
 
   getParams_a_n(ringType) {
     let a, n;
-    if (ringType == "Mars") {
+    if (ringType == "Mars" || ringType == "JunctionMars") {
+      // Mars-side junction rings ride Mars's orbit (mixed plane, same shape).
       a = this.Mars.a;
       n = this.Mars.n;
     } else if (ringType == "Earth" || ringType == "Junction") {
-      // Junction rings ride Earth's orbit (Earth-ring clones with a mixed plane).
+      // Earth-side junction rings ride Earth's orbit (mixed plane, same shape).
       a = this.Earth.a;
       n = this.Earth.n;
     }
@@ -1725,40 +1874,44 @@ export class SimSatellites {
         apsides,
       };
     else if (ringType == "Junction") {
-      // Intermediate junction ring: an Earth-ring clone whose INCLINATION is
-      // mixed from Earth's toward the eccentric family's WORST CASE (100% = the
-      // largest inclination any family ring can fly, computed analytically and
-      // stashed as _jctPlaneEnd by the builder — so even the most-tilted ring
-      // is reached in uniform steps).
-      // earthMarsInclinationPct carries the mix fraction here (j/(k+1) as a
-      // percent, set by the builder), NOT the Earth↔Mars bias of the other
-      // families. RAAN = the longitude of the Earth–Mars PLANE-NODE line (where
-      // the two orbital planes intersect): the rings hinge about that axis, so
-      // at 100% they lie in Mars's orbital plane. n_E × n_M points at the node
-      // where Mars's plane ascends through Earth's — with Earth ≈ the ecliptic
-      // this is ≈ Mars's RAAN (~49.6°).
-      if (this._jctNodeLon === undefined) {
-        const rad = Math.PI / 180;
-        const nrm = (iDeg, oDeg) => {
-          const i = iDeg * rad, o = oDeg * rad;
-          return [Math.sin(i) * Math.sin(o), -Math.sin(i) * Math.cos(o), Math.cos(i)];
-        };
-        const [ax, ay, az] = nrm(this.Earth.i, this.Earth.o);
-        const [bx, by, bz] = nrm(this.Mars.i, this.Mars.o);
-        const cx = ay * bz - az * by, cy = az * bx - ax * bz;
-        this._jctNodeLon = ((Math.atan2(cy, cx) / rad) % 360 + 360) % 360;
-      }
+      // Earth-side intermediate junction ring: rides Earth's orbit (a/e/perihelion)
+      // with INCLINATION mixed from Earth's toward the family's WORST CASE (100% =
+      // the largest inclination any family ring can fly, stashed as _jctPlaneEnd.i
+      // by the builder) and RAAN on the Earth–Mars plane-node line (the rings hinge
+      // about the axis where the two planes actually meet). earthMarsInclinationPct
+      // carries the mix fraction (j/(k+1) as a percent); `long` carries the sat's
+      // ABSOLUTE epoch mean longitude (sparse placement, set by the builder).
       const t = Math.min(1, Math.max(0, (earthMarsInclinationPct ?? 50) / 100));
       const endI = this._jctPlaneEnd ? this._jctPlaneEnd.i : this.Mars.i;
       return {
         i: this.Earth.i + (endI - this.Earth.i) * t,
-        o: this._jctNodeLon, //RAAN
+        o: this._planeNodeLon(), //RAAN
         p: this.Earth.p,
         a: a ? a : this.Earth.a,
         n: n ? n : this.Earth.n,
         e: this.Earth.e,
-        l: (this.Earth.l + long + 360) % 360,
+        l: (long + 360) % 360,
         Dele: this.Earth.Dele, // J2000 epoch
+        apsides,
+      };
+    }
+    else if (ringType == "JunctionMars") {
+      // Mars-side intermediate junction ring: rides Mars's orbit with INCLINATION
+      // mixed from Mars's DOWN toward the family's worst-case minimum (the flattest
+      // plane any family ring can fly, _jctPlaneEnd.iMarsEnd). RAAN stays Mars's —
+      // the Mars ring and the eccentric family share that node, so inclination is
+      // the whole plane change. `long` = absolute epoch mean longitude, as above.
+      const t = Math.min(1, Math.max(0, (earthMarsInclinationPct ?? 50) / 100));
+      const endI = this._jctPlaneEnd && this._jctPlaneEnd.iMarsEnd != null ? this._jctPlaneEnd.iMarsEnd : this.Mars.i;
+      return {
+        i: this.Mars.i + (endI - this.Mars.i) * t,
+        o: this.Mars.o, //RAAN
+        p: this.Mars.p,
+        a: a ? a : this.Mars.a,
+        n: n ? n : this.Mars.n,
+        e: this.Mars.e,
+        l: (long + 360) % 360,
+        Dele: this.Mars.Dele, // J2000 epoch
         apsides,
       };
     }
