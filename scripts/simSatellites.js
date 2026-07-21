@@ -1,7 +1,7 @@
 // simSatellites.js
 
-import { helioCoords, positionFromSolarAngle } from "./simOrbits.js?v=4.59";
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.59";
+import { helioCoords, positionFromSolarAngle } from "./simOrbits.js?v=4.60";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.60";
 
 export class SimSatellites {
   constructor(simLinkBudget, planets) {
@@ -292,8 +292,10 @@ export class SimSatellites {
   // Intermediate junction rings: k clones of the Earth ring (same orbital elements,
   // same satellite count and phasing) whose inclination interpolates from Earth's
   // to MARS's — ring j of k sits at fraction j/(k+1) (1 ring → 50%, 2 rings →
-  // 33%/67%, ...). RAAN stays Earth's throughout. They ease the junction's plane
-  // change; wiring them into the link topology is a separate step.
+  // 33%/67%, ...). RAAN = the Earth–Mars plane-node longitude (see the "Junction"
+  // branch of getOrbitaElements), so the rings hinge about the axis where the two
+  // planes actually meet. They ease the junction's plane change ring by ring
+  // (buildJunctionRamp wires them into the link topology).
   _buildIntermediateJunctionRings(uiConfig, eccConfigs) {
     const count = Math.round(uiConfig["adapted_eccentric_rings.junction-ring-count"] || 0);
     if (!(count > 0) || !eccConfigs.length) return [];
@@ -1691,12 +1693,26 @@ export class SimSatellites {
       // mixed from Earth's toward MARS's (100% = Mars inclination).
       // earthMarsInclinationPct carries the mix fraction here (j/(k+1) as a
       // percent, set by the builder), NOT the Earth↔Mars bias of the other
-      // families. RAAN stays Earth's — the rings tilt progressively about
-      // Earth's node line.
+      // families. RAAN = the longitude of the Earth–Mars PLANE-NODE line (where
+      // the two orbital planes intersect): the rings hinge about that axis, so
+      // at 100% they lie in Mars's orbital plane. n_E × n_M points at the node
+      // where Mars's plane ascends through Earth's — with Earth ≈ the ecliptic
+      // this is ≈ Mars's RAAN (~49.6°).
+      if (this._jctNodeLon === undefined) {
+        const rad = Math.PI / 180;
+        const nrm = (iDeg, oDeg) => {
+          const i = iDeg * rad, o = oDeg * rad;
+          return [Math.sin(i) * Math.sin(o), -Math.sin(i) * Math.cos(o), Math.cos(i)];
+        };
+        const [ax, ay, az] = nrm(this.Earth.i, this.Earth.o);
+        const [bx, by, bz] = nrm(this.Mars.i, this.Mars.o);
+        const cx = ay * bz - az * by, cy = az * bx - ax * bz;
+        this._jctNodeLon = ((Math.atan2(cy, cx) / rad) % 360 + 360) % 360;
+      }
       const t = Math.min(1, Math.max(0, (earthMarsInclinationPct ?? 50) / 100));
       return {
         i: this.Earth.i + (this.Mars.i - this.Earth.i) * t,
-        o: this.Earth.o, //RAAN
+        o: this._jctNodeLon, //RAAN
         p: this.Earth.p,
         a: a ? a : this.Earth.a,
         n: n ? n : this.Earth.n,
