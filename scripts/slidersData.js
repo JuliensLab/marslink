@@ -1,6 +1,6 @@
 // slidersData.js
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.55";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.56";
 
 export const slidersData = {
   display: {
@@ -1170,7 +1170,7 @@ export const slidersData = {
     "junction-ring-count": {
       label: "Intermediate junction rings",
       description:
-        "Rings between the Earth ring and the eccentric relay rings that ease the junction's plane change. Each is a clone of the Earth ring (same orbital elements and satellite count); only inclination and RAAN are interpolated between the Earth ring and the eccentric family — ring j of k sits at fraction j/(k+1): one ring → 50%, two rings → 33%/67%, and so on. 0 = none.",
+        "Rings between the Earth ring and the eccentric relay rings that ease the junction's plane change. Each is a clone of the Earth ring (same orbital elements and satellite count, RAAN included); only inclination is interpolated between the Earth ring and the eccentric family — ring j of k sits at fraction j/(k+1): one ring → 50%, two rings → 33%/67%, and so on. 0 = none.",
       min: 0,
       max: 8,
       value: 0,
