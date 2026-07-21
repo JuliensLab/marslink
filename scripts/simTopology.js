@@ -1,6 +1,6 @@
 // simTopology.js — Topology building logic extracted from SimNetwork.
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.46";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.47";
 
 export class TopologyBuilder {
   constructor(simLinkBudget, simSatellites) {
@@ -2324,6 +2324,7 @@ export class TopologyBuilder {
           if (!nextName) break;
           const link = linkByPair.get(cur.name + "|" + nextName);
           if (link) { minMbps = Math.min(minMbps, link.gbpsCapacity * 1000); sumLat += link.latencySeconds; }
+          else minMbps = 0; // a chain hop with no formed link is BROKEN, not free — found in the 2026-07-20 junction review
           path.push(nextName);
           if (nextName === marsSat.name) { reached = true; break; }
           cur = satMap.get(nextName);

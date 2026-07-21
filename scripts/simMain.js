@@ -1,23 +1,23 @@
 // simMain.js
 
-import { SimUi } from "./simUi.js?v=4.46";
-import { SimTime } from "./simTime.js?v=4.46";
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.46";
-import { SimSatellites } from "./simSatellites.js?v=4.46";
-import { SimDeployment } from "./simDeployment.js?v=4.46";
-import { SimMissionValidator } from "./simMissionValidator.js?v=4.46";
-import { SimLinkBudget } from "./simLinkBudget.js?v=4.46";
-import { SimNetwork } from "./simNetwork.js?v=4.46";
+import { SimUi } from "./simUi.js?v=4.47";
+import { SimTime } from "./simTime.js?v=4.47";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.47";
+import { SimSatellites } from "./simSatellites.js?v=4.47";
+import { SimDeployment } from "./simDeployment.js?v=4.47";
+import { SimMissionValidator } from "./simMissionValidator.js?v=4.47";
+import { SimLinkBudget } from "./simLinkBudget.js?v=4.47";
+import { SimNetwork } from "./simNetwork.js?v=4.47";
 // Import both SimDisplay implementations with unique names
-import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=4.46";
-import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=4.46";
-import { generateReport } from "./reportGenerator.js?v=4.46";
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.46";
-import { minOf, maxOf } from "./simMath.js?v=4.46";
-import { SimFlightController } from "./simFlightController.js?v=4.46";
-import { SimProbeController } from "./simProbeController.js?v=4.46";
-import { findDepartureWindows } from "./simTransfer.js?v=4.46";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.46";
+import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=4.47";
+import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=4.47";
+import { generateReport } from "./reportGenerator.js?v=4.47";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.47";
+import { minOf, maxOf } from "./simMath.js?v=4.47";
+import { SimFlightController } from "./simFlightController.js?v=4.47";
+import { SimProbeController } from "./simProbeController.js?v=4.47";
+import { findDepartureWindows } from "./simTransfer.js?v=4.47";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.47";
 
 export class SimMain {
   // Clamp argument to [-1, 1] to prevent NaN from Math.asin domain errors
@@ -70,7 +70,7 @@ export class SimMain {
     if (typeof window !== "undefined") window.simMain = this;
 
     // --- Worker + triple-buffered window cache (-1/0/+1) ---
-    this.simWorker = new Worker(new URL("./simWorker.js?v=4.46", import.meta.url), { type: "module" });
+    this.simWorker = new Worker(new URL("./simWorker.js?v=4.47", import.meta.url), { type: "module" });
     this.simWorker.onmessage = (event) => this.handleWorkerMessage(event);
     this.simWorker.onerror = (event) => console.error("[Marslink] Worker error:", event.message);
     this.simWorker.postMessage({ type: "init" });
@@ -629,12 +629,13 @@ export class SimMain {
     const { relayRingCount, isEccentric, fmtNum,
             earthSide1 = 0, earthSide2 = 0, marsSide1 = 0, marsSide2 = 0, labels = {} } = d;
 
-    const W = 365, barL = 12, barR = 150, labelX = 158, H = 208;
+    const W = 365, barL = 12, barR = 150, labelX = 158, H = 236;
     const EARTH = "#4d97e0", MARS = "#e07a52", RELAY = "#8893a0",
           EARTH_LN = "#3f6d92", MARS_LN = "#8a5a48", // muted planet-tinted ring lines
           TXT = "#c9ced6", MUT = "#868d97", WARN = "#e0b352", BG = "#181b21";
 
-    const Y = { eg: 16, er: 34, ej: 51, r0: 70, r1: 88, r2: 106, r3: 124, mj: 143, mr: 160, mg: 178, bn: 196 };
+    // Each junction gets TWO label rows (total + per-link min|avg|max breakdown).
+    const Y = { eg: 16, er: 34, ej: 51, ej2: 65, r0: 84, r1: 102, r2: 120, r3: 138, mj: 157, mj2: 171, mr: 188, mg: 206, bn: 224 };
     const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;");
     const txt = (x, y, t, fill = TXT, size = 11, anchor = "start") =>
       t == null || t === "" ? "" : `<text x="${x}" y="${(y + 3.5).toFixed(1)}" fill="${fill}" font-size="${size}"${anchor !== "start" ? ` text-anchor="${anchor}"` : ""}>${esc(t)}</text>`;
@@ -697,11 +698,13 @@ export class SimMain {
     s += txt(eX, Y.eg, labels.earthTotal, EARTH, 12, "middle");
     s += txt(labelX, Y.er, labels.ringEarth, EARTH);
     s += txt(labelX, Y.ej, labels.earthJunction, EARTH);
+    s += txt(labelX, Y.ej2, labels.earthJunction2, EARTH);
     s += txt(labelX, Y.r0, labels.relayMain, RELAY, 12);
     s += txt(labelX, Y.r1, labels.relayL1, RELAY);
     s += txt(labelX, Y.r2, labels.relayL2, RELAY);
     s += txt(labelX, Y.r3, labels.relayL3, RELAY);
     s += txt(labelX, Y.mj, labels.marsJunction, MARS);
+    s += txt(labelX, Y.mj2, labels.marsJunction2, MARS);
     s += txt(labelX, Y.mr, labels.ringMars, MARS);
     s += txt(mX, Y.mg, labels.marsTotal, MARS, 12, "middle");
     s += txt(barL, Y.bn, labels.bottleneck, WARN);
@@ -716,9 +719,12 @@ export class SimMain {
   _capacityPathSvg(d) {
     const { rs, earthInring, marsInring, earthCap, marsCap, earthCapTotal, marsCapTotal,
             relayRingCount, bottleneckLine, eJct, mJct, fmtMbps, fmtRange, fmtNum } = d;
-    // Junction label: link count, total capacity, min|avg|max per link (from interCap).
+    // Junction labels, two rows: [total · junctions · links] then [min|avg|max per link].
     const jctCapLabel = (j, prefix) => (j && j.count
-      ? `${fmtMbps(j.sum)} · ${prefix}${j.count} links · ${fmtRange(j.min, j.sum / j.count, j.max)}`
+      ? `${fmtMbps(j.sum)} · ${prefix}${j.count} links`
+      : null);
+    const jctCapLabel2 = (j) => (j && j.count
+      ? `${fmtRange(j.min, j.sum / j.count, j.max)} per link`
       : null);
 
     // ring↔relay junction aggregates (eccentric: from ringDetail; null otherwise).
@@ -743,11 +749,13 @@ export class SimMain {
         earthTotal: `Earth ${fmtMbps(earthCapTotal)}`,
         ringEarth: eS ? `ring Earth ${fmtRange(eS.lo, eS.avg, eS.hi)}` : null,
         earthJunction: jctCapLabel(eJct, eJuncN != null ? `${eJuncRings} junctions · ` : "") || (eJuncN != null ? `${eJuncRings} junctions · ${eJuncN} links · ${fmtMbps(eJuncCap)}` : `ring \u2192 relay`),
+        earthJunction2: jctCapLabel2(eJct),
         relayMain: rs ? fmtMbps(rs.totalThroughput) : null,
         relayL1: rs ? `${relayRingCount} rings, ${rs.routeCount} routes` : null,
         relayL2: rs ? fmtRange(rs.minThroughput, rs.avgThroughput, rs.maxThroughput) : null,
         relayL3: rs ? `${(rs.minLatency / 60).toFixed(1)}|${(rs.avgLatency / 60).toFixed(1)}|${(rs.maxLatency / 60).toFixed(1)} min` : null,
         marsJunction: jctCapLabel(mJct, mJuncN != null ? `${mJuncRings} junctions · ` : "") || (mJuncN != null ? `${mJuncRings} junctions · ${mJuncN} links · ${fmtMbps(mJuncCap)}` : `relay \u2192 ring`),
+        marsJunction2: jctCapLabel2(mJct),
         ringMars: mS ? `ring Mars ${fmtRange(mS.lo, mS.avg, mS.hi)}` : null,
         marsTotal: `Mars ${fmtMbps(marsCapTotal)}`,
         bottleneck: bottleneckLine,
@@ -769,8 +777,9 @@ export class SimMain {
     // Junction label: active links, total flow, utilization vs junction capacity,
     // and min|avg|max flow per active link.
     const jctFlowLabel = (f, cap) => (f && f.count
-      ? `${fmtMbps(f.sum)}${cap && cap.sum ? " · " + pct(f.sum, cap.sum) : ""} · ${f.count} active · ${fmtRange(f.min, f.avg, f.max)}`
+      ? `${fmtMbps(f.sum)}${cap && cap.sum ? " · " + pct(f.sum, cap.sum) : ""} · ${f.count} active`
       : null);
+    const jctFlowLabel2 = (f) => (f && f.count ? `${fmtRange(f.min, f.avg, f.max)} per link` : null);
 
     const stat = (arr) => (arr && arr.length ? { lo: minOf(arr), hi: maxOf(arr), avg: arr.reduce((a, b) => a + b, 0) / arr.length } : null);
     const eS = stat(earthInring), mS = stat(marsInring);
@@ -783,11 +792,13 @@ export class SimMain {
         earthTotal: `Earth ${fmtMbps(earthFlowTotal)} · ${pct(earthFlowTotal, earthCapTotal)}`,
         ringEarth: eS ? `ring Earth ${fmtRange(eS.lo, eS.avg, eS.hi)}` : null,
         earthJunction: jctFlowLabel(eJctFlowStat, eJct) || (earthActive != null ? `${earthActive} routes active` : `ring \u2192 relay`),
+        earthJunction2: jctFlowLabel2(eJctFlowStat),
         relayMain: rs ? fmtMbps(actualFlowMbps) : null,
         relayL1: rs ? `${relayRingCount} rings, ${rs.routeCount} routes` : null,
         relayL2: rs ? fmtRange(rs.minThroughput, rs.avgThroughput, rs.maxThroughput) : null,
         relayL3: rs ? `${(rs.minLatency / 60).toFixed(1)}|${(rs.avgLatency / 60).toFixed(1)}|${(rs.maxLatency / 60).toFixed(1)} min` : null,
         marsJunction: jctFlowLabel(mJctFlowStat, mJct) || (marsActive != null ? `${marsActive} routes active` : `relay \u2192 ring`),
+        marsJunction2: jctFlowLabel2(mJctFlowStat),
         ringMars: mS ? `ring Mars ${fmtRange(mS.lo, mS.avg, mS.hi)}` : null,
         marsTotal: `Mars ${fmtMbps(marsFlowTotal)} · ${pct(marsFlowTotal, marsCapTotal)}`,
         bottleneck: bottleneckLine,
