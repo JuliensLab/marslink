@@ -1,7 +1,7 @@
 // simNetwork.js — Thin orchestrator delegating to simTopology.js and simMaxFlow.js.
 
-import { TopologyBuilder } from "./simTopology.js?v=4.61";
-import { simplifyNetwork, desimplifyNetwork, computeMaxFlow, calculateLatencies } from "./simMaxFlow.js?v=4.61";
+import { TopologyBuilder } from "./simTopology.js?v=4.62";
+import { simplifyNetwork, desimplifyNetwork, computeMaxFlow, calculateLatencies } from "./simMaxFlow.js?v=4.62";
 
 export class SimNetwork {
   constructor(simLinkBudget, simSatellites) {

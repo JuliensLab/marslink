@@ -1,7 +1,7 @@
 // simSatellites.js
 
-import { helioCoords, positionFromSolarAngle } from "./simOrbits.js?v=4.61";
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.61";
+import { helioCoords, positionFromSolarAngle } from "./simOrbits.js?v=4.62";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.62";
 
 export class SimSatellites {
   constructor(simLinkBudget, planets) {
@@ -205,6 +205,62 @@ export class SimSatellites {
   // c shrinks the locus so the ring sits strictly inside Mars / outside Earth by a margin
   // instead of touching. Emits ringType "Eccentric" with a distinct ring_adecc_ name.
   // (Worked in the 2-D ecliptic projection — inclination only tilts out of plane.)
+  // Reciprocal-radius (u = 1/r) parameters of the two planet orbits: A = 1/p and the
+  // eccentricity vector V = (e/p)·(cos ϖ, sin ϖ), ϖ = perihelion longitude (= .p).
+  // Shared by the eccentric ring builder and the junction-ramp worst-case scan.
+  _adaptedEccUParams() {
+    const uParams = (planet) => {
+      const e = planet.e, a = planet.a, w = ((planet.p || 0) * Math.PI) / 180;
+      const p = a * (1 - e * e) || 1e-9;
+      const ev = e / p;
+      return { A: 1 / p, Vx: ev * Math.cos(w), Vy: ev * Math.sin(w) };
+    };
+    return { M: uParams(this.Mars), E: uParams(this.Earth) };
+  }
+
+  // One family ring's geometry (a, e) for an apsis direction: the u-space tangency
+  // solve with Newton-refined clearance margins. Clearance is a RADIAL gap in AU —
+  // a fixed absolute distance, NOT a multiple of the varying in-ring spacing; it
+  // maps to a u-space margin by du ≈ dr·A², refined per ring because each ring
+  // touches at a different radius. Extracted from the ring builder so the junction
+  // ramp's worst-case inclination scan runs the EXACT same construction.
+  _adaptedEccRingGeometry(argPeri, M, E, marsMargin, earthMargin) {
+    const fociDist = Math.hypot(M.Vx - E.Vx, M.Vy - E.Vy);
+    // Exact u-margin c giving a radial gap g at a contact with reciprocal-radius u*:
+    //   Mars (ring inside):   g = 1/u* − 1/(u*+c) ⇒ c = g·u*² / (1 − g·u*)
+    //   Earth (ring outside): g = 1/(u*−c) − 1/u* ⇒ c = g·u*² / (1 + g·u*)
+    const marginForGap = (g, uStar, inside) =>
+      g <= 0 ? 0 : (g * uStar * uStar) / (inside ? Math.max(1e-6, 1 - g * uStar) : 1 + g * uStar);
+    const wr = (argPeri * Math.PI) / 180, dx = Math.cos(wr), dy = Math.sin(wr);
+    // Seed the margins from the mean-radius linearization, then refine. A tangent ring
+    // (both margins 0) needs no refinement and stays exact in a single pass.
+    let cM = marsMargin * M.A * M.A, cE = earthMargin * E.A * E.A, v = 0, Ar = M.A;
+    const passes = marsMargin > 0 || earthMargin > 0 ? 4 : 1;
+    for (let it = 0; it < passes; it++) {
+      // Along the apsis ray V_r = v·(dx,dy), solve |V_r−V_M| + |V_r−V_E| = S. The summed
+      // distance grows monotonically with v past the origin, so bisect.
+      const S = Math.max(fociDist + 1e-6, E.A - M.A - cM - cE);
+      const f = (vv) => Math.hypot(vv * dx - M.Vx, vv * dy - M.Vy) + Math.hypot(vv * dx - E.Vx, vv * dy - E.Vy) - S;
+      let lo = 0, hi = 1;
+      while (f(hi) < 0 && hi < 16) hi *= 2;
+      for (let k = 0; k < 50; k++) { const mid = (lo + hi) / 2; if (f(mid) < 0) lo = mid; else hi = mid; }
+      v = (lo + hi) / 2;
+      Ar = M.A + Math.hypot(v * dx - M.Vx, v * dy - M.Vy) + cM; // A_r = A_M + |V_r−V_M| + c_M
+      if (it === passes - 1) break;
+      // Closed-form contact longitudes (where ring & planet are closest) → planet u
+      // there → exact margins for the next pass.
+      const tM = Math.atan2(M.Vy - v * dy, M.Vx - v * dx);
+      const tE = Math.atan2(v * dy - E.Vy, v * dx - E.Vx);
+      const uM = M.A + M.Vx * Math.cos(tM) + M.Vy * Math.sin(tM);
+      const uE = E.A + E.Vx * Math.cos(tE) + E.Vy * Math.sin(tE);
+      cM = marginForGap(marsMargin, uM, true);
+      cE = marginForGap(earthMargin, uE, false);
+    }
+    const ringE = Math.min(0.97, Math.max(0, v / Ar)); // e = |V_r|/A_r = v/Ar
+    const ringA = 1 / Ar / (1 - ringE * ringE); // a = p/(1−e²)
+    return { ringA, ringE };
+  }
+
   _buildAdaptedEccentricRings(uiConfig) {
     const ringCount = uiConfig["relay_type.ringcount"];
     const mbpsBetweenSats = uiConfig["adapted_eccentric_rings.requiredmbpsbetweensats"];
@@ -214,61 +270,15 @@ export class SimSatellites {
     const distanceKmBetweenSats = this.simLinkBudget.calculateKm(mbpsBetweenSats / 1000);
     const distanceAuBetweenSats = distanceKmBetweenSats / SIM_CONSTANTS.AU_IN_KM;
 
-    // Reciprocal-radius (u = 1/r) parameters of a planet's orbit: A = 1/p and the
-    // eccentricity vector V = (e/p)·(cos ϖ, sin ϖ), ϖ = perihelion longitude (= .p here).
-    const uParams = (planet) => {
-      const e = planet.e, a = planet.a, w = ((planet.p || 0) * Math.PI) / 180;
-      const p = a * (1 - e * e) || 1e-9;
-      const ev = e / p;
-      return { A: 1 / p, Vx: ev * Math.cos(w), Vy: ev * Math.sin(w) };
-    };
-    const M = uParams(this.Mars), E = uParams(this.Earth);
-
-    // Clearance is a RADIAL gap in AU — a fixed absolute distance set directly by the
-    // slider, NOT a multiple of the (varying) in-ring spacing. It maps to a u-space margin
-    // by du ≈ dr·A², but A (=1/r) at the planet's MEAN radius is only a seed — each ring
-    // touches at a different radius. So we Newton-refine each ring's margin (closed form,
-    // no sampling) until the realized radial gap equals the slider value.
+    const { M, E } = this._adaptedEccUParams();
     const num = (v, d) => (typeof v === "number" && !Number.isNaN(v) ? v : d);
     const marsMargin = num(uiConfig["adapted_eccentric_rings.mars-side-clearance-x"], 0); // AU
     const earthMargin = num(uiConfig["adapted_eccentric_rings.earth-side-clearance-x"], 0); // AU
-    const fociDist = Math.hypot(M.Vx - E.Vx, M.Vy - E.Vy);
-    // Exact u-margin c giving a radial gap g at a contact with reciprocal-radius u*:
-    //   Mars (ring inside):   g = 1/u* − 1/(u*+c) ⇒ c = g·u*² / (1 − g·u*)
-    //   Earth (ring outside): g = 1/(u*−c) − 1/u* ⇒ c = g·u*² / (1 + g·u*)
-    const marginForGap = (g, uStar, inside) =>
-      g <= 0 ? 0 : (g * uStar * uStar) / (inside ? Math.max(1e-6, 1 - g * uStar) : 1 + g * uStar);
 
     const satellitesConfig = [];
     for (let ringId = 0; ringId < ringCount; ringId++) {
       const argPeri = (((argPeriStart + (ringId * 360) / ringCount) % 360) + 360) % 360;
-      const wr = (argPeri * Math.PI) / 180, dx = Math.cos(wr), dy = Math.sin(wr);
-      // Seed the margins from the mean-radius linearization, then refine. A tangent ring
-      // (both margins 0) needs no refinement and stays exact in a single pass.
-      let cM = marsMargin * M.A * M.A, cE = earthMargin * E.A * E.A, v = 0, Ar = M.A;
-      const passes = marsMargin > 0 || earthMargin > 0 ? 4 : 1;
-      for (let it = 0; it < passes; it++) {
-        // Along the apsis ray V_r = v·(dx,dy), solve |V_r−V_M| + |V_r−V_E| = S. The summed
-        // distance grows monotonically with v past the origin, so bisect.
-        const S = Math.max(fociDist + 1e-6, E.A - M.A - cM - cE);
-        const f = (vv) => Math.hypot(vv * dx - M.Vx, vv * dy - M.Vy) + Math.hypot(vv * dx - E.Vx, vv * dy - E.Vy) - S;
-        let lo = 0, hi = 1;
-        while (f(hi) < 0 && hi < 16) hi *= 2;
-        for (let k = 0; k < 50; k++) { const mid = (lo + hi) / 2; if (f(mid) < 0) lo = mid; else hi = mid; }
-        v = (lo + hi) / 2;
-        Ar = M.A + Math.hypot(v * dx - M.Vx, v * dy - M.Vy) + cM; // A_r = A_M + |V_r−V_M| + c_M
-        if (it === passes - 1) break;
-        // Closed-form contact longitudes (where ring & planet are closest) → planet u
-        // there → exact margins for the next pass.
-        const tM = Math.atan2(M.Vy - v * dy, M.Vx - v * dx);
-        const tE = Math.atan2(v * dy - E.Vy, v * dx - E.Vx);
-        const uM = M.A + M.Vx * Math.cos(tM) + M.Vy * Math.sin(tM);
-        const uE = E.A + E.Vx * Math.cos(tE) + E.Vy * Math.sin(tE);
-        cM = marginForGap(marsMargin, uM, true);
-        cE = marginForGap(earthMargin, uE, false);
-      }
-      const ringE = Math.min(0.97, Math.max(0, v / Ar)); // e = |V_r|/A_r = v/Ar
-      const ringA = 1 / Ar / (1 - ringE * ringE); // a = p/(1−e²)
+      const { ringA, ringE } = this._adaptedEccRingGeometry(argPeri, M, E, marsMargin, earthMargin);
       // Worst-case (perihelion) sizing: in-ring spacing is widest at perihelion,
       // exceeding the average by √((1+e)/(1−e)), so size the count to that link.
       const periapsisFactor = Math.sqrt((1 + ringE) / (1 - ringE));
@@ -291,7 +301,8 @@ export class SimSatellites {
 
   // Intermediate junction rings: k clones of the Earth ring (same orbital elements,
   // same satellite count and phasing) whose inclination interpolates from Earth's
-  // to the ECCENTRIC FAMILY's mean-a value — ring j of k sits at fraction j/(k+1)
+  // to the eccentric family's WORST-CASE value (the largest any family ring can
+  // fly, computed analytically below) — ring j of k sits at fraction j/(k+1)
   // (1 ring → 50%, 2 rings → 33%/67%, ...). RAAN = the Earth–Mars plane-node
   // longitude (see the "Junction" branch of getOrbitaElements), so the rings hinge
   // about the axis where the two planes actually meet. They ease the junction's
@@ -302,16 +313,30 @@ export class SimSatellites {
     // Clone the Earth ring's build; without an Earth ring there is nothing to bridge.
     const template = uiConfig["ring_earth.side-extension-degrees-slider"] ? this._buildPlanetRing(uiConfig, "ring_earth")[0] : null;
     if (!template) return [];
-    // 100% inclination target = what the eccentric family actually flies. Each
-    // eccentric ring's i is evaluated at its own semi-major axis, so the family
-    // spans a small band; the endpoint uses the family's MEAN-a value (the middle
-    // of the band), matching getOrbitaElements "Eccentric". Stashed on the
-    // instance for the "Junction" branch — safe because generation always
-    // follows this build on the same instance.
-    const aMean = eccConfigs.reduce((s, c) => s + (c.satDistanceSun || 0), 0) / eccConfigs.length;
+    // 100% inclination target = the WORST-CASE family inclination: the largest any
+    // ring of the family CAN fly, over all apsis directions — not sampled from the
+    // built rings. i is monotone in the ring's semi-major axis (linear Earth→Mars
+    // interpolation + monotone bias), so scan the exact tangency construction for
+    // max a on a 0.25° grid. The ladder then pretends it has n+2 steps — step 0 =
+    // the Earth ring (i≈0), step n+1 = the worst-case eccentric plane — and keeps
+    // only the n intermediates as rings (the j/(n+1) mix below). Cached per
+    // clearance pair: the planets never change at runtime.
+    const num = (v, d) => (typeof v === "number" && !Number.isNaN(v) ? v : d);
+    const marsMargin = num(uiConfig["adapted_eccentric_rings.mars-side-clearance-x"], 0);
+    const earthMargin = num(uiConfig["adapted_eccentric_rings.earth-side-clearance-x"], 0);
+    const worstKey = marsMargin + "|" + earthMargin;
+    if (!this._jctWorst || this._jctWorst.key !== worstKey) {
+      const { M, E } = this._adaptedEccUParams();
+      let aWorst = 0;
+      for (let w = 0; w < 360; w += 0.25) {
+        const { ringA } = this._adaptedEccRingGeometry(w, M, E, marsMargin, earthMargin);
+        if (ringA > aWorst) aWorst = ringA;
+      }
+      this._jctWorst = { key: worstKey, aWorst };
+    }
     const inclPct = eccConfigs[0].earthMarsInclinationPct;
     this._jctPlaneEnd = {
-      i: this.addInterpolationBias(this.interpolateOrbitalElement(aMean, "i"), inclPct, "i"),
+      i: this.addInterpolationBias(this.interpolateOrbitalElement(this._jctWorst.aWorst, "i"), inclPct, "i"),
     };
     const rings = [];
     for (let j = 1; j <= count; j++) {
@@ -1701,9 +1726,10 @@ export class SimSatellites {
       };
     else if (ringType == "Junction") {
       // Intermediate junction ring: an Earth-ring clone whose INCLINATION is
-      // mixed from Earth's toward the ECCENTRIC FAMILY's (100% = the family's
-      // mean-a inclination, stashed as _jctPlaneEnd by the builder — so the
-      // ramp's last step lands on the plane the relay rings actually fly).
+      // mixed from Earth's toward the eccentric family's WORST CASE (100% = the
+      // largest inclination any family ring can fly, computed analytically and
+      // stashed as _jctPlaneEnd by the builder — so even the most-tilted ring
+      // is reached in uniform steps).
       // earthMarsInclinationPct carries the mix fraction here (j/(k+1) as a
       // percent, set by the builder), NOT the Earth↔Mars bias of the other
       // families. RAAN = the longitude of the Earth–Mars PLANE-NODE line (where
