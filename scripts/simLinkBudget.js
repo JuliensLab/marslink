@@ -1,6 +1,6 @@
 // simLinkBudget.js
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.52";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.53";
 
 export class SimLinkBudget {
   constructor() {
@@ -11,9 +11,9 @@ export class SimLinkBudget {
     this.SPEED_OF_LIGHT_KM_S = SIM_CONSTANTS.SPEED_OF_LIGHT_KM_S;
     // Per-terminal line-rate ceiling (Gbps). The physical link is power-limited
     // (capacity ∝ 1/d²) until the terminal saturates at its electronics line rate;
-    // past that, shortening the link no longer buys throughput. Default Infinity =
-    // non-binding (pure 1/d², unchanged behaviour); lower it to model the ceiling
-    // that makes densification saturate and forces extra rings at scale.
+    // past that, shortening the link no longer buys throughput. Overridden by the
+    // "laser_technology.terminal-line-rate-gbps" slider in setTechnologyConfig;
+    // deliberately NOT scaled by the improvement factor (link gain ≠ electronics).
     this.cTermGbps = SIM_CONSTANTS.TERMINAL_LINE_RATE_GBPS ?? Infinity;
   }
 
@@ -52,6 +52,10 @@ export class SimLinkBudget {
     this.maxLinksPerSatellite = Math.max(...Object.values(this.maxLinksPerRing).filter((v) => v > 0));
 
     this.techImprovementFactor = Math.pow(2, technologyConfig["laser_technology.improvement-factor"]);
+
+    // Terminal line-rate ceiling: arrives user-facing (Gbps) from the pow10 slider.
+    const cTerm = parseFloat(technologyConfig["laser_technology.terminal-line-rate-gbps"]);
+    this.cTermGbps = Number.isFinite(cTerm) && cTerm > 0 ? cTerm : (SIM_CONSTANTS.TERMINAL_LINE_RATE_GBPS ?? Infinity);
 
     // Solar exclusion: angular margin (in degrees) from the sun's visible edge
     this.solarExclusionDeg = technologyConfig["simulation.solarExclusionDeg"] || 0;

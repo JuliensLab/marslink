@@ -1,6 +1,6 @@
 // reportGenerator.js
 
-import { printTree, SimMissionValidator } from "./simMissionValidator.js?v=4.52";
+import { printTree, SimMissionValidator } from "./simMissionValidator.js?v=4.53";
 import {
   createLaunchSchedule,
   renderOrbitChartSVG,
@@ -9,9 +9,9 @@ import {
   getLambertDebugEntry,
   computeHohmannDebug,
   computeHohmannRefined,
-} from "./hohmannTransfer.js?v=4.52";
-import { openLoginPopup } from "./auth.js?v=4.52";
-import { planLaunches, aggregateRingFromFlights } from "./launchPlanner.js?v=4.52";
+} from "./hohmannTransfer.js?v=4.53";
+import { openLoginPopup } from "./auth.js?v=4.53";
+import { planLaunches, aggregateRingFromFlights } from "./launchPlanner.js?v=4.53";
 
 // Per-ring flight list stashed by generateReport so the flight slider can
 // re-render charts without recomputing the whole schedule.

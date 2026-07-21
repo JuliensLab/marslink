@@ -1,6 +1,6 @@
 // slidersData.js
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.52";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.53";
 
 export const slidersData = {
   display: {
@@ -440,6 +440,18 @@ export const slidersData = {
       unit: " x",
       scale: "pow2",
       steps: 21,
+      updateLongTermScore: true,
+    },
+    "terminal-line-rate-gbps": {
+      label: "Max Gbps per link",
+      description:
+        "Per-terminal line-rate ceiling. A link is power-limited (capacity ∝ 1/d²) until the terminal's electronics saturate at this rate; shortening the link buys nothing past it. Independent of the improvement factor (which models link gain, not electronics). Without it, tangency-graze junction links would price at Tbps.",
+      min: 0,
+      max: 5,
+      value: Math.log10(SIM_CONSTANTS.TERMINAL_LINE_RATE_GBPS),
+      step: 0.05,
+      unit: " Gbps",
+      scale: "pow10",
       updateLongTermScore: true,
     },
     "laser-terminal-mass": {
