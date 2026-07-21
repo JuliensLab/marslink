@@ -1,14 +1,14 @@
 // simDisplay-3d.js
 
 import * as THREE from "three";
-import { OrbitControls } from "three/addons/controls/OrbitControls.js?v=4.78";
-import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js?v=4.78";
-import { RenderPass } from "three/addons/postprocessing/RenderPass.js?v=4.78";
-import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js?v=4.78";
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.78";
-import { createCarModel } from "./modelCar.js?v=4.78";
-import { positionFromSolarAngle } from "./simOrbits.js?v=4.78";
-import { stationKeepingAccel, THRUST_BINS, satSchemeT, rampHex, OVER_BUDGET_HEX, isThrustScheme, satStationKeeping, satTotalProp } from "./simStationKeeping.js?v=4.78";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js?v=4.79";
+import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js?v=4.79";
+import { RenderPass } from "three/addons/postprocessing/RenderPass.js?v=4.79";
+import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js?v=4.79";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.79";
+import { createCarModel } from "./modelCar.js?v=4.79";
+import { positionFromSolarAngle } from "./simOrbits.js?v=4.79";
+import { stationKeepingAccel, THRUST_BINS, satSchemeT, rampHex, OVER_BUDGET_HEX, isThrustScheme, satStationKeeping, satTotalProp } from "./simStationKeeping.js?v=4.79";
 
 /**
  * Converts astronomical units (AU) to 3D units using a scale factor.
@@ -17,7 +17,7 @@ import { stationKeepingAccel, THRUST_BINS, satSchemeT, rampHex, OVER_BUDGET_HEX,
  * @returns {number} Distance in 3D units
  */
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.78";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.79";
 
 export let sunScaleFactor = SIM_CONSTANTS.SUN_SCALE_FACTOR;
 export let planetScaleFactor = SIM_CONSTANTS.PLANET_SCALE_FACTOR;
@@ -377,6 +377,8 @@ export class SimDisplay {
       if (satellite.orbitalZone === "OUTSIDE_MARS") return 2;
       if (satellite.orbitalZone === "EARTH_RING") return 4;
       if (satellite.orbitalZone === "MARS_RING") return 5;
+      if (satellite.orbitalZone === "EARTH_JUNCTION") return 6;
+      if (satellite.orbitalZone === "MARS_JUNCTION") return 7;
       return 3; // Unknown zone
     } else if (this.satelliteColorMode === "Suit") {
       if (!satellite.suitable) return 3; // Grey for unsuitable
@@ -518,6 +520,8 @@ export class SimDisplay {
     new THREE.Color(0x333333), // Grey for unknown
     new THREE.Color(0x0066ff), // Blue green for earth ring
     new THREE.Color(0xff6600), // Red green for mars ring
+    new THREE.Color(0x00ccff), // Cyan for earth junction rings
+    new THREE.Color(0xffcc00), // Amber for mars junction rings
   ];
 
   // Normal color
@@ -565,7 +569,7 @@ export class SimDisplay {
 
     // Group satellites by color index
     const numGroups =
-      this.satelliteColorMode === "Quad" ? 4 : this.satelliteColorMode === "Zone" || this.satelliteColorMode === "Suit" ? 6 : isThrustScheme(this.satelliteColorMode) ? THRUST_BINS + 1 : 1;
+      this.satelliteColorMode === "Quad" ? 4 : this.satelliteColorMode === "Zone" ? 8 : this.satelliteColorMode === "Suit" ? 6 : isThrustScheme(this.satelliteColorMode) ? THRUST_BINS + 1 : 1;
     const colorGroups = Array.from({ length: numGroups }, () => []);
     satellites.forEach((satellite, index) => {
       const colorIndex = this.getSatelliteColorIndex(satellite);

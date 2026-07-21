@@ -5,10 +5,10 @@
  * with pan and zoom (mouse & touch).
  ***********************************************/
 
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.78";
-import { createCarModel } from "./modelCar.js?v=4.78";
-import { positionFromSolarAngle } from "./simOrbits.js?v=4.78";
-import { stationKeepingAccel, GM, sampleThrustField, marchingSquares, satSchemeT, rampRGB, OVER_BUDGET_RGB, isThrustScheme, satStationKeeping, satTotalProp, G0, SECONDS_PER_YEAR } from "./simStationKeeping.js?v=4.78";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.79";
+import { createCarModel } from "./modelCar.js?v=4.79";
+import { positionFromSolarAngle } from "./simOrbits.js?v=4.79";
+import { stationKeepingAccel, GM, sampleThrustField, marchingSquares, satSchemeT, rampRGB, OVER_BUDGET_RGB, isThrustScheme, satStationKeeping, satTotalProp, G0, SECONDS_PER_YEAR } from "./simStationKeeping.js?v=4.79";
 
 // Per-option style for the Display "Reference lines". tag===null → label both endpoints
 // with their angle (a symmetric node line); otherwise label only the n1 end with the tag.
@@ -394,7 +394,7 @@ export class SimDisplay {
     }
     if (mode === "Zone") {
       const z = satellite.orbitalZone;
-      return z ? ({ INSIDE_EARTH: "<E", BETWEEN_EARTH_AND_MARS: "E–M", OUTSIDE_MARS: ">M", EARTH_RING: "Er", MARS_RING: "Mr" }[z] || "?") : "?";
+      return z ? ({ INSIDE_EARTH: "<E", BETWEEN_EARTH_AND_MARS: "E–M", OUTSIDE_MARS: ">M", EARTH_RING: "Er", MARS_RING: "Mr", EARTH_JUNCTION: "Ej", MARS_JUNCTION: "Mj" }[z] || "?") : "?";
     }
     if (mode === "Suit") {
       const s = satellite.suitable;
@@ -857,7 +857,7 @@ export class SimDisplay {
           fill = ["#dd2222", "#22dd22", "#2222dd", "#666666"][Math.floor(sa / 90)] || "gray";
         } else if (cmode === "Zone") {
           // Orbital zone — same palette as the 3D orbitalZoneEmissives.
-          fill = { INSIDE_EARTH: "#dd2222", BETWEEN_EARTH_AND_MARS: "#22dd22", OUTSIDE_MARS: "#2222dd", EARTH_RING: "#0066ff", MARS_RING: "#ff6600" }[satellite.orbitalZone] || "#333333";
+          fill = { INSIDE_EARTH: "#dd2222", BETWEEN_EARTH_AND_MARS: "#22dd22", OUTSIDE_MARS: "#2222dd", EARTH_RING: "#0066ff", MARS_RING: "#ff6600", EARTH_JUNCTION: "#00ccff", MARS_JUNCTION: "#ffcc00" }[satellite.orbitalZone] || "#333333";
         } else if (cmode === "Suit") {
           const s = satellite.suitable;
           fill = !s ? "#333333"

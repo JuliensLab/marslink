@@ -4,13 +4,13 @@ import {
   planetRingRequiredMbps,
   mapSliderValueToUserFacing as mapToUserFacing,
   mapUserFacingToSliderValue as mapToSliderInternal,
-} from "./slidersData.js?v=4.78";
-import { LukashianClock } from "./lukashianTime.js?v=4.78";
-import { wireAuthUi } from "./auth.js?v=4.78";
-import { SensitivityPool } from "./sensitivityPool.js?v=4.78";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.78";
-import { minOf } from "./simMath.js?v=4.78";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.78";
+} from "./slidersData.js?v=4.79";
+import { LukashianClock } from "./lukashianTime.js?v=4.79";
+import { wireAuthUi } from "./auth.js?v=4.79";
+import { SensitivityPool } from "./sensitivityPool.js?v=4.79";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.79";
+import { minOf } from "./simMath.js?v=4.79";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.79";
 
 export class SimUi {
   constructor(simMain) {
@@ -2311,7 +2311,7 @@ export class SimUi {
     // Per-zone satellite tallies for the Orbital-zone legend (only counted when
     // that mode is active, since the fleet can be large).
     const zoneCounts = (() => {
-      const c = { INSIDE_EARTH: 0, EARTH_RING: 0, BETWEEN_EARTH_AND_MARS: 0, MARS_RING: 0, OUTSIDE_MARS: 0 };
+      const c = { INSIDE_EARTH: 0, EARTH_RING: 0, EARTH_JUNCTION: 0, BETWEEN_EARTH_AND_MARS: 0, MARS_JUNCTION: 0, MARS_RING: 0, OUTSIDE_MARS: 0 };
       const sel = document.querySelector('input[name="display.satellite-colors"]:checked');
       if (!sel || sel.value !== "Zone") return c;
       const ss = this.simMain && this.simMain.simSatellites;
@@ -2322,7 +2322,7 @@ export class SimUi {
     const z = (n) => ` (${n.toLocaleString()})`;
     const SAT_LEGENDS = {
       Quad: { type: "discrete", title: "Solar-angle quadrant", items: [["#dd2222", "0–90°"], ["#22dd22", "90–180°"], ["#2222dd", "180–270°"], ["#666666", "270–360°"]] },
-      Zone: { type: "discrete", title: "Orbital zone", items: [["#dd2222", "Inside Earth orbit" + z(zoneCounts.INSIDE_EARTH)], ["#0066ff", "Earth orbit" + z(zoneCounts.EARTH_RING)], ["#22dd22", "Between Earth and Mars orbits" + z(zoneCounts.BETWEEN_EARTH_AND_MARS)], ["#ff6600", "Mars orbit" + z(zoneCounts.MARS_RING)], ["#2222dd", "Outside Mars orbit" + z(zoneCounts.OUTSIDE_MARS)]] },
+      Zone: { type: "discrete", title: "Orbital zone", items: [["#dd2222", "Inside Earth orbit" + z(zoneCounts.INSIDE_EARTH)], ["#0066ff", "Earth orbit" + z(zoneCounts.EARTH_RING)], ["#00ccff", "Earth junction rings" + z(zoneCounts.EARTH_JUNCTION)], ["#22dd22", "Between Earth and Mars orbits" + z(zoneCounts.BETWEEN_EARTH_AND_MARS)], ["#ffcc00", "Mars junction rings" + z(zoneCounts.MARS_JUNCTION)], ["#ff6600", "Mars orbit" + z(zoneCounts.MARS_RING)], ["#2222dd", "Outside Mars orbit" + z(zoneCounts.OUTSIDE_MARS)]] },
       Suit: { type: "discrete", title: "Suitability", items: [["#22dd22", "Earth & Mars"], ["#2222dd", "Earth only"], ["#dd2222", "Mars only"], ["#333333", "Neither"]] },
       Accel: { type: "gradient", title: "Acceleration", stops: ["#00ff00", "#ffff00", "#ff0000"], low: "1×10⁻⁷ m/s²", high: "1×10⁻³ m/s²" },
       Thrust: { type: "gradient", title: "Thrust required", stops: ["#00ff00", "#ffff00", "#ff0000"], low: "0.1 mN", high: "1000 mN" },
@@ -4232,7 +4232,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=4.78");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=4.79");
     let result = null;
     try {
       result = await solveBandDistribution({

@@ -1,7 +1,7 @@
 // simSatellites.js
 
-import { helioCoords, positionFromSolarAngle } from "./simOrbits.js?v=4.78";
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.78";
+import { helioCoords, positionFromSolarAngle } from "./simOrbits.js?v=4.79";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.79";
 
 export class SimSatellites {
   constructor(simLinkBudget, planets) {
@@ -1399,6 +1399,8 @@ export class SimSatellites {
   getRadialZone(satellite, ringName) {
     if (ringName === "ring_earth") return "EARTH_RING";
     if (ringName === "ring_mars") return "MARS_RING";
+    if (ringName.startsWith("ring_jctm")) return "MARS_JUNCTION";
+    if (ringName.startsWith("ring_jct")) return "EARTH_JUNCTION";
 
     if (!this.ringCrossings.has(ringName)) return "ALLOWED 1";
     const crossings = this.ringCrossings.get(ringName);

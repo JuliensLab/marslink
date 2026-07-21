@@ -1,6 +1,6 @@
 // slidersData.js
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.78";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.79";
 
 export const slidersData = {
   display: {
@@ -24,7 +24,7 @@ export const slidersData = {
       options: ["Quad", "Zone", "Suit", "Accel", "Thrust", "Thrust%", "Thrusters", "Lasers", "Time", "Mass", "SKprop", "Totprop", "Neutral"],
       optionDescriptions: {
         Quad: "Solar-angle quadrant: which 90° sector of its orbit the satellite is in.",
-        Zone: "Orbital zone: inside Earth's orbit, between Earth and Mars, outside Mars, or on the Earth/Mars planetary ring.",
+        Zone: "Orbital zone: inside Earth's orbit, between Earth and Mars, outside Mars, on the Earth/Mars planetary ring, or on an Earth/Mars intermediate junction ring.",
         Suit: "Suitability: which planet(s) the satellite can serve — Earth, Mars, both, or neither.",
         Accel:
           "Acceleration: station-keeping acceleration a = Σ G·M/ρ² from Earth, Mars and Jupiter (the Sun is excluded — the satellite already rides the solar orbit). Log scale 1×10⁻⁷–1×10⁻³ m/s².",
