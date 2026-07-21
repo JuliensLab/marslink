@@ -1,14 +1,14 @@
 // simDisplay-3d.js
 
 import * as THREE from "three";
-import { OrbitControls } from "three/addons/controls/OrbitControls.js?v=4.51";
-import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js?v=4.51";
-import { RenderPass } from "three/addons/postprocessing/RenderPass.js?v=4.51";
-import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js?v=4.51";
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.51";
-import { createCarModel } from "./modelCar.js?v=4.51";
-import { positionFromSolarAngle } from "./simOrbits.js?v=4.51";
-import { stationKeepingAccel, THRUST_BINS, satSchemeT, rampHex, OVER_BUDGET_HEX, isThrustScheme, satStationKeeping, satTotalProp } from "./simStationKeeping.js?v=4.51";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js?v=4.52";
+import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js?v=4.52";
+import { RenderPass } from "three/addons/postprocessing/RenderPass.js?v=4.52";
+import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js?v=4.52";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.52";
+import { createCarModel } from "./modelCar.js?v=4.52";
+import { positionFromSolarAngle } from "./simOrbits.js?v=4.52";
+import { stationKeepingAccel, THRUST_BINS, satSchemeT, rampHex, OVER_BUDGET_HEX, isThrustScheme, satStationKeeping, satTotalProp } from "./simStationKeeping.js?v=4.52";
 
 /**
  * Converts astronomical units (AU) to 3D units using a scale factor.
@@ -17,7 +17,7 @@ import { stationKeepingAccel, THRUST_BINS, satSchemeT, rampHex, OVER_BUDGET_HEX,
  * @returns {number} Distance in 3D units
  */
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.51";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.52";
 
 export let sunScaleFactor = SIM_CONSTANTS.SUN_SCALE_FACTOR;
 export let planetScaleFactor = SIM_CONSTANTS.PLANET_SCALE_FACTOR;
@@ -112,6 +112,20 @@ export class SimDisplay {
     container.appendChild(this.renderer.domElement);
 
     // === Controls Setup ===
+    // Claim left-button drags before OrbitControls sees them: listeners on the
+    // same element fire in registration order, so this handler must be added
+    // ahead of the OrbitControls constructor for stopImmediatePropagation() to
+    // starve it. Plain left-drag rotates about the point where the pointer ray
+    // meets the ecliptic (scene y = 0); shift+left-drag keeps the classic
+    // rotation about the orbit target (the Sun unless panned/flown). Right-drag
+    // pan, ctrl/meta+left pan, wheel fly and touch gestures are untouched.
+    this._eclipticPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+    this._raycaster = new THREE.Raycaster();
+    this._pivotDrag = null;
+    this._onPointerDown = this.onPointerDown.bind(this);
+    this._onPointerMove = this.onPointerMove.bind(this);
+    this._onPointerUp = this.onPointerUp.bind(this);
+    this.renderer.domElement.addEventListener("pointerdown", this._onPointerDown);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true; // Smooth controls
     this.controls.dampingFactor = 0.05;
@@ -1178,6 +1192,103 @@ export class SimDisplay {
   }
 
   /**
+   * Claims plain and shift left-button drags for pivot rotation before
+   * OrbitControls processes them. Plain drag rotates about the pointer's
+   * intersection with the ecliptic plane; shift keeps the classic rotation
+   * about the orbit target. Ctrl/meta+left (pan) and touch fall through.
+   *
+   * @param {PointerEvent} event - The pointerdown event.
+   */
+  onPointerDown(event) {
+    if (event.pointerType === "touch" || event.button !== 0) return;
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+
+    let pivot = null;
+    if (!event.shiftKey) {
+      const rect = this.renderer.domElement.getBoundingClientRect();
+      const ndc = new THREE.Vector2(
+        ((event.clientX - rect.left) / rect.width) * 2 - 1,
+        -((event.clientY - rect.top) / rect.height) * 2 + 1
+      );
+      this._raycaster.setFromCamera(ndc, this.camera);
+      const hit = new THREE.Vector3();
+      if (this._raycaster.ray.intersectPlane(this._eclipticPlane, hit)) {
+        // Near-horizon rays hit the infinite plane absurdly far away, and
+        // rotating about such a pivot degenerates into a wild translation —
+        // fall back to the classic target pivot beyond 20x the view span.
+        const span = Math.max(this.camera.position.distanceTo(this.controls.target), 1);
+        if (hit.distanceTo(this.camera.position) <= 20 * span) pivot = hit;
+      }
+    }
+    if (!pivot) pivot = this.controls.target.clone();
+
+    this._pivotDrag = { pivot, x: event.clientX, y: event.clientY, pointerId: event.pointerId };
+    event.stopImmediatePropagation();
+    try {
+      this.renderer.domElement.setPointerCapture(event.pointerId);
+    } catch (e) {
+      // Pointer capture is best-effort; window listeners still track the drag.
+    }
+    window.addEventListener("pointermove", this._onPointerMove);
+    window.addEventListener("pointerup", this._onPointerUp);
+    window.addEventListener("pointercancel", this._onPointerUp);
+  }
+
+  /**
+   * Rotates the camera and the orbit target rigidly about the drag pivot.
+   * Moving both by the same rotation preserves their spherical offset, so
+   * OrbitControls (which re-derives its state from camera/target every update)
+   * continues seamlessly, the view never jumps when the pivot is off-center,
+   * and the picked ecliptic point stays fixed under the pointer. Angular
+   * speeds match OrbitControls' convention (2*pi per element height).
+   *
+   * @param {PointerEvent} event - The pointermove event.
+   */
+  onPointerMove(event) {
+    const drag = this._pivotDrag;
+    if (!drag) return;
+    const height = this.renderer.domElement.clientHeight || 1;
+    const speed = this.controls.rotateSpeed || 1;
+    const azimuth = (-2 * Math.PI * (event.clientX - drag.x) * speed) / height;
+    let polar = (-2 * Math.PI * (event.clientY - drag.y) * speed) / height;
+    drag.x = event.clientX;
+    drag.y = event.clientY;
+
+    // Clamp the polar step so the view axis (camera->target, which rotates by
+    // exactly the applied angle) never crosses the poles and flips lookAt().
+    const up = new THREE.Vector3(0, 1, 0);
+    const viewOffset = new THREE.Vector3().subVectors(this.camera.position, this.controls.target);
+    const phi = viewOffset.angleTo(up);
+    polar = Math.max(0.05 - phi, Math.min(Math.PI - 0.05 - phi, polar));
+
+    const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrix, 0).normalize();
+    const q = new THREE.Quaternion()
+      .setFromAxisAngle(up, azimuth)
+      .multiply(new THREE.Quaternion().setFromAxisAngle(right, polar));
+
+    const camOffset = new THREE.Vector3().subVectors(this.camera.position, drag.pivot);
+    this.camera.position.copy(camOffset.applyQuaternion(q).add(drag.pivot));
+    const targetOffset = new THREE.Vector3().subVectors(this.controls.target, drag.pivot);
+    this.controls.target.copy(targetOffset.applyQuaternion(q).add(drag.pivot));
+  }
+
+  /**
+   * Ends a pivot-rotation drag and releases the listeners it installed.
+   */
+  onPointerUp() {
+    if (this._pivotDrag && this.renderer) {
+      const el = this.renderer.domElement;
+      if (el.hasPointerCapture && el.hasPointerCapture(this._pivotDrag.pointerId)) {
+        el.releasePointerCapture(this._pivotDrag.pointerId);
+      }
+    }
+    this._pivotDrag = null;
+    window.removeEventListener("pointermove", this._onPointerMove);
+    window.removeEventListener("pointerup", this._onPointerUp);
+    window.removeEventListener("pointercancel", this._onPointerUp);
+  }
+
+  /**
    * Sets the link-label mode (null | "latency" | "mbps") and notifies listeners
    * via a window-level CustomEvent so the UI can reflect the active state.
    */
@@ -1220,6 +1331,13 @@ export class SimDisplay {
     if (this._onWheel && this.renderer) {
       this.renderer.domElement.removeEventListener("wheel", this._onWheel);
     }
+
+    // Remove the ecliptic-pivot rotation listeners (window ones too, in case
+    // disposal happens mid-drag)
+    if (this._onPointerDown && this.renderer) {
+      this.renderer.domElement.removeEventListener("pointerdown", this._onPointerDown);
+    }
+    this.onPointerUp();
 
     // Dispose of OrbitControls
     if (this.controls) {

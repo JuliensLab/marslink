@@ -9,12 +9,12 @@
 // Swap algorithms by changing DEFAULT_ALGORITHM in interface.js or by
 // passing { algorithm: "push-relabel" | "edmonds-karp" } to computeMaxFlow().
 
-import { simplifyNetwork, desimplifyNetwork } from "./simFlowAlgorithms/networkSimplification.js?v=4.51";
-import { calculateLatencies } from "./simFlowAlgorithms/latencies.js?v=4.51";
-import { FLOW_ALGORITHMS, DEFAULT_ALGORITHM } from "./simFlowAlgorithms/interface.js?v=4.51";
-import { edmondsKarp } from "./simFlowAlgorithms/edmondsKarp.js?v=4.51";
-import { pushRelabel } from "./simFlowAlgorithms/pushRelabel.js?v=4.51";
-import { topologyAware } from "./simFlowAlgorithms/topologyAware.js?v=4.51";
+import { simplifyNetwork, desimplifyNetwork } from "./simFlowAlgorithms/networkSimplification.js?v=4.52";
+import { calculateLatencies } from "./simFlowAlgorithms/latencies.js?v=4.52";
+import { FLOW_ALGORITHMS, DEFAULT_ALGORITHM } from "./simFlowAlgorithms/interface.js?v=4.52";
+import { edmondsKarp } from "./simFlowAlgorithms/edmondsKarp.js?v=4.52";
+import { pushRelabel } from "./simFlowAlgorithms/pushRelabel.js?v=4.52";
+import { topologyAware } from "./simFlowAlgorithms/topologyAware.js?v=4.52";
 
 // Re-exports for existing callers
 export { simplifyNetwork, desimplifyNetwork, calculateLatencies };

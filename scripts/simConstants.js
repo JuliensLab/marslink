@@ -11,7 +11,7 @@ export const SIM_CONSTANTS = {
   // Link budget constants
   DEFAULT_BASE_DISTANCE_KM: 3000, // Default base distance for link calculations in km
   DEFAULT_BASE_GBPS: 100, // Default base throughput in Gbps
-  DEFAULT_MAX_DISTANCE_AU: 0.5, // Default maximum link range in AU
+  DEFAULT_MAX_DISTANCE_AU: 1.0, // Default maximum link range in AU
 
   // Sun physical constants
   SUN_RADIUS_KM: 696350, // Solar radius in km
