@@ -1,6 +1,6 @@
 // slidersData.js
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.60";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.61";
 
 export const slidersData = {
   display: {
@@ -1170,7 +1170,7 @@ export const slidersData = {
     "junction-ring-count": {
       label: "Intermediate junction rings",
       description:
-        "Rings between the Earth ring and the eccentric relay rings that carry the junction ring by ring. Each is a clone of the Earth ring (same orbital elements and satellite count) with RAAN on the Earth–Mars plane-node line and inclination interpolated from Earth's to Mars's — ring j of k sits at fraction j/(k+1): one ring → 50%, two rings → 33%/67%. The rings hinge about the axis where the two planes meet, so the last step lands on Mars's plane orientation. 0 = none.",
+        "Rings between the Earth ring and the eccentric relay rings that carry the junction ring by ring. Each is a clone of the Earth ring (same orbital elements and satellite count) with RAAN on the Earth–Mars plane-node line and inclination interpolated from Earth's to the eccentric family's (its mean value — each eccentric ring's inclination depends slightly on its own semi-major axis) — ring j of k sits at fraction j/(k+1): one ring → 50%, two rings → 33%/67%. The rings hinge about the axis where the two planes meet, so the ramp's last step lands on the plane the relay rings actually fly. 0 = none.",
       min: 0,
       max: 8,
       value: 0,

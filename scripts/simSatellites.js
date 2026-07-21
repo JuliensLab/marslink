@@ -1,7 +1,7 @@
 // simSatellites.js
 
-import { helioCoords, positionFromSolarAngle } from "./simOrbits.js?v=4.60";
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.60";
+import { helioCoords, positionFromSolarAngle } from "./simOrbits.js?v=4.61";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.61";
 
 export class SimSatellites {
   constructor(simLinkBudget, planets) {
@@ -291,17 +291,28 @@ export class SimSatellites {
 
   // Intermediate junction rings: k clones of the Earth ring (same orbital elements,
   // same satellite count and phasing) whose inclination interpolates from Earth's
-  // to MARS's — ring j of k sits at fraction j/(k+1) (1 ring → 50%, 2 rings →
-  // 33%/67%, ...). RAAN = the Earth–Mars plane-node longitude (see the "Junction"
-  // branch of getOrbitaElements), so the rings hinge about the axis where the two
-  // planes actually meet. They ease the junction's plane change ring by ring
-  // (buildJunctionRamp wires them into the link topology).
+  // to the ECCENTRIC FAMILY's mean-a value — ring j of k sits at fraction j/(k+1)
+  // (1 ring → 50%, 2 rings → 33%/67%, ...). RAAN = the Earth–Mars plane-node
+  // longitude (see the "Junction" branch of getOrbitaElements), so the rings hinge
+  // about the axis where the two planes actually meet. They ease the junction's
+  // plane change ring by ring (buildJunctionRamp wires them into the topology).
   _buildIntermediateJunctionRings(uiConfig, eccConfigs) {
     const count = Math.round(uiConfig["adapted_eccentric_rings.junction-ring-count"] || 0);
     if (!(count > 0) || !eccConfigs.length) return [];
     // Clone the Earth ring's build; without an Earth ring there is nothing to bridge.
     const template = uiConfig["ring_earth.side-extension-degrees-slider"] ? this._buildPlanetRing(uiConfig, "ring_earth")[0] : null;
     if (!template) return [];
+    // 100% inclination target = what the eccentric family actually flies. Each
+    // eccentric ring's i is evaluated at its own semi-major axis, so the family
+    // spans a small band; the endpoint uses the family's MEAN-a value (the middle
+    // of the band), matching getOrbitaElements "Eccentric". Stashed on the
+    // instance for the "Junction" branch — safe because generation always
+    // follows this build on the same instance.
+    const aMean = eccConfigs.reduce((s, c) => s + (c.satDistanceSun || 0), 0) / eccConfigs.length;
+    const inclPct = eccConfigs[0].earthMarsInclinationPct;
+    this._jctPlaneEnd = {
+      i: this.addInterpolationBias(this.interpolateOrbitalElement(aMean, "i"), inclPct, "i"),
+    };
     const rings = [];
     for (let j = 1; j <= count; j++) {
       rings.push({
@@ -1690,7 +1701,9 @@ export class SimSatellites {
       };
     else if (ringType == "Junction") {
       // Intermediate junction ring: an Earth-ring clone whose INCLINATION is
-      // mixed from Earth's toward MARS's (100% = Mars inclination).
+      // mixed from Earth's toward the ECCENTRIC FAMILY's (100% = the family's
+      // mean-a inclination, stashed as _jctPlaneEnd by the builder — so the
+      // ramp's last step lands on the plane the relay rings actually fly).
       // earthMarsInclinationPct carries the mix fraction here (j/(k+1) as a
       // percent, set by the builder), NOT the Earth↔Mars bias of the other
       // families. RAAN = the longitude of the Earth–Mars PLANE-NODE line (where
@@ -1710,8 +1723,9 @@ export class SimSatellites {
         this._jctNodeLon = ((Math.atan2(cy, cx) / rad) % 360 + 360) % 360;
       }
       const t = Math.min(1, Math.max(0, (earthMarsInclinationPct ?? 50) / 100));
+      const endI = this._jctPlaneEnd ? this._jctPlaneEnd.i : this.Mars.i;
       return {
-        i: this.Earth.i + (this.Mars.i - this.Earth.i) * t,
+        i: this.Earth.i + (endI - this.Earth.i) * t,
         o: this._jctNodeLon, //RAAN
         p: this.Earth.p,
         a: a ? a : this.Earth.a,
