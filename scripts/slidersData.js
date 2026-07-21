@@ -1,6 +1,6 @@
 // slidersData.js
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.75";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.76";
 
 export const slidersData = {
   display: {

@@ -1,7 +1,7 @@
 // simSatellites.js
 
-import { helioCoords, positionFromSolarAngle } from "./simOrbits.js?v=4.75";
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.75";
+import { helioCoords, positionFromSolarAngle } from "./simOrbits.js?v=4.76";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.76";
 
 export class SimSatellites {
   constructor(simLinkBudget, planets) {

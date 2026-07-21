@@ -1,23 +1,23 @@
 // simMain.js
 
-import { SimUi } from "./simUi.js?v=4.75";
-import { SimTime } from "./simTime.js?v=4.75";
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.75";
-import { SimSatellites } from "./simSatellites.js?v=4.75";
-import { SimDeployment } from "./simDeployment.js?v=4.75";
-import { SimMissionValidator } from "./simMissionValidator.js?v=4.75";
-import { SimLinkBudget } from "./simLinkBudget.js?v=4.75";
-import { SimNetwork } from "./simNetwork.js?v=4.75";
+import { SimUi } from "./simUi.js?v=4.76";
+import { SimTime } from "./simTime.js?v=4.76";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.76";
+import { SimSatellites } from "./simSatellites.js?v=4.76";
+import { SimDeployment } from "./simDeployment.js?v=4.76";
+import { SimMissionValidator } from "./simMissionValidator.js?v=4.76";
+import { SimLinkBudget } from "./simLinkBudget.js?v=4.76";
+import { SimNetwork } from "./simNetwork.js?v=4.76";
 // Import both SimDisplay implementations with unique names
-import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=4.75";
-import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=4.75";
-import { generateReport } from "./reportGenerator.js?v=4.75";
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.75";
-import { minOf, maxOf } from "./simMath.js?v=4.75";
-import { SimFlightController } from "./simFlightController.js?v=4.75";
-import { SimProbeController } from "./simProbeController.js?v=4.75";
-import { findDepartureWindows } from "./simTransfer.js?v=4.75";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.75";
+import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=4.76";
+import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=4.76";
+import { generateReport } from "./reportGenerator.js?v=4.76";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.76";
+import { minOf, maxOf } from "./simMath.js?v=4.76";
+import { SimFlightController } from "./simFlightController.js?v=4.76";
+import { SimProbeController } from "./simProbeController.js?v=4.76";
+import { findDepartureWindows } from "./simTransfer.js?v=4.76";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.76";
 
 export class SimMain {
   // Clamp argument to [-1, 1] to prevent NaN from Math.asin domain errors
@@ -70,7 +70,7 @@ export class SimMain {
     if (typeof window !== "undefined") window.simMain = this;
 
     // --- Worker + triple-buffered window cache (-1/0/+1) ---
-    this.simWorker = new Worker(new URL("./simWorker.js?v=4.75", import.meta.url), { type: "module" });
+    this.simWorker = new Worker(new URL("./simWorker.js?v=4.76", import.meta.url), { type: "module" });
     this.simWorker.onmessage = (event) => this.handleWorkerMessage(event);
     this.simWorker.onerror = (event) => console.error("[Marslink] Worker error:", event.message);
     this.simWorker.postMessage({ type: "init" });
@@ -1483,15 +1483,24 @@ export class SimMain {
       const earthCap = { side1: 0, side2: 0 };
       const marsCap = { side1: 0, side2: 0 };
 
+      // Each planet-stage SIDE = min(ground link, the ring's weakest in-ring link):
+      // the planet injects at one gateway and each direction is carried by an
+      // azimuthal arc whose capacity is bounded by its weakest hop — a 100 Gbps
+      // (line-rate-capped) ground link cannot push more than the ring carries away.
+      // This matches the chain model's planet stage (earthRingMbps = 2×min in-ring).
+      const ringMinCap = (inring) => (inring && inring.length ? minOf(inring) : Infinity);
+      const earthRingMin = ringMinCap(earthInring);
+      const marsRingMin = ringMinCap(marsInring);
+
       const earthPlanetLinks = ringCapacities["ring_earth"]?.planetLinks || [];
       const earthCaps = earthPlanetLinks.map((l) => l.cap).sort((a, b) => b - a);
-      earthCap.side1 = earthCaps[0] || 0;
-      earthCap.side2 = earthCaps[1] || 0;
+      earthCap.side1 = Math.min(earthCaps[0] || 0, earthRingMin);
+      earthCap.side2 = Math.min(earthCaps[1] || 0, earthRingMin);
 
       const marsPlanetLinks = ringCapacities["ring_mars"]?.planetLinks || [];
       const marsCaps = marsPlanetLinks.map((l) => l.cap).sort((a, b) => b - a);
-      marsCap.side1 = marsCaps[0] || 0;
-      marsCap.side2 = marsCaps[1] || 0;
+      marsCap.side1 = Math.min(marsCaps[0] || 0, marsRingMin);
+      marsCap.side2 = Math.min(marsCaps[1] || 0, marsRingMin);
 
       const earthCapTotal = earthCap.side1 + earthCap.side2;
       const marsCapTotal = marsCap.side1 + marsCap.side2;
