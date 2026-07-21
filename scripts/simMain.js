@@ -1,23 +1,23 @@
 // simMain.js
 
-import { SimUi } from "./simUi.js?v=4.57";
-import { SimTime } from "./simTime.js?v=4.57";
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.57";
-import { SimSatellites } from "./simSatellites.js?v=4.57";
-import { SimDeployment } from "./simDeployment.js?v=4.57";
-import { SimMissionValidator } from "./simMissionValidator.js?v=4.57";
-import { SimLinkBudget } from "./simLinkBudget.js?v=4.57";
-import { SimNetwork } from "./simNetwork.js?v=4.57";
+import { SimUi } from "./simUi.js?v=4.59";
+import { SimTime } from "./simTime.js?v=4.59";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.59";
+import { SimSatellites } from "./simSatellites.js?v=4.59";
+import { SimDeployment } from "./simDeployment.js?v=4.59";
+import { SimMissionValidator } from "./simMissionValidator.js?v=4.59";
+import { SimLinkBudget } from "./simLinkBudget.js?v=4.59";
+import { SimNetwork } from "./simNetwork.js?v=4.59";
 // Import both SimDisplay implementations with unique names
-import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=4.57";
-import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=4.57";
-import { generateReport } from "./reportGenerator.js?v=4.57";
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.57";
-import { minOf, maxOf } from "./simMath.js?v=4.57";
-import { SimFlightController } from "./simFlightController.js?v=4.57";
-import { SimProbeController } from "./simProbeController.js?v=4.57";
-import { findDepartureWindows } from "./simTransfer.js?v=4.57";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.57";
+import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=4.59";
+import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=4.59";
+import { generateReport } from "./reportGenerator.js?v=4.59";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.59";
+import { minOf, maxOf } from "./simMath.js?v=4.59";
+import { SimFlightController } from "./simFlightController.js?v=4.59";
+import { SimProbeController } from "./simProbeController.js?v=4.59";
+import { findDepartureWindows } from "./simTransfer.js?v=4.59";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.59";
 
 export class SimMain {
   // Clamp argument to [-1, 1] to prevent NaN from Math.asin domain errors
@@ -70,7 +70,7 @@ export class SimMain {
     if (typeof window !== "undefined") window.simMain = this;
 
     // --- Worker + triple-buffered window cache (-1/0/+1) ---
-    this.simWorker = new Worker(new URL("./simWorker.js?v=4.57", import.meta.url), { type: "module" });
+    this.simWorker = new Worker(new URL("./simWorker.js?v=4.59", import.meta.url), { type: "module" });
     this.simWorker.onmessage = (event) => this.handleWorkerMessage(event);
     this.simWorker.onerror = (event) => console.error("[Marslink] Worker error:", event.message);
     this.simWorker.postMessage({ type: "init" });
@@ -738,6 +738,16 @@ export class SimMain {
         mJuncN += r.mars.count; mJuncCap += r.mars.mbps; if (r.mars.count > 0) mJuncRings++;
       }
     }
+    // Eccentric: the junction TOTAL comes from ringDetail — growth-limited and,
+    // through the ramp, column-aware (each top hop min'd with its weakest rung) —
+    // the same number the per-ring cap uses. Per-link min|max keep the link-scan
+    // values; the avg follows the stage-true total so the lines stay consistent.
+    const perLink2 = (j, cap, n) => {
+      const avg = cap / n;
+      const lo = j && j.count ? j.min : avg;
+      const hi = j && j.count ? j.max : avg;
+      return `${fmtRange(lo, avg, hi)} per link`;
+    };
     const stat = (arr) => (arr && arr.length ? { lo: minOf(arr), hi: maxOf(arr), avg: arr.reduce((a, b) => a + b, 0) / arr.length } : null);
     const eS = stat(earthInring), mS = stat(marsInring);
 
@@ -748,14 +758,18 @@ export class SimMain {
       labels: {
         earthTotal: `Earth ${fmtMbps(earthCapTotal)}`,
         ringEarth: eS ? `ring Earth ${fmtRange(eS.lo, eS.avg, eS.hi)}` : null,
-        earthJunction: jctCapLabel(eJct, eJuncN != null ? `${eJuncRings} junctions · ` : "") || (eJuncN != null ? `${eJuncRings} junctions · ${eJuncN} links · ${fmtMbps(eJuncCap)}` : `ring \u2192 relay`),
-        earthJunction2: jctCapLabel2(eJct),
+        earthJunction: eJuncN
+          ? `${fmtMbps(eJuncCap)} · ${eJuncRings} junctions · ${eJuncN} links`
+          : jctCapLabel(eJct, "") || `ring \u2192 relay`,
+        earthJunction2: eJuncN ? perLink2(eJct, eJuncCap, eJuncN) : jctCapLabel2(eJct),
         relayMain: rs ? fmtMbps(rs.relayOnlyThroughput ?? rs.totalThroughput) : null,
         relayL1: rs ? `${relayRingCount} rings, ${rs.routeCount} routes` : null,
         relayL2: rs ? fmtRange(rs.relayOnlyMin ?? rs.minThroughput, rs.relayOnlyAvg ?? rs.avgThroughput, rs.relayOnlyMax ?? rs.maxThroughput) : null,
         relayL3: rs ? `${(rs.minLatency / 60).toFixed(1)}|${(rs.avgLatency / 60).toFixed(1)}|${(rs.maxLatency / 60).toFixed(1)} min` : null,
-        marsJunction: jctCapLabel(mJct, mJuncN != null ? `${mJuncRings} junctions · ` : "") || (mJuncN != null ? `${mJuncRings} junctions · ${mJuncN} links · ${fmtMbps(mJuncCap)}` : `relay \u2192 ring`),
-        marsJunction2: jctCapLabel2(mJct),
+        marsJunction: mJuncN
+          ? `${fmtMbps(mJuncCap)} · ${mJuncRings} junctions · ${mJuncN} links`
+          : jctCapLabel(mJct, "") || `relay \u2192 ring`,
+        marsJunction2: mJuncN ? perLink2(mJct, mJuncCap, mJuncN) : jctCapLabel2(mJct),
         ringMars: mS ? `ring Mars ${fmtRange(mS.lo, mS.avg, mS.hi)}` : null,
         marsTotal: `Mars ${fmtMbps(marsCapTotal)}`,
         bottleneck: bottleneckLine,
@@ -1573,14 +1587,23 @@ export class SimMain {
 
       // Ring-to-relay junction aggregates (all interCap pairs touching the planet
       // ring; planet-body links live in planetLinks, Earth-Mars pairs in flows).
+      // With the junction ramp active (ring_jct_ pairs present), the Earth-side
+      // junction stage is the TOP-HOP pair set (ramp ring ↔ relay ring); rung
+      // pairs (ring_earth↔ring_jct_0, ring_jct_i↔ring_jct_j) are the ramp's
+      // internals, not the stage boundary — unfiltered they'd fold every rung
+      // (3k+ short links, Tbps of line-rate sums) into the junction line.
+      const hasRamp = Object.keys(interCap || {}).some((k) => k.includes("ring_jct"));
       const junctionOf = (planetRing) => {
         let sum = 0, count = 0, min = Infinity, max = 0;
         for (const [key, v] of Object.entries(interCap || {})) {
-          if (key.includes(planetRing)) {
-            sum += v.sum; count += v.count;
-            if (v.min != null && v.min < min) min = v.min;
-            if (v.max != null && v.max > max) max = v.max;
-          }
+          const jct = key.includes("ring_jct");
+          const isMatch = hasRamp && planetRing === "ring_earth"
+            ? jct && (key.includes("ring_adecc") || key.includes("ring_ecce"))
+            : key.includes(planetRing) && !jct;
+          if (!isMatch) continue;
+          sum += v.sum; count += v.count;
+          if (v.min != null && v.min < min) min = v.min;
+          if (v.max != null && v.max > max) max = v.max;
         }
         return { sum, count, min: Number.isFinite(min) ? min : 0, max };
       };

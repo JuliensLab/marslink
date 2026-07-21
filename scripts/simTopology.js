@@ -1,6 +1,6 @@
 // simTopology.js — Topology building logic extracted from SimNetwork.
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.57";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.59";
 
 export class TopologyBuilder {
   constructor(simLinkBudget, simSatellites) {
@@ -84,6 +84,10 @@ export class TopologyBuilder {
 
     // Iterate through each ring
     for (const [ringName, ringSatellites] of Object.entries(rings)) {
+      // Intermediate junction rings (ring_jct_) carry NO azimuthal links: their
+      // three ports serve the vertical ramp — down-rung, up-rung, and (top ring)
+      // the eccentric attachment. See buildJunctionRamp.
+      if (ringName.startsWith("ring_jct")) continue;
       // Cache the ring's max-links value once (was called 3× per inner iteration)
       const maxLinksPerRing = this.simLinkBudget.getMaxLinksPerRing(ringName);
       // Circular (azimuthal/lattice) link cap per satellite:
@@ -1753,12 +1757,93 @@ export class TopologyBuilder {
   }
 
   /**
+   * Junction ramp (Contoured eccentric): when intermediate junction rings exist
+   * (ring_jct_0 .. ring_jct_{k-1} — Earth-ring clones tilted progressively toward
+   * Mars's plane), the Earth-side junction climbs them RING BY RING instead of
+   * jumping the whole plane change in one link. The rings are congruent and share
+   * the Earth ring's phasing, so slot m of one layer is the nearest sat on the
+   * next: rung links are index-matched columns Earth-ring sat m → jct_0 m → … →
+   * jct_{k-1} m (lower.outwards = upper, upper.inwards = lower). Each column's
+   * capacity is its weakest rung, recorded in jctColumnMbps keyed by the TOP sat;
+   * planetToEccentricRings then lands the Earth-side attachments on the top ring
+   * and caps each candidate by its column. With no junction rings this is a no-op
+   * and the attachment stays direct.
+   */
+  buildJunctionRamp(rings, positions, linkCounts, finalLinks, existingLinks) {
+    this.jctRampTop = null;
+    this.jctColumnMbps = null;
+    const jctNames = Object.keys(rings)
+      .filter((r) => r.startsWith("ring_jct_"))
+      .sort((a, b) => parseInt(a.slice(9), 10) - parseInt(b.slice(9), 10));
+    if (!jctNames.length) return;
+    const AU_IN_KM = this.AU_IN_KM;
+    const maxDistanceAU = this.simLinkBudget.maxDistanceAU;
+
+    const layerNames = ["ring_earth", ...jctNames];
+    const layers = layerNames.map((n) => rings[n] || []);
+    if (layers.some((l) => !l.length)) return;
+    // Slot key = the name's index tail (same generator, same satCount → same tails).
+    const maps = layers.map((sats, li) => {
+      const m = new Map();
+      for (const s of sats) m.set(s.name.slice(layerNames[li].length), s);
+      return m;
+    });
+
+    const colMbps = new Map();
+    for (const [suffix, bottom] of maps[0]) {
+      let lower = bottom;
+      let colMin = Infinity;
+      let ok = true;
+      for (let li = 1; li < layers.length; li++) {
+        const upper = maps[li].get(suffix);
+        const a = positions[lower.name];
+        const b = upper ? positions[upper.name] : null;
+        if (!upper || !a || !b || lower.outwards !== null || upper.inwards !== null ||
+            linkCounts[lower.name] >= this.simLinkBudget.getMaxLinksPerRing(lower.ringName) ||
+            linkCounts[upper.name] >= this.simLinkBudget.getMaxLinksPerRing(upper.ringName)) {
+          ok = false;
+          break;
+        }
+        const dAU = this.calculateDistanceAU(a, b);
+        if (dAU > maxDistanceAU) { ok = false; break; }
+        const [fId, tId] = lower.name < upper.name ? [lower.name, upper.name] : [upper.name, lower.name];
+        const key = `${fId}-${tId}`;
+        if (!existingLinks.has(key)) {
+          const distanceKm = dAU * AU_IN_KM;
+          finalLinks.push({
+            fromId: fId,
+            toId: tId,
+            distanceAU: dAU,
+            distanceKm,
+            latencySeconds: this.calculateLatency(distanceKm),
+            gbpsCapacity: this.calculateGbps(distanceKm),
+          });
+          existingLinks.add(key);
+          linkCounts[lower.name]++;
+          linkCounts[upper.name]++;
+        }
+        lower.outwards = upper.name;
+        upper.inwards = lower.name;
+        colMin = Math.min(colMin, this.calculateGbps(dAU * AU_IN_KM) * 1000);
+        lower = upper;
+      }
+      // `lower` is now the column's TOP sat (on the most-tilted ring).
+      if (ok && isFinite(colMin)) colMbps.set(lower.name, colMin);
+    }
+    this.jctRampTop = jctNames[jctNames.length - 1];
+    this.jctColumnMbps = colMbps;
+  }
+
+  /**
    * Attaches eccentric relay families (ring_ecce_, ring_adecc_) to a planet ring near
    * each ring's TANGENT POINT with that planet's orbit (the ring sat that comes closest
    * to the planet ring). Rather than a single tangent link, the junction is GROWN from
    * the tangent point outward — adding the next-closest planet-ring↔relay links — until
    * its summed capacity meets the throughput that ring's junction must carry, so the
    * junction never bottlenecks the ring (and isn't wastefully over-provisioned).
+   * When the junction ramp is active (buildJunctionRamp), the EARTH-side attachments
+   * land on the ramp's top ring instead of the Earth ring, and each candidate's usable
+   * capacity is min(top hop, its column's weakest rung).
    *
    * Per-ring design throughput  D_ring = cRing — the ring's OWN carrying capacity: the
    * combined capacity of its two azimuthal arcs between the Earth-tangent and Mars-tangent
@@ -1775,6 +1860,14 @@ export class TopologyBuilder {
     if (planetRingSats.length === 0) return;
     const eccRingNames = Object.keys(rings).filter((r) => r.startsWith("ring_ecce") || r.startsWith("ring_adecc"));
     if (eccRingNames.length === 0) return;
+
+    // Earth side may route through the junction ramp: attachments then land on the
+    // ramp's TOP ring (most tilted) rather than the Earth ring itself, and each
+    // candidate is capped by its column's weakest rung.
+    const rampTopName = planetRingName === "ring_earth" ? this.jctRampTop : null;
+    const attachSats = rampTopName ? rings[rampTopName] || [] : planetRingSats;
+    const rampCols = rampTopName ? this.jctColumnMbps : null;
+    if (!attachSats.length) return;
 
     const planetPort = planetRingName === "ring_earth" ? "outwards" : "inwards";
     const relayPort = planetRingName === "ring_earth" ? "inwards" : "outwards";
@@ -1812,7 +1905,9 @@ export class TopologyBuilder {
     const earthSats = rings["ring_earth"], marsSats = rings["ring_mars"];
     const findEarth = earthSats && earthSats.length ? makeFinder(earthSats) : null;
     const findMars = marsSats && marsSats.length ? makeFinder(marsSats) : null;
-    const findThis = planetRingName === "ring_earth" ? findEarth : findMars;
+    // Attachment finder targets the ramp's top ring when active; the planet-ring
+    // finders above still locate the geometric tangent sats for the arc endpoints.
+    const findThis = rampTopName ? makeFinder(attachSats) : planetRingName === "ring_earth" ? findEarth : findMars;
     if (!findThis) return;
 
     // Capacity of one azimuthal arc (walk a direction port from→to, weakest hop wins).
@@ -1849,7 +1944,13 @@ export class TopologyBuilder {
       for (const s of ringSats) {
         const sp = positions[s.name]; if (!sp) continue;
         const f = findThis(sp);
-        if (f.sat && f.dist <= maxDistanceAU) cands.push({ relay: s, planet: f.sat, dist: f.dist, mbps: mbpsAt(f.dist) });
+        if (f.sat && f.dist <= maxDistanceAU) {
+          // Through the ramp, a top-ring sat only helps if its column reaches the
+          // Earth ring; the usable rate is min(top hop, weakest rung below it).
+          const colCap = rampCols ? rampCols.get(f.sat.name) : Infinity;
+          if (colCap === undefined) continue;
+          cands.push({ relay: s, planet: f.sat, dist: f.dist, mbps: Math.min(mbpsAt(f.dist), colCap) });
+        }
       }
       cands.sort((a, b) => a.dist - b.dist);
 
@@ -2292,10 +2393,11 @@ export class TopologyBuilder {
    * tangent to Earth at one point and Mars at another, so it yields exactly TWO routes
    * — the loop's two arcs between the Earth-tangent sat and the Mars-tangent sat (2 ×
    * ring count total). Each route runs:
-   *   ring_earth sat → (planet link) → Earth-tangent sat → … azimuthal hops … →
-   *   Mars-tangent sat → (planet link) → ring_mars sat
+   *   ring_earth sat → (junction — direct, or ring by ring up the junction ramp) →
+   *   Earth-attachment sat → … azimuthal hops … →
+   *   Mars-attachment sat → (planet link) → ring_mars sat
    * with capacity = the smallest-capacity segment and latency = the sum of segments,
-   * both planet links included. Returns the same summary shape as the concentric router.
+   * attachment chains included. Returns the same summary shape as the concentric router.
    */
   calculateEccentricRoutes(finalLinks, rings) {
     const satMap = new Map();
@@ -2320,33 +2422,61 @@ export class TopologyBuilder {
       // describe. The old first-in-array scan picked an arbitrary junction-linked sat,
       // which moved with maxDistanceAU and split the arcs elsewhere. Scan kept as
       // fallback for rings without recorded anchors.
-      const detail = this.eccRingDetail.get(ringName);
-      let earthSat = null, earthRingSat = null, marsSat = null, marsRingSat = null;
-      const aE = detail && detail.earth && detail.earth.anchor ? satMap.get(detail.earth.anchor) : null;
-      if (aE && String(aE.inwards || "").startsWith("ring_earth")) { earthSat = aE; earthRingSat = aE.inwards; }
-      const aM = detail && detail.mars && detail.mars.anchor ? satMap.get(detail.mars.anchor) : null;
-      if (aM && String(aM.outwards || "").startsWith("ring_mars")) { marsSat = aM; marsRingSat = aM.outwards; }
-      for (const s of ringSats) {
-        if (!earthSat && s.inwards && String(s.inwards).startsWith("ring_earth")) {
-          earthSat = s; earthRingSat = s.inwards;
+      // The planet-side connection is resolved by WALKING the attachment chain: one hop
+      // when attached directly, k+1 hops when the Earth side descends the junction ramp
+      // (anchor → ring_jct_{k-1} → … → ring_jct_0 → ring_earth sat, via `inwards`).
+      const walkToPlanet = (sat, port, planetPrefix) => {
+        const chain = [];
+        let curName = sat && sat[port];
+        let guard = 0;
+        while (curName && guard++ < 64) {
+          chain.push(curName);
+          if (String(curName).startsWith(planetPrefix)) return chain;
+          const s = satMap.get(curName);
+          if (!s) break;
+          curName = s[port];
         }
-        if (!marsSat && s.outwards && String(s.outwards).startsWith("ring_mars")) {
-          marsSat = s; marsRingSat = s.outwards;
+        return null;
+      };
+      const detail = this.eccRingDetail.get(ringName);
+      let earthSat = null, earthChain = null, marsSat = null, marsChain = null;
+      const aE = detail && detail.earth && detail.earth.anchor ? satMap.get(detail.earth.anchor) : null;
+      if (aE) { const ch = walkToPlanet(aE, "inwards", "ring_earth"); if (ch) { earthSat = aE; earthChain = ch; } }
+      const aM = detail && detail.mars && detail.mars.anchor ? satMap.get(detail.mars.anchor) : null;
+      if (aM) { const ch = walkToPlanet(aM, "outwards", "ring_mars"); if (ch) { marsSat = aM; marsChain = ch; } }
+      for (const s of ringSats) {
+        if (earthSat && marsSat) break;
+        if (!earthSat && s.inwards) {
+          const ch = walkToPlanet(s, "inwards", "ring_earth");
+          if (ch) { earthSat = s; earthChain = ch; }
+        }
+        if (!marsSat && s.outwards) {
+          const ch = walkToPlanet(s, "outwards", "ring_mars");
+          if (ch) { marsSat = s; marsChain = ch; }
         }
       }
       if (!earthSat || !marsSat) continue;
+      const earthRingSat = earthChain[earthChain.length - 1];
+      const marsRingSat = marsChain[marsChain.length - 1];
 
       // The two loop arcs: follow prograde one way, retrograde the other.
       const ringRoutes = [];
       for (const dir of ["prograde", "retrograde"]) {
-        const path = [earthRingSat, earthSat.name];
+        // Path ascends the Earth-side attachment chain (Earth-ring sat, ramp rungs
+        // if any, attachment sat), runs the arc, then descends the Mars side.
+        const path = [...earthChain.slice().reverse(), earthSat.name];
         let minMbps = Infinity, sumLat = 0;
 
-        // Junction links count toward LATENCY here; their CAPACITY is enforced below as a
-        // per-ring cap — the junction is a parallel bundle of k links, so a single tangent
-        // link must not cap the route, but the bundle's summed capacity must.
-        const earthLink = linkByPair.get(earthRingSat + "|" + earthSat.name);
-        if (earthLink) sumLat += earthLink.latencySeconds;
+        // Attachment-chain links (junction + ramp rungs) count toward LATENCY here;
+        // their CAPACITY is enforced below as a per-ring cap — the junction is a
+        // parallel bundle (columns × top hops), so a single link must not cap the
+        // route, but the bundle's summed capacity must.
+        let prev = earthSat.name;
+        for (const nm of earthChain) {
+          const l = linkByPair.get(prev + "|" + nm);
+          if (l) sumLat += l.latencySeconds;
+          prev = nm;
+        }
 
         let cur = earthSat, reached = false, guard = 0;
         while (cur && guard++ < ringSats.length + 2) {
@@ -2361,9 +2491,13 @@ export class TopologyBuilder {
         }
         if (!reached) continue;
 
-        const marsLink = linkByPair.get(marsSat.name + "|" + marsRingSat);
-        if (marsLink) sumLat += marsLink.latencySeconds;
-        path.push(marsRingSat);
+        prev = marsSat.name;
+        for (const nm of marsChain) {
+          const l = linkByPair.get(prev + "|" + nm);
+          if (l) sumLat += l.latencySeconds;
+          path.push(nm);
+          prev = nm;
+        }
 
         if (isFinite(minMbps)) {
           ringRoutes.push({ path, throughputMbps: minMbps, latencySeconds: sumLat, origin: earthRingSat, destination: marsRingSat });
@@ -2924,9 +3058,11 @@ export class TopologyBuilder {
     mark("intraRing", t);
 
     t = performance.now();
-    // Eccentric relay families attach to both planet rings by proximity (each ellipse
+    // Junction ramp first (rung links claim their ports before attachments), then the
+    // eccentric relay families attach to both planet rings by proximity (each ellipse
     // touches Earth at perihelion and Mars at aphelion), not via the concentric
     // `suitable` flag. (Kept after intraRing so eccentric azimuthal ordering is unchanged.)
+    this.buildJunctionRamp(rings, positions, linkCounts, finalLinks, existingLinks);
     this.planetToEccentricRings(rings, positions, linkCounts, finalLinks, "ring_mars", existingLinks);
     this.planetToEccentricRings(rings, positions, linkCounts, finalLinks, "ring_earth", existingLinks);
     mark("planetToEccentricRings", t);
