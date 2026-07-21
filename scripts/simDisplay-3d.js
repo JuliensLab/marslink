@@ -1,14 +1,14 @@
 // simDisplay-3d.js
 
 import * as THREE from "three";
-import { OrbitControls } from "three/addons/controls/OrbitControls.js?v=4.62";
-import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js?v=4.62";
-import { RenderPass } from "three/addons/postprocessing/RenderPass.js?v=4.62";
-import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js?v=4.62";
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.62";
-import { createCarModel } from "./modelCar.js?v=4.62";
-import { positionFromSolarAngle } from "./simOrbits.js?v=4.62";
-import { stationKeepingAccel, THRUST_BINS, satSchemeT, rampHex, OVER_BUDGET_HEX, isThrustScheme, satStationKeeping, satTotalProp } from "./simStationKeeping.js?v=4.62";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js?v=4.64";
+import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js?v=4.64";
+import { RenderPass } from "three/addons/postprocessing/RenderPass.js?v=4.64";
+import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js?v=4.64";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.64";
+import { createCarModel } from "./modelCar.js?v=4.64";
+import { positionFromSolarAngle } from "./simOrbits.js?v=4.64";
+import { stationKeepingAccel, THRUST_BINS, satSchemeT, rampHex, OVER_BUDGET_HEX, isThrustScheme, satStationKeeping, satTotalProp } from "./simStationKeeping.js?v=4.64";
 
 /**
  * Converts astronomical units (AU) to 3D units using a scale factor.
@@ -17,7 +17,7 @@ import { stationKeepingAccel, THRUST_BINS, satSchemeT, rampHex, OVER_BUDGET_HEX,
  * @returns {number} Distance in 3D units
  */
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.62";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.64";
 
 export let sunScaleFactor = SIM_CONSTANTS.SUN_SCALE_FACTOR;
 export let planetScaleFactor = SIM_CONSTANTS.PLANET_SCALE_FACTOR;

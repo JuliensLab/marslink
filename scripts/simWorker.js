@@ -9,15 +9,15 @@
 // Loaded as an ES module worker:
 //   new Worker(new URL("./simWorker.js", import.meta.url), { type: "module" })
 
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.62";
-import { SimSatellites } from "./simSatellites.js?v=4.62";
-import { SimLinkBudget } from "./simLinkBudget.js?v=4.62";
-import { SimNetwork } from "./simNetwork.js?v=4.62";
-import { SimDeployment } from "./simDeployment.js?v=4.62";
-import { SimMissionValidator } from "./simMissionValidator.js?v=4.62";
-import { minOf } from "./simMath.js?v=4.62";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.62";
-import { planetRingRequiredMbps } from "./slidersData.js?v=4.62";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.64";
+import { SimSatellites } from "./simSatellites.js?v=4.64";
+import { SimLinkBudget } from "./simLinkBudget.js?v=4.64";
+import { SimNetwork } from "./simNetwork.js?v=4.64";
+import { SimDeployment } from "./simDeployment.js?v=4.64";
+import { SimMissionValidator } from "./simMissionValidator.js?v=4.64";
+import { minOf } from "./simMath.js?v=4.64";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.64";
+import { planetRingRequiredMbps, earthJunctionIsBottleneck } from "./slidersData.js?v=4.64";
 
 // --- State (initialized lazily on the first compute) ---
 let simLinkBudget = null;
@@ -337,6 +337,15 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
     simSatellites.setSatellitesConfig(simSatellites.buildConfigFromUi(uiConfig));
   };
 
+  // Auto junction rings (Contoured eccentric): the sizing sequence starts from 0
+  // intermediate rings; the growth loop after the planetary sizing adds rings while
+  // the Earth junction still bottlenecks the deliverable (shared test with the live
+  // step). Manual mode keeps the scenario's configured count untouched.
+  const jctAuto =
+    uiConfig["adapted_eccentric_rings.junction-ring-mode"] === "auto" &&
+    uiConfig["relay_type.selected"] === "Contoured eccentric";
+  if (jctAuto) uiConfig["adapted_eccentric_rings.junction-ring-count"] = 0;
+
   // 2. Planetary sizing — THE canonical one-shot (design decision 2026-07-21), the SAME
   //    code the live auto-sizer calls (slidersData.planetRingRequiredMbps). Canonical
   //    order: (a) assign the relay network and measure its AGGREGATE capacity on a first
@@ -360,6 +369,28 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
       uiConfig["ring_mars.requiredmbpsbetweensats"] = rate;
       buildAndApply(); // the rebuild the junction links attach against
       iterations = 2;
+    }
+  }
+
+  // 2b. Auto junction-ring growth: with the planetary rings sized, evaluate the
+  //     junction assignment at 0 intermediate rings; while the EARTH junction still
+  //     bottlenecks the deliverable, add one ring and rebuild, until it no longer
+  //     binds or the count hits the slider max. (Canonical order preserved: relay
+  //     network → planetary sizing → junction links.)
+  if (jctAuto) {
+    const MAX_JCT = 8; // matches the junction-ring-count slider max
+    let k = 0;
+    for (;;) {
+      const planets = Object.values(simSolarSystem.updatePlanetsPositions(sizeDate));
+      const satellites = simSatellites.updateSatellitesPositions(sizeDate);
+      simNetwork.getPossibleLinks(planets, satellites);
+      const rs = simNetwork.routeSummary;
+      if (!rs || !earthJunctionIsBottleneck(rs.ringDetail) || k >= MAX_JCT) break;
+      k++;
+      uiConfig["adapted_eccentric_rings.junction-ring-count"] = k;
+      buildAndApply();
+      iterations++;
+      console.log(`[ScenarioSizing] #${scenarioId} Earth junction binds -> junction rings ${k}`);
     }
   }
 
@@ -529,6 +560,9 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
     sizedConfig: {
       "ring_earth.requiredmbpsbetweensats": uiConfig["ring_earth.requiredmbpsbetweensats"],
       "ring_mars.requiredmbpsbetweensats": uiConfig["ring_mars.requiredmbpsbetweensats"],
+      // Auto mode records the grown count so the archive and the display rebuild
+      // show what the scenario actually flew; manual echoes the configured value.
+      "adapted_eccentric_rings.junction-ring-count": uiConfig["adapted_eccentric_rings.junction-ring-count"],
     },
     iterations,
     totalMs: Math.round(performance.now() - t0),

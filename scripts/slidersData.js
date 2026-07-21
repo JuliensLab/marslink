@@ -1,6 +1,6 @@
 // slidersData.js
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.62";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.64";
 
 export const slidersData = {
   display: {
@@ -1167,8 +1167,19 @@ export const slidersData = {
       scale: "linear",
       updateLongTermScore: true,
     },
+    "junction-ring-mode": {
+      type: "radio",
+      label: "Junction rings sizing",
+      description:
+        "manual: set the intermediate junction ring count with the slider below. auto: follows the canonical order — relay network assignment, planetary ring sizing, then junction links starting with 0 junction rings; while the Earth junction still bottlenecks the deliverable, one ring is added and the topology rebuilt, until the junction no longer binds (or the slider max is reached).",
+      options: ["manual", "auto"],
+      value: "manual",
+      unit: "",
+      updateLongTermScore: true,
+    },
     "junction-ring-count": {
       label: "Intermediate junction rings",
+      disabledCondition: { slider: "junction-ring-mode", value: "manual" },
       description:
         "Rings between the Earth ring and the eccentric relay rings that carry the junction ring by ring. Each is a clone of the Earth ring (same orbital elements and satellite count) with RAAN on the Earth–Mars plane-node line and inclination stepped from Earth's (≈0) to the family's WORST-CASE inclination — the largest any eccentric ring can fly, computed from the tangency geometry over all apsis directions. The ladder pretends it has k+2 steps (step 0 = Earth ring, step k+1 = the worst-case plane) and keeps the k intermediates: ring j sits at j/(k+1). 0 = none.",
       min: 0,
@@ -1234,4 +1245,23 @@ export function planetRingRequiredMbps(relayAggregateMbps) {
   const raw = mapUserFacingToSliderValue(sd, planetMbps);
   const internal = min + Math.ceil((raw - min) / step - 1e-9) * step;
   return mapSliderValueToUserFacing(sd, internal);
+}
+
+// Auto junction-ring sizing (Contoured eccentric) — THE shared bottleneck test,
+// used by both the live step (simUi.runJunctionSizingStep) and the sweep pipeline
+// (simWorker.runScenario). True when the EARTH-side junction binds the deliverable:
+// the per-ring chain min improves materially (>2%) when the Earth junction is
+// ignored, so adding an intermediate junction ring can relieve it. Mars-side or
+// in-ring bottlenecks return false — more Earth ramp rings cannot help those.
+export function earthJunctionIsBottleneck(ringDetail) {
+  if (!Array.isArray(ringDetail) || !ringDetail.length) return false;
+  let capped = 0, cappedNoEarth = 0;
+  for (const d of ringDetail) {
+    const arcs = d.routesMbps || 0;
+    const e = d.earth && isFinite(d.earth.mbps) ? d.earth.mbps : Infinity;
+    const m = d.mars && isFinite(d.mars.mbps) ? d.mars.mbps : Infinity;
+    capped += Math.min(arcs, e, m);
+    cappedNoEarth += Math.min(arcs, m);
+  }
+  return capped < cappedNoEarth * 0.98;
 }

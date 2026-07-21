@@ -12,10 +12,10 @@
 // arrivalDate, per-flight delta-V, profile (vehicles/propellant), sats deployed,
 // cycleSize (1 + tankersPerFlight), and the two burn positions (for charting).
 
-import { calculateHohmannDeltaV_km_s } from "./simDeltaV.js?v=4.62";
-import { helioCoords, positionFromSolarAngle } from "./simOrbits.js?v=4.62";
-import { hohmannGeometry, earthPositionAt } from "./hohmannTransfer.js?v=4.62";
-import { ESCAPE_BURN_DV_KM_S } from "./simDeployment.js?v=4.62";
+import { calculateHohmannDeltaV_km_s } from "./simDeltaV.js?v=4.64";
+import { helioCoords, positionFromSolarAngle } from "./simOrbits.js?v=4.64";
+import { hohmannGeometry, earthPositionAt } from "./hohmannTransfer.js?v=4.64";
+import { ESCAPE_BURN_DV_KM_S } from "./simDeployment.js?v=4.64";
 
 const MS_PER_DAY = 86400000;
 
