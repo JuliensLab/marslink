@@ -9,15 +9,15 @@
 // Loaded as an ES module worker:
 //   new Worker(new URL("./simWorker.js", import.meta.url), { type: "module" })
 
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.72";
-import { SimSatellites } from "./simSatellites.js?v=4.72";
-import { SimLinkBudget } from "./simLinkBudget.js?v=4.72";
-import { SimNetwork } from "./simNetwork.js?v=4.72";
-import { SimDeployment } from "./simDeployment.js?v=4.72";
-import { SimMissionValidator } from "./simMissionValidator.js?v=4.72";
-import { minOf } from "./simMath.js?v=4.72";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.72";
-import { planetRingRequiredMbps, earthJunctionIsBottleneck, marsJunctionIsBottleneck } from "./slidersData.js?v=4.72";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.73";
+import { SimSatellites } from "./simSatellites.js?v=4.73";
+import { SimLinkBudget } from "./simLinkBudget.js?v=4.73";
+import { SimNetwork } from "./simNetwork.js?v=4.73";
+import { SimDeployment } from "./simDeployment.js?v=4.73";
+import { SimMissionValidator } from "./simMissionValidator.js?v=4.73";
+import { minOf } from "./simMath.js?v=4.73";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.73";
+import { planetRingRequiredMbps, earthJunctionIsBottleneck, marsJunctionIsBottleneck } from "./slidersData.js?v=4.73";
 
 // --- State (initialized lazily on the first compute) ---
 let simLinkBudget = null;
@@ -334,9 +334,7 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
   simSatellites.setMaxSatCount(uiConfig["simulation.maxSatCount"]);
 
   const buildAndApply = () => {
-    // Sparse junction arcs anchor at the sizing date (satellites orbit; the arcs
-    // must sit on their corridors when the topology is evaluated).
-    simSatellites.setSatellitesConfig(simSatellites.buildConfigFromUi(uiConfig, sizeDate));
+    simSatellites.setSatellitesConfig(simSatellites.buildConfigFromUi(uiConfig));
   };
 
   // Auto junction rings (Contoured eccentric): the sizing sequence starts from 0
@@ -396,7 +394,7 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
     scratch.setMaxSatCount(uiConfig["simulation.maxSatCount"]);
     const jctSatsFor = () => {
       // Both sides' sparse arcs, at whatever counts uiConfig currently holds.
-      const cfgs = scratch.buildConfigFromUi(uiConfig, sizeDate).filter((c) => (c.ringName || "").startsWith("ring_jct"));
+      const cfgs = scratch.buildConfigFromUi(uiConfig).filter((c) => (c.ringName || "").startsWith("ring_jct"));
       scratch.setSatellitesConfig(cfgs);
       return scratch.updateSatellitesPositions(sizeDate);
     };

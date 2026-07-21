@@ -1,7 +1,7 @@
 // simSatellites.js
 
-import { helioCoords, positionFromSolarAngle } from "./simOrbits.js?v=4.72";
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.72";
+import { helioCoords, positionFromSolarAngle } from "./simOrbits.js?v=4.73";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.73";
 
 export class SimSatellites {
   constructor(simLinkBudget, planets) {
@@ -86,7 +86,7 @@ export class SimSatellites {
    * Pure with respect to instance geometry (simLinkBudget + planet elements);
    * does not mutate satellite state.
    */
-  buildConfigFromUi(uiConfig, atDate) {
+  buildConfigFromUi(uiConfig) {
     const satellitesConfig = [];
     // Exactly one relay family is active, chosen by the relay_type selector. Build only
     // that one (falling back to adapted concentric for legacy configs without the key).
@@ -100,11 +100,11 @@ export class SimSatellites {
     const build = relayBuilders[relayType] || relayBuilders["Contoured concentric"];
     const relayConfigs = build();
     satellitesConfig.push(...relayConfigs);
-    // Sparse intermediate junction rings (Contoured eccentric only), both planet
-    // sides: plane-stepped arcs of chain columns around each eccentric ring's
-    // tangent longitudes, anchored at atDate (defaults to now).
+    // Intermediate junction rings (Contoured eccentric only), both planet sides:
+    // plane-stepped rings evenly populated at corridor-derived density (rotation
+    // symmetry keeps every tangent corridor served at every epoch).
     if (relayType === "Contoured eccentric") {
-      satellitesConfig.push(...this._buildIntermediateJunctionRings(uiConfig, relayConfigs, atDate));
+      satellitesConfig.push(...this._buildIntermediateJunctionRings(uiConfig, relayConfigs));
     }
     if (uiConfig["ring_mars.side-extension-degrees-slider"]) satellitesConfig.push(...this._buildPlanetRing(uiConfig, "ring_mars"));
     if (uiConfig["ring_earth.side-extension-degrees-slider"]) satellitesConfig.push(...this._buildPlanetRing(uiConfig, "ring_earth"));
@@ -348,19 +348,6 @@ export class SimSatellites {
     return this._jctWorst;
   }
 
-  // Mean longitude (epoch element `l`) that puts a satellite of orbit (e, p=long.
-  // of perihelion, n, Dele) at inertial ecliptic longitude thetaDeg AT date atDate:
-  // theta → true anomaly → eccentric anomaly → mean anomaly → mean longitude at the
-  // date, rewound to the element epoch by n·(JD − Dele).
-  _epochMeanLongitudeFor(thetaDeg, e, pDeg, nDegPerDay, Dele, atDate) {
-    const rad = Math.PI / 180;
-    const nu = ((thetaDeg - pDeg) % 360 + 360) % 360 * rad;
-    const Ecc = 2 * Math.atan2(Math.sqrt(1 - e) * Math.sin(nu / 2), Math.sqrt(1 + e) * Math.cos(nu / 2));
-    const Mdeg = (Ecc - e * Math.sin(Ecc)) / rad;
-    const jd = SIM_CONSTANTS.JULIAN_DAY_UNIX_EPOCH + atDate.getTime() / 86400000;
-    return ((Mdeg + pDeg - nDegPerDay * (jd - Dele)) % 360 + 360) % 360;
-  }
-
   // SPARSE intermediate junction rings, both sides. Each side's k rings ride the
   // planet's own orbit (a/e/perihelion) with inclination stepped toward the
   // eccentric family's worst-case plane — Earth: ~0 → i(aWorst) hinged on the
@@ -376,11 +363,10 @@ export class SimSatellites {
   // is anchored AT atDate (satellites orbit, so sparse arcs drift off their
   // corridors over days — sweeps re-anchor per scenario; the live view re-anchors
   // on any config rebuild).
-  _buildIntermediateJunctionRings(uiConfig, eccConfigs, atDate) {
+  _buildIntermediateJunctionRings(uiConfig, eccConfigs) {
     const kE = Math.round(uiConfig["adapted_eccentric_rings.junction-ring-count"] || 0);
     const kM = Math.round(uiConfig["adapted_eccentric_rings.junction-ring-count-mars"] || 0);
     if ((kE <= 0 && kM <= 0) || !eccConfigs.length) return [];
-    const date = atDate instanceof Date && !isNaN(atDate) ? atDate : new Date();
     const inclPct = eccConfigs[0].earthMarsInclinationPct;
     const worst = this._jctWorstCase(uiConfig);
     const iMax = this.addInterpolationBias(this.interpolateOrbitalElement(worst.aWorst, "i"), inclPct, "i");
@@ -417,24 +403,26 @@ export class SimSatellites {
         const worstKm = Math.max(1000, rungKm, topKm);
         return this.calculateGbps(worstKm) * 1000;
       };
-      // Longitude columns: per eccentric ring, an arc centred on its tangent
-      // longitude with the chains its capacity needs (bounded by how many
-      // planet-spacing columns fit in its corridor). Columns are SNAPPED onto the
-      // planet ring's own mean-longitude grid (anchor = the planet's element l,
-      // step = the ring's spacing): both populations propagate at the planet's
-      // mean motion, so every column sits permanently above a planet-ring sat and
-      // the rungs stay purely vertical — arbitrary-phase arcs made the free-port
-      // pairing displace cumulatively toward the arc edges, halving chain rates.
-      // All k rings share the same columns — chains are vertical.
+      // EVEN SPREAD at corridor-derived density. Satellites orbit — they stream
+      // through the corridors — while the eccentric orbits, and therefore the
+      // contact longitudes, stay FIXED in inertial space, so satellites pinned at
+      // today's contacts drift off within days. An evenly populated ring is
+      // rotation-symmetric: every corridor window holds enough columns at every
+      // epoch, with no date anchoring at all. The COUNT comes from demand: for
+      // each eccentric ring, integrate the honest per-column chain capacity over
+      // its corridor (reach-bounded by the radial lift-off) at planet-grid
+      // resolution; the widest column spacing that still meets the ring's demand
+      // is integral/demand, and the tightest ring sets the ring density. Chains
+      // pair 1:1 with planet-ring sats (ports), so the density is floored at the
+      // planet ring's own spacing.
       const oneSide = Math.max(1, Math.ceil(planetTemplate.satCount / 2));
       const incDeg = (planetTemplate.sideExtensionDeg || 180) / oneSide; // the planet ring's grid step
-      const gridBase = planet.l; // the planet ring's grid anchor (element mean longitude)
-      const meanLongs = [];
       const pPlanet = planet.a * (1 - planet.e * planet.e);
       const { M: uM, E: uE } = this._adaptedEccUParams();
       const num2 = (v, d2) => (typeof v === "number" && !Number.isNaN(v) ? v : d2);
       const mMar = num2(uiConfig["adapted_eccentric_rings.mars-side-clearance-x"], 0);
       const mEar = num2(uiConfig["adapted_eccentric_rings.earth-side-clearance-x"], 0);
+      let spacingDeg = corridorDeg; // sparsest conceivable: one column per corridor
       for (const c of eccConfigs) {
         // TRUE tangent longitude for this side (the closed-form contact of the
         // ring with the planet's elliptical orbit — shifted from argPeri).
@@ -442,31 +430,26 @@ export class SimSatellites {
         const theta = planet === this.Earth ? geom.contactEarthDeg : geom.contactMarsDeg;
         const iEcc = this.addInterpolationBias(this.interpolateOrbitalElement(c.satDistanceSun, "i"), inclPct, "i");
         const pRing = (c.satDistanceSun || planet.a) * (1 - (c.eccentricity || 0) ** 2);
-        const corridorCap = Math.max(1, Math.floor(corridorDeg / incDeg));
-        // Widen the arc column by column (alternating sides of the tangent),
-        // accumulating each chain's HONEST capacity until the ring's demand is met
-        // (10% margin), the corridor is full, or the radial lift-off kills the
-        // reach. Surplus is impossible by construction — the arc holds exactly the
-        // columns the capacity accounting needs.
-        // Column i sits at grid offset 0, +1, −1, +2, −2, … from the tangent.
-        const off = (i2) => (i2 % 2 === 1 ? 1 : -1) * Math.ceil(i2 / 2);
-        let nChains = 0, served = 0;
-        while (nChains < corridorCap && served < dRingMbps * 1.1) {
-          const cap = chainCapMbps(theta, off(nChains) * incDeg, iEcc, pRing, pPlanet);
-          if (cap <= 0 && nChains > 2) break; // reach exhausted on both flanks
-          served += cap;
-          nChains++;
+        // ∫ chainCap dφ across the corridor (both flanks; the lift-off zeroes the
+        // integrand beyond reach). ×2 demand calibration: measured chains run
+        // roughly half the geometric model (top-hop pairing spread — open item).
+        let integral = 0; // Mbps·deg
+        const halfCorr = corridorDeg / 2;
+        for (let phi = 0; phi <= halfCorr; phi += incDeg) {
+          for (const sgn of phi === 0 ? [1] : [1, -1]) {
+            const cap = chainCapMbps(theta, sgn * phi, iEcc, pRing, pPlanet);
+            if (cap > 0) integral += cap * incDeg;
+          }
         }
-        const mlCenter = this._epochMeanLongitudeFor(theta, planet.e, planet.p, planet.n, planet.Dele, date);
-        const centerIdx = Math.round(((((mlCenter - gridBase) % 360) + 360) % 360) / incDeg);
-        for (let i = 0; i < nChains; i++) {
-          const gi = centerIdx + off(i);
-          meanLongs.push(((gridBase + gi * incDeg) % 360 + 360) % 360);
+        const need = dRingMbps * 2.0;
+        if (integral > 0 && need > 0) {
+          spacingDeg = Math.min(spacingDeg, Math.max(incDeg, integral / need));
         }
       }
+      const count = Math.ceil(360 / spacingDeg);
       for (let j = 1; j <= k; j++) {
         out.push({
-          satCount: meanLongs.length,
+          satCount: count,
           satDistanceSun: null,
           ringName: ringPrefix + (j - 1),
           ringType,
@@ -476,7 +459,6 @@ export class SimSatellites {
           argPeri: 0,
           // Repurposed for junction rings: the planet→eccentric plane mix percentage.
           earthMarsInclinationPct: (100 * j) / (k + 1),
-          satLongitudes: meanLongs,
         });
       }
     };
@@ -1377,17 +1359,19 @@ export class SimSatellites {
     } = config;
     if (satCount == 0) return [];
     const satellites = [];
-    // Sparse placement (junction rings): explicit epoch mean longitudes instead of
-    // even spacing. No in-ring neighbours — these sats are vertical chain rungs.
-    if (config.satLongitudes && config.satLongitudes.length) {
+    // Junction rings: evenly spread around the full ring (rotation symmetry keeps
+    // every corridor served as the sats stream through it). No in-ring neighbours —
+    // these sats are vertical chain rungs, not an azimuthal transport ring.
+    if (ringType == "Junction" || ringType == "JunctionMars") {
       const { a, n } = this.getParams_a_n(ringType);
       const orbitdays = 360 / n;
-      config.satLongitudes.forEach((ml, i) => {
+      const longIncrement = 360 / satCount;
+      for (let i = 0; i < satCount; i++) {
         const name = `${ringName}-${i}`;
         satellites.push(
-          this.generateSatellite(ringName, ringType, a, n, eccentricity, argPeri, earthMarsInclinationPct, ml, orbitdays, name, [])
+          this.generateSatellite(ringName, ringType, a, n, eccentricity, argPeri, earthMarsInclinationPct, i * longIncrement, orbitdays, name, [])
         );
-      });
+      }
       return satellites;
     }
     if (ringType == "Circular") {
@@ -1879,8 +1863,8 @@ export class SimSatellites {
       // the largest inclination any family ring can fly, stashed as _jctPlaneEnd.i
       // by the builder) and RAAN on the Earth–Mars plane-node line (the rings hinge
       // about the axis where the two planes actually meet). earthMarsInclinationPct
-      // carries the mix fraction (j/(k+1) as a percent); `long` carries the sat's
-      // ABSOLUTE epoch mean longitude (sparse placement, set by the builder).
+      // carries the mix fraction (j/(k+1) as a percent); `long` is the sat's epoch
+      // mean longitude (even spread — the phase anchor is arbitrary).
       const t = Math.min(1, Math.max(0, (earthMarsInclinationPct ?? 50) / 100));
       const endI = this._jctPlaneEnd ? this._jctPlaneEnd.i : this.Mars.i;
       return {
@@ -1900,7 +1884,7 @@ export class SimSatellites {
       // mixed from Mars's DOWN toward the family's worst-case minimum (the flattest
       // plane any family ring can fly, _jctPlaneEnd.iMarsEnd). RAAN stays Mars's —
       // the Mars ring and the eccentric family share that node, so inclination is
-      // the whole plane change. `long` = absolute epoch mean longitude, as above.
+      // the whole plane change. `long` = epoch mean longitude (even spread), as above.
       const t = Math.min(1, Math.max(0, (earthMarsInclinationPct ?? 50) / 100));
       const endI = this._jctPlaneEnd && this._jctPlaneEnd.iMarsEnd != null ? this._jctPlaneEnd.iMarsEnd : this.Mars.i;
       return {

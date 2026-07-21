@@ -1,6 +1,6 @@
 // slidersData.js
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.72";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.73";
 
 export const slidersData = {
   display: {
@@ -1181,7 +1181,7 @@ export const slidersData = {
       label: "Intermediate junction rings (Earth)",
       disabledCondition: { slider: "junction-ring-mode", value: "manual" },
       description:
-        "Sparse rings between the Earth ring and the eccentric relay rings that carry the junction ring by ring. They ride Earth's orbit (same a/e/perihelion) with RAAN on the Earth–Mars plane-node line and inclination stepped from Earth's (≈0) to the family's WORST-CASE inclination (ring j of k at j/(k+1)). Satellites are placed only where needed: short arcs around each eccentric ring's tangent longitude, one chain column per would-be direct link, sized so the chains carry the ring's design capacity. 0 = none (direct links).",
+        "Sparse rings between the Earth ring and the eccentric relay rings that carry the junction ring by ring. They ride Earth's orbit (same a/e/perihelion) with RAAN on the Earth–Mars plane-node line and inclination stepped from Earth's (≈0) to the family's WORST-CASE inclination (ring j of k at j/(k+1)). Satellites are spread EVENLY around the ring (they orbit while the tangent corridors stay fixed, so only rotation symmetry keeps every corridor served); the count comes from demand — the sparsest density whose chains still carry each ring's design capacity inside its corridor. 0 = none (direct links).",
       min: 0,
       max: 8,
       value: 0,
@@ -1194,7 +1194,7 @@ export const slidersData = {
       label: "Intermediate junction rings (Mars)",
       disabledCondition: { slider: "junction-ring-mode", value: "manual" },
       description:
-        "Sparse rings between the Mars ring and the eccentric relay rings, mirroring the Earth-side ramp: they ride Mars's orbit (same a/e/perihelion, RAAN = Mars's) with inclination stepped from Mars's down to the family's worst-case MINIMUM (the flattest plane any eccentric ring can fly). Satellites are placed only where needed, around each ring's aphelion tangent longitude, sized to the ring's design capacity. 0 = none (direct links).",
+        "Sparse rings between the Mars ring and the eccentric relay rings, mirroring the Earth-side ramp: they ride Mars's orbit (same a/e/perihelion, RAAN = Mars's) with inclination stepped from Mars's down to the family's worst-case MINIMUM (the flattest plane any eccentric ring can fly). Satellites are spread evenly at demand-derived density, mirroring the Earth side (corridors centre on each ring's aphelion contact). 0 = none (direct links).",
       min: 0,
       max: 8,
       value: 0,
