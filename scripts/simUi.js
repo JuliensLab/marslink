@@ -2,17 +2,15 @@
 import {
   slidersData,
   planetRingRequiredMbps,
-  earthJunctionIsBottleneck,
-  marsJunctionIsBottleneck,
   mapSliderValueToUserFacing as mapToUserFacing,
   mapUserFacingToSliderValue as mapToSliderInternal,
-} from "./slidersData.js?v=4.74";
-import { LukashianClock } from "./lukashianTime.js?v=4.74";
-import { wireAuthUi } from "./auth.js?v=4.74";
-import { SensitivityPool } from "./sensitivityPool.js?v=4.74";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.74";
-import { minOf } from "./simMath.js?v=4.74";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.74";
+} from "./slidersData.js?v=4.75";
+import { LukashianClock } from "./lukashianTime.js?v=4.75";
+import { wireAuthUi } from "./auth.js?v=4.75";
+import { SensitivityPool } from "./sensitivityPool.js?v=4.75";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.75";
+import { minOf } from "./simMath.js?v=4.75";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.75";
 
 export class SimUi {
   constructor(simMain) {
@@ -782,76 +780,9 @@ export class SimUi {
     // Relay-intrinsic capacity (planet hops excluded): sizing from the end-to-end number
     // fed the previous planet-ring size back into the next sizing — the satCount
     // "hysteresis" at fixed ring count. Fallback covers stale worker payloads.
-    const wrote = this._writePlanetSizing(rs.relayOnlyThroughput ?? rs.totalThroughput);
-    // Auto junction rings restart from 0 on each design change (the canonical order:
-    // relay network → planetary sizing → junction links from a clean slate); the
-    // growth step then adds rings on subsequent links-readys while the Earth
-    // junction binds. The CURRENT links-ready predates the sized planets, so the
-    // junction step must not judge it — skip one round whenever sizing acted.
-    if (this._jctRingMode() === "auto") {
-      const curE = Math.round(parseFloat(this.sliders.adapted_eccentric_rings?.["junction-ring-count"]?.value) || 0);
-      const curM = Math.round(parseFloat(this.sliders.adapted_eccentric_rings?.["junction-ring-count-mars"]?.value) || 0);
-      const writes = {};
-      if (curE !== 0) writes["adapted_eccentric_rings.junction-ring-count"] = 0;
-      if (curM !== 0) writes["adapted_eccentric_rings.junction-ring-count-mars"] = 0;
-      if (Object.keys(writes).length) this.applySliderValues(writes);
-      if (wrote || curE !== 0 || curM !== 0) this._jctSkipOnce = true;
-      this._jctAutoState = null; // fresh growth cycle: forget the previous best
-    }
-  }
-
-  _jctRingMode() {
-    return this.slidersData.adapted_eccentric_rings?.["junction-ring-mode"]?.value || "manual";
-  }
-
-  /**
-   * Auto junction-ring growth (Contoured eccentric), one step per links-ready:
-   * once the planetary sizing has settled, if the EARTH junction still bottlenecks
-   * the deliverable (shared test with the sweep pipeline: earthJunctionIsBottleneck),
-   * add ONE intermediate junction ring — the rebuild's next links-ready re-evaluates,
-   * so the count grows until the junction no longer binds or the slider max.
-   * Grow-only within a design cycle; runPlanetSizingStep resets the count to 0 when
-   * a design change re-arms the sizing.
-   */
-  runJunctionSizingStep() {
-    if (this._jctRingMode() !== "auto") return;
-    // Canonical order: with auto planet sizing, wait until it has consumed its arm
-    // (relay → planets → junctions). With planet sizing off, grow directly.
-    if (this._planetSizingMode() === "auto" && this._planetSizeArmed) return;
-    // The links-ready on which the sizing just acted predates the sized planets —
-    // judging the junction on it would step prematurely. Skip that one round.
-    if (this._jctSkipOnce) { this._jctSkipOnce = false; return; }
-    if (this.slidersData.relay_type?.selected?.value !== "Contoured eccentric") return;
-    const rs = this.simMain?.routeSummary;
-    if (!rs || !rs.ringDetail || !(rs.totalThroughput > 0)) return;
-    const eSlider = this.sliders.adapted_eccentric_rings?.["junction-ring-count"];
-    const mSlider = this.sliders.adapted_eccentric_rings?.["junction-ring-count-mars"];
-    if (!eSlider || !mSlider) return;
-    const kE = Math.round(parseFloat(eSlider.value) || 0);
-    const kM = Math.round(parseFloat(mSlider.value) || 0);
-    const maxE = parseFloat(eSlider.max) || 8;
-    const maxM = parseFloat(mSlider.max) || 8;
-    // Best-state guard (mirrors the sweep loop): remember the best (kE, kM) by
-    // deliverable; when a step stops improving, settle on the best instead of
-    // climbing to the slider max.
-    const st = this._jctAutoState || (this._jctAutoState = { best: { kE: 0, kM: 0, total: -1 }, prevTotal: -1, done: false });
-    if (st.done) return;
-    const tot = rs.totalThroughput;
-    if (tot > st.best.total) st.best = { kE, kM, total: tot };
-    const regressed = st.prevTotal >= 0 && tot <= st.prevTotal * 1.005 && (kE > 0 || kM > 0);
-    st.prevTotal = tot;
-    if (regressed) {
-      st.done = true;
-      const writes = {};
-      if (st.best.kE !== kE) writes["adapted_eccentric_rings.junction-ring-count"] = st.best.kE;
-      if (st.best.kM !== kM) writes["adapted_eccentric_rings.junction-ring-count-mars"] = st.best.kM;
-      if (Object.keys(writes).length) this.applySliderValues(writes);
-      return;
-    }
-    const writes = {};
-    if (kE < maxE && earthJunctionIsBottleneck(rs.ringDetail)) writes["adapted_eccentric_rings.junction-ring-count"] = kE + 1;
-    if (kM < maxM && marsJunctionIsBottleneck(rs.ringDetail)) writes["adapted_eccentric_rings.junction-ring-count-mars"] = kM + 1;
-    if (Object.keys(writes).length) this.applySliderValues(writes);
+    this._writePlanetSizing(rs.relayOnlyThroughput ?? rs.totalThroughput);
+    // Junction rings need no step here: auto sizing is closed-form inside the
+    // config build, so the sizing rebuild above already carries the right counts.
   }
 
   /**
@@ -4276,7 +4207,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=4.74");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=4.75");
     let result = null;
     try {
       result = await solveBandDistribution({
@@ -4554,17 +4485,7 @@ export class SimUi {
         case "adapted_eccentric_rings.earth-side-clearance-x":
         case "adapted_eccentric_rings.mars-side-clearance-x":
         case "adapted_eccentric_rings.junction-ring-mode":
-          // Switching to auto restarts the growth from 0 (the rebuild's links-ready
-          // then grows it via runJunctionSizingStep); manual keeps the slider value.
-          if (newValue === "auto") {
-            const curE = Math.round(parseFloat(this.sliders.adapted_eccentric_rings?.["junction-ring-count"]?.value) || 0);
-            const curM = Math.round(parseFloat(this.sliders.adapted_eccentric_rings?.["junction-ring-count-mars"]?.value) || 0);
-            const writes = {};
-            if (curE !== 0) writes["adapted_eccentric_rings.junction-ring-count"] = 0;
-            if (curM !== 0) writes["adapted_eccentric_rings.junction-ring-count-mars"] = 0;
-            if (Object.keys(writes).length) this.applySliderValues(writes);
-            this._jctAutoState = null; // fresh growth cycle
-          }
+          // Auto sizing is closed-form inside the config build — just rebuild.
         // falls through to the shared relay rebuild below
         case "adapted_eccentric_rings.earth-mars-orbit-inclination-pct":
         case "adapted_eccentric_rings.junction-ring-count":
