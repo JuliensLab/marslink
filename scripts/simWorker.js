@@ -9,15 +9,15 @@
 // Loaded as an ES module worker:
 //   new Worker(new URL("./simWorker.js", import.meta.url), { type: "module" })
 
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.64";
-import { SimSatellites } from "./simSatellites.js?v=4.64";
-import { SimLinkBudget } from "./simLinkBudget.js?v=4.64";
-import { SimNetwork } from "./simNetwork.js?v=4.64";
-import { SimDeployment } from "./simDeployment.js?v=4.64";
-import { SimMissionValidator } from "./simMissionValidator.js?v=4.64";
-import { minOf } from "./simMath.js?v=4.64";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.64";
-import { planetRingRequiredMbps, earthJunctionIsBottleneck } from "./slidersData.js?v=4.64";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.65";
+import { SimSatellites } from "./simSatellites.js?v=4.65";
+import { SimLinkBudget } from "./simLinkBudget.js?v=4.65";
+import { SimNetwork } from "./simNetwork.js?v=4.65";
+import { SimDeployment } from "./simDeployment.js?v=4.65";
+import { SimMissionValidator } from "./simMissionValidator.js?v=4.65";
+import { minOf } from "./simMath.js?v=4.65";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.65";
+import { planetRingRequiredMbps, earthJunctionIsBottleneck } from "./slidersData.js?v=4.65";
 
 // --- State (initialized lazily on the first compute) ---
 let simLinkBudget = null;
@@ -372,26 +372,43 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
     }
   }
 
-  // 2b. Auto junction-ring growth: with the planetary rings sized, evaluate the
-  //     junction assignment at 0 intermediate rings; while the EARTH junction still
-  //     bottlenecks the deliverable, add one ring and rebuild, until it no longer
-  //     binds or the count hits the slider max. (Canonical order preserved: relay
-  //     network → planetary sizing → junction links.)
+  // 2b. Auto junction-ring growth, INCREMENTAL: the base topology (relay +
+  //     planetary rings, their in-ring links, the Mars junction, planet-ground
+  //     links) is built ONCE on the sized k=0 fleet; per candidate count only the
+  //     junction stage — junction-ring sats, ramp rungs, Earth-side attachment,
+  //     cross-ring links, routes — is reverted and re-applied. The junction rings
+  //     regenerate each step (they re-space at j/(k+1)) via a scratch
+  //     SimSatellites, but they are the cheap part; the base never rebuilds.
+  //     While the EARTH junction still bottlenecks the deliverable, add one ring,
+  //     until it no longer binds or the count hits the slider max. (Canonical
+  //     order preserved: relay network → planetary sizing → junction links.)
   if (jctAuto) {
     const MAX_JCT = 8; // matches the junction-ring-count slider max
-    let k = 0;
-    for (;;) {
-      const planets = Object.values(simSolarSystem.updatePlanetsPositions(sizeDate));
-      const satellites = simSatellites.updateSatellitesPositions(sizeDate);
-      simNetwork.getPossibleLinks(planets, satellites);
-      const rs = simNetwork.routeSummary;
-      if (!rs || !earthJunctionIsBottleneck(rs.ringDetail) || k >= MAX_JCT) break;
-      k++;
+    const planets = Object.values(simSolarSystem.updatePlanetsPositions(sizeDate));
+    const baseSats = simSatellites.updateSatellitesPositions(sizeDate); // fleet is k=0 here
+    const ctx = simNetwork.prepareBaseTopology(planets, baseSats);
+    const scratch = new SimSatellites(simLinkBudget, simSolarSystem.getSolarSystemData().planets);
+    scratch.setMaxSatCount(uiConfig["simulation.maxSatCount"]);
+    const jctSatsFor = (k) => {
       uiConfig["adapted_eccentric_rings.junction-ring-count"] = k;
-      buildAndApply();
+      const cfgs = scratch.buildConfigFromUi(uiConfig).filter((c) => (c.ringName || "").startsWith("ring_jct"));
+      scratch.setSatellitesConfig(cfgs);
+      return scratch.updateSatellitesPositions(sizeDate);
+    };
+    let k = 0;
+    let rs = simNetwork.applyJunctionStage(ctx, []);
+    while (rs && earthJunctionIsBottleneck(rs.ringDetail) && k < MAX_JCT) {
+      k++;
+      simNetwork.revertJunctionStage(ctx);
+      rs = simNetwork.applyJunctionStage(ctx, jctSatsFor(k));
       iterations++;
-      console.log(`[ScenarioSizing] #${scenarioId} Earth junction binds -> junction rings ${k}`);
+      console.log(`[ScenarioSizing] #${scenarioId} Earth junction binds -> junction rings ${k} (incremental, ${Math.round(performance.now() - t0)}ms)`);
     }
+    uiConfig["adapted_eccentric_rings.junction-ring-count"] = k;
+    // One full fleet build with the converged count so the final compute (step 3,
+    // at the scenario's own date) sees the real constellation. k=0 needs nothing —
+    // the fleet already matches.
+    if (k > 0) buildAndApply();
   }
 
   // Fast path for optimizers: the adapted-ring relay capacity (routeSummary

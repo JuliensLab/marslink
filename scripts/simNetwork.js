@@ -1,7 +1,7 @@
 // simNetwork.js — Thin orchestrator delegating to simTopology.js and simMaxFlow.js.
 
-import { TopologyBuilder } from "./simTopology.js?v=4.64";
-import { simplifyNetwork, desimplifyNetwork, computeMaxFlow, calculateLatencies } from "./simMaxFlow.js?v=4.64";
+import { TopologyBuilder } from "./simTopology.js?v=4.65";
+import { simplifyNetwork, desimplifyNetwork, computeMaxFlow, calculateLatencies } from "./simMaxFlow.js?v=4.65";
 
 export class SimNetwork {
   constructor(simLinkBudget, simSatellites) {
@@ -30,6 +30,25 @@ export class SimNetwork {
     this.routeSummary = this.topology.routeSummary;
     this.topologyInfo = this.topology.topologyInfo;
     return links;
+  }
+
+  // Incremental junction iteration (auto junction-ring sizing): build the BASE
+  // topology once (relay + planetary rings and all their links), then apply /
+  // revert / re-apply only the junction stage per candidate ring count. See
+  // TopologyBuilder.prepareBaseTopology for the split.
+  prepareBaseTopology(planets, satellites) {
+    return this.topology.prepareBaseTopology(planets, satellites);
+  }
+
+  applyJunctionStage(ctx, jctSats) {
+    const rs = this.topology.applyJunctionStage(ctx, jctSats);
+    this.routeSummary = this.topology.routeSummary;
+    this.topologyInfo = this.topology.topologyInfo;
+    return rs;
+  }
+
+  revertJunctionStage(ctx) {
+    this.topology.revertJunctionStage(ctx);
   }
 
   /**

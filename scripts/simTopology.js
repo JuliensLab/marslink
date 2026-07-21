@@ -1,6 +1,6 @@
 // simTopology.js — Topology building logic extracted from SimNetwork.
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.64";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.65";
 
 export class TopologyBuilder {
   constructor(simLinkBudget, simSatellites) {
@@ -2995,6 +2995,26 @@ export class TopologyBuilder {
    * @returns {Array} links - Array of link objects.
    */
   buildTopology(planets, satellites) {
+    // Split into a reusable BASE stage — relay + planetary rings and all their links
+    // (in-ring, Mars junction, planet-ground), which stay FIXED while the junction-
+    // ring count iterates — and a revertible JUNCTION stage (junction-ring sats,
+    // ramp rungs, Earth-side eccentric attachment, cross-ring links, routes). The
+    // auto junction sizing re-runs only the junction stage (apply → revert → apply)
+    // instead of rebuilding the whole fleet and topology per count.
+    const baseSats = [], jctSats = [];
+    for (const s of satellites) ((s.ringName || "").startsWith("ring_jct") ? jctSats : baseSats).push(s);
+    const ctx = this.prepareBaseTopology(planets, baseSats);
+    this.applyJunctionStage(ctx, jctSats);
+    return ctx.finalLinks;
+  }
+
+  /**
+   * BASE stage: everything whose result is independent of the junction-ring count —
+   * setup, concentric backbone + planet connections + lattice, the MARS-side
+   * eccentric junction, and the planet-ground links. Returns the mutable build
+   * context; applyJunctionStage completes it (and can be reverted + re-applied).
+   */
+  prepareBaseTopology(planets, satellites) {
     const t0 = performance.now();
     const timings = {};
     const mark = (name, start) => { timings[name] = Math.round(performance.now() - start); };
@@ -3057,13 +3077,53 @@ export class TopologyBuilder {
     this.intraRing(rings, positions, linkCounts, finalLinks, existingLinks);
     mark("intraRing", t);
 
+    // Mars-side eccentric junction: independent of the junction-ring count (the ramp is
+    // Earth-side only) and port-disjoint from the ramp/Earth stage, so it lives in the
+    // base. Mars grows FIRST, as before, so the Earth call sees its recorded anchor.
     t = performance.now();
-    // Junction ramp first (rung links claim their ports before attachments), then the
-    // eccentric relay families attach to both planet rings by proximity (each ellipse
-    // touches Earth at perihelion and Mars at aphelion), not via the concentric
-    // `suitable` flag. (Kept after intraRing so eccentric azimuthal ordering is unchanged.)
-    this.buildJunctionRamp(rings, positions, linkCounts, finalLinks, existingLinks);
     this.planetToEccentricRings(rings, positions, linkCounts, finalLinks, "ring_mars", existingLinks);
+    mark("planetToEccentricRings", t);
+
+    t = performance.now();
+    this.planetToRingSatellites(filteredPlanets, rings, positions, linkCounts, finalLinks, existingLinks);
+    mark("planetLinks", t);
+
+    return {
+      t0, timings, rings, positions, linkCounts, finalLinks, existingLinks,
+      filteredPlanets, baseLinkCount: finalLinks.length,
+    };
+  }
+
+  /**
+   * JUNCTION stage: registers the junction-ring satellites (fresh objects each
+   * iteration — the rings re-space at j/(k+1), so they regenerate rather than
+   * append), builds the ramp rungs, the Earth-side eccentric attachment and the
+   * cross-ring links, then computes the routes. Everything it adds sits past
+   * ctx.baseLinkCount, so revertJunctionStage can rewind it exactly.
+   * Returns the route summary.
+   */
+  applyJunctionStage(ctx, jctSats) {
+    const { rings, positions, linkCounts, finalLinks, existingLinks, timings } = ctx;
+    const mark = (name, start) => { timings[name] = (timings[name] || 0) + Math.round(performance.now() - start); };
+
+    // Register junction-ring sats: ring buckets, positions, counts, and NULL ports
+    // (fresh objects carry undefined, which would defeat the `!== null` port checks).
+    for (const s of jctSats || []) {
+      const rn = s.ringName;
+      if (!rings[rn]) rings[rn] = [];
+      rings[rn].push(s);
+      positions[s.name] = s.position;
+      linkCounts[s.name] = 0;
+      s.prograde = null;
+      s.retrograde = null;
+      s.outwards = null;
+      s.inwards = null;
+    }
+
+    // Ramp first (rung links claim their ports before attachments), then the Earth-side
+    // eccentric attachment (lands on the ramp top when present, the Earth ring otherwise).
+    let t = performance.now();
+    this.buildJunctionRamp(rings, positions, linkCounts, finalLinks, existingLinks);
     this.planetToEccentricRings(rings, positions, linkCounts, finalLinks, "ring_earth", existingLinks);
     mark("planetToEccentricRings", t);
 
@@ -3076,10 +3136,6 @@ export class TopologyBuilder {
       this.crossEccentricRings(rings, positions, linkCounts, finalLinks, existingLinks);
     }
     mark("crossEccentricRings", t);
-
-    t = performance.now();
-    this.planetToRingSatellites(filteredPlanets, rings, positions, linkCounts, finalLinks, existingLinks);
-    mark("planetLinks", t);
 
     t = performance.now();
     // Concentric families (adapted / circular) route radially via the outwards chain;
@@ -3101,11 +3157,49 @@ export class TopologyBuilder {
     this.topologyInfo = this.captureTopologyInfo(rings, finalLinks);
     mark("captureTopology", t);
 
-    timings.total = Math.round(performance.now() - t0);
+    timings.total = Math.round(performance.now() - ctx.t0);
     timings.links = finalLinks.length;
     this.lastTopologyTimings = timings;
 
-    return finalLinks;
+    return this.routeSummary;
+  }
+
+  /**
+   * Rewind the junction stage so a different junction-ring count can be applied on
+   * the SAME base: drop every link past baseLinkCount, release the ports and link
+   * counts those links claimed (derived from the removed links themselves — any
+   * directional port on either endpoint that references the other is cleared),
+   * drop the junction-ring satellites from the maps, and reset each ring's Earth
+   * junction detail (the next Earth call rewrites it, arcs included). The Mars
+   * junction and all base links are untouched.
+   */
+  revertJunctionStage(ctx) {
+    const { rings, positions, linkCounts, finalLinks, existingLinks } = ctx;
+    const byName = new Map();
+    Object.values(rings).forEach((rs) => rs.forEach((s) => byName.set(s.name, s)));
+    for (let i = finalLinks.length - 1; i >= ctx.baseLinkCount; i--) {
+      const l = finalLinks[i];
+      existingLinks.delete(`${l.fromId}-${l.toId}`);
+      if (linkCounts[l.fromId] != null) linkCounts[l.fromId]--;
+      if (linkCounts[l.toId] != null) linkCounts[l.toId]--;
+      for (const [sat, other] of [[byName.get(l.fromId), l.toId], [byName.get(l.toId), l.fromId]]) {
+        if (!sat) continue;
+        if (sat.prograde === other) sat.prograde = null;
+        if (sat.retrograde === other) sat.retrograde = null;
+        if (sat.outwards === other) sat.outwards = null;
+        if (sat.inwards === other) sat.inwards = null;
+      }
+    }
+    finalLinks.length = ctx.baseLinkCount;
+    for (const rn of Object.keys(rings)) {
+      if (!rn.startsWith("ring_jct")) continue;
+      for (const s of rings[rn]) {
+        delete positions[s.name];
+        delete linkCounts[s.name];
+      }
+      delete rings[rn];
+    }
+    for (const d of this.eccRingDetail.values()) d.earth = { count: 0, mbps: 0 };
   }
 
   /**

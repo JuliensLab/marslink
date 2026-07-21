@@ -5,13 +5,13 @@ import {
   earthJunctionIsBottleneck,
   mapSliderValueToUserFacing as mapToUserFacing,
   mapUserFacingToSliderValue as mapToSliderInternal,
-} from "./slidersData.js?v=4.64";
-import { LukashianClock } from "./lukashianTime.js?v=4.64";
-import { wireAuthUi } from "./auth.js?v=4.64";
-import { SensitivityPool } from "./sensitivityPool.js?v=4.64";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.64";
-import { minOf } from "./simMath.js?v=4.64";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.64";
+} from "./slidersData.js?v=4.65";
+import { LukashianClock } from "./lukashianTime.js?v=4.65";
+import { wireAuthUi } from "./auth.js?v=4.65";
+import { SensitivityPool } from "./sensitivityPool.js?v=4.65";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.65";
+import { minOf } from "./simMath.js?v=4.65";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.65";
 
 export class SimUi {
   constructor(simMain) {
@@ -4248,7 +4248,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=4.64");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=4.65");
     let result = null;
     try {
       result = await solveBandDistribution({
