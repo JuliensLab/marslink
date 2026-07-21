@@ -4,13 +4,13 @@ import {
   planetRingRequiredMbps,
   mapSliderValueToUserFacing as mapToUserFacing,
   mapUserFacingToSliderValue as mapToSliderInternal,
-} from "./slidersData.js?v=4.77";
-import { LukashianClock } from "./lukashianTime.js?v=4.77";
-import { wireAuthUi } from "./auth.js?v=4.77";
-import { SensitivityPool } from "./sensitivityPool.js?v=4.77";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.77";
-import { minOf } from "./simMath.js?v=4.77";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.77";
+} from "./slidersData.js?v=4.78";
+import { LukashianClock } from "./lukashianTime.js?v=4.78";
+import { wireAuthUi } from "./auth.js?v=4.78";
+import { SensitivityPool } from "./sensitivityPool.js?v=4.78";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.78";
+import { minOf } from "./simMath.js?v=4.78";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.78";
 
 export class SimUi {
   constructor(simMain) {
@@ -783,6 +783,31 @@ export class SimUi {
     this._writePlanetSizing(rs.relayOnlyThroughput ?? rs.totalThroughput);
     // Junction rings need no step here: auto sizing is closed-form inside the
     // config build, so the sizing rebuild above already carries the right counts.
+  }
+
+  /**
+   * Display-only sync of the junction-ring count sliders after an AUTO sizing
+   * computation (the sampled evaluation inside buildConfigFromUi mutates uiConfig;
+   * the disabled sliders would otherwise show stale manual values). Deliberately
+   * does NOT dispatch input/change events — that would re-enter updateValues and
+   * trigger a rebuild loop. Writes the range input, the numeric read-out, the
+   * slidersData value and localStorage, exactly what updateValues would persist.
+   */
+  syncJunctionSliderDisplays(kE, kM) {
+    if ((this.slidersData.adapted_eccentric_rings?.["junction-ring-mode"]?.value || "manual") !== "auto") return;
+    const sync = (key, v) => {
+      if (v == null || !Number.isFinite(v)) return;
+      const input = this.sliders.adapted_eccentric_rings?.[key];
+      if (!input) return;
+      if (Math.round(parseFloat(input.value)) === v) return;
+      input.value = v;
+      const numeric = document.getElementById(`adapted_eccentric_rings.${key}-value`);
+      if (numeric) numeric.value = this.formatNumericValue(v);
+      this.slidersData.adapted_eccentric_rings[key].value = v;
+      localStorage.setItem(`adapted_eccentric_rings.${key}`, String(v));
+    };
+    sync("junction-ring-count", kE);
+    sync("junction-ring-count-mars", kM);
   }
 
   /**
@@ -4207,7 +4232,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=4.77");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=4.78");
     let result = null;
     try {
       result = await solveBandDistribution({
