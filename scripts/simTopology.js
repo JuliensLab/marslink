@@ -1,6 +1,6 @@
 // simTopology.js — Topology building logic extracted from SimNetwork.
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.47";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.48";
 
 export class TopologyBuilder {
   constructor(simLinkBudget, simSatellites) {
@@ -1843,16 +1843,6 @@ export class TopologyBuilder {
       const thisTan = planetRingName === "ring_earth" ? earthTan : marsTan;
       if (!thisTan) continue;
 
-      // cRing: combined capacity of the ring's two arcs (prograde "upsat", retrograde
-      // "downsat") between its Earth- and Mars-tangent points.
-      let arcUp = 0, arcDn = 0;
-      if (earthTan && marsTan && earthTan !== marsTan) {
-        arcUp = arcCap(earthTan, marsTan, "prograde", ringSats.length);
-        arcDn = arcCap(earthTan, marsTan, "retrograde", ringSats.length);
-      }
-      const cRing = arcUp + arcDn;
-      const dRing = cRing;
-
       // Candidate junction links: every ring sat within range of the planet ring, paired
       // with its nearest planet-ring sat, sorted closest-first (k grows out of the tangent).
       const cands = [];
@@ -1863,7 +1853,30 @@ export class TopologyBuilder {
       }
       cands.sort((a, b) => a.dist - b.dist);
 
-      let served = 0, added = 0;
+      // cRing: combined capacity of the ring's two arcs (prograde/retrograde) between the
+      // ATTACHMENT satellites — this side's closest candidate (where the first junction
+      // link will land) and the other side's recorded anchor (Mars is grown first, so the
+      // Earth call has both). Falls back to the geometric tangent sats before anchors
+      // exist. Using the endpoints the route builder anchors to keeps dRing, routesMbps
+      // and the walked routes describing the SAME arcs (2026-07-21 fix — they disagreed,
+      // and the disagreement moved with maxDistanceAU).
+      const prior = this.eccRingDetail.get(ringName);
+      const otherAnchor = planetRingName === "ring_earth"
+        ? (prior && prior.mars && prior.mars.anchor ? satByName.get(prior.mars.anchor) : null)
+        : (prior && prior.earth && prior.earth.anchor ? satByName.get(prior.earth.anchor) : null);
+      const thisEnd = cands.length ? cands[0].relay : thisTan;
+      const otherEnd = otherAnchor || (planetRingName === "ring_earth" ? marsTan : earthTan);
+      const earthEnd = planetRingName === "ring_earth" ? thisEnd : otherEnd;
+      const marsEnd = planetRingName === "ring_earth" ? otherEnd : thisEnd;
+      let arcUp = 0, arcDn = 0;
+      if (earthEnd && marsEnd && earthEnd !== marsEnd) {
+        arcUp = arcCap(earthEnd, marsEnd, "prograde", ringSats.length);
+        arcDn = arcCap(earthEnd, marsEnd, "retrograde", ringSats.length);
+      }
+      const cRing = arcUp + arcDn;
+      const dRing = cRing;
+
+      let served = 0, added = 0, firstAnchor = null;
       for (const c of cands) {
         if (added >= 1 && served >= dRing) break; // always ≥1 link, then stop once the ring's own capacity is matched
         const relay = c.relay, planet = c.planet;
@@ -1891,6 +1904,7 @@ export class TopologyBuilder {
         existingLinks.add(key);
         served += c.mbps;
         added++;
+        if (added === 1) firstAnchor = relay.name; // the attachment sat: the route builder anchors here
       }
 
       // Record per-ring junction/route detail for the capacity card. Called once per
@@ -1901,15 +1915,19 @@ export class TopologyBuilder {
         detail = {
           ringName,
           argP: ((argP % 360) + 360) % 360,
-          routesCount: (arcUp > 0 ? 1 : 0) + (arcDn > 0 ? 1 : 0),
-          routesMbps: cRing,
+          routesCount: 0,
+          routesMbps: 0,
           earth: { count: 0, mbps: 0 },
           mars: { count: 0, mbps: 0 },
         };
         this.eccRingDetail.set(ringName, detail);
       }
-      if (planetRingName === "ring_earth") detail.earth = { count: added, mbps: served };
-      else detail.mars = { count: added, mbps: served };
+      // Latest call wins: Mars grows first, so the Earth call — with both attachment
+      // anchors known — writes the fully-anchored arc numbers.
+      detail.routesCount = (arcUp > 0 ? 1 : 0) + (arcDn > 0 ? 1 : 0);
+      detail.routesMbps = cRing;
+      if (planetRingName === "ring_earth") detail.earth = { count: added, mbps: served, anchor: firstAnchor };
+      else detail.mars = { count: added, mbps: served, anchor: firstAnchor };
     }
   }
 
@@ -2293,9 +2311,17 @@ export class TopologyBuilder {
       const ringSats = rings[ringName];
       if (!ringSats || ringSats.length === 0) continue;
 
-      // Attachment points (set by planetToEccentricRings): Earth-tangent sat parks its
-      // planet link on `inwards`, Mars-tangent sat on `outwards`.
+      // Anchor at the RECORDED attachment sats (the closest junction pair per side, from
+      // planetToEccentricRings) so the walked arcs are the same arcs dRing/routesMbps
+      // describe. The old first-in-array scan picked an arbitrary junction-linked sat,
+      // which moved with maxDistanceAU and split the arcs elsewhere. Scan kept as
+      // fallback for rings without recorded anchors.
+      const detail = this.eccRingDetail.get(ringName);
       let earthSat = null, earthRingSat = null, marsSat = null, marsRingSat = null;
+      const aE = detail && detail.earth && detail.earth.anchor ? satMap.get(detail.earth.anchor) : null;
+      if (aE && String(aE.inwards || "").startsWith("ring_earth")) { earthSat = aE; earthRingSat = aE.inwards; }
+      const aM = detail && detail.mars && detail.mars.anchor ? satMap.get(detail.mars.anchor) : null;
+      if (aM && String(aM.outwards || "").startsWith("ring_mars")) { marsSat = aM; marsRingSat = aM.outwards; }
       for (const s of ringSats) {
         if (!earthSat && s.inwards && String(s.inwards).startsWith("ring_earth")) {
           earthSat = s; earthRingSat = s.inwards;
@@ -2347,7 +2373,6 @@ export class TopologyBuilder {
       // silently ignored. relayOnlyMbps keeps the uncapped ring-intrinsic value: it is the
       // planetary-ring auto-sizer's input, and sizing planet rings from the intrinsic number
       // is what lets the junction grow in the first place.
-      const detail = this.eccRingDetail.get(ringName);
       const jEarth = detail && detail.earth ? detail.earth.mbps : Infinity;
       const jMars = detail && detail.mars ? detail.mars.mbps : Infinity;
       const arcSum = ringRoutes.reduce((s, r) => s + r.throughputMbps, 0);
