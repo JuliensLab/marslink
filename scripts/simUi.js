@@ -4,13 +4,13 @@ import {
   planetRingRequiredMbps,
   mapSliderValueToUserFacing as mapToUserFacing,
   mapUserFacingToSliderValue as mapToSliderInternal,
-} from "./slidersData.js?v=4.53";
-import { LukashianClock } from "./lukashianTime.js?v=4.53";
-import { wireAuthUi } from "./auth.js?v=4.53";
-import { SensitivityPool } from "./sensitivityPool.js?v=4.53";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.53";
-import { minOf } from "./simMath.js?v=4.53";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.53";
+} from "./slidersData.js?v=4.55";
+import { LukashianClock } from "./lukashianTime.js?v=4.55";
+import { wireAuthUi } from "./auth.js?v=4.55";
+import { SensitivityPool } from "./sensitivityPool.js?v=4.55";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.55";
+import { minOf } from "./simMath.js?v=4.55";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.55";
 
 export class SimUi {
   constructor(simMain) {
@@ -2374,8 +2374,8 @@ export class SimUi {
     // disambiguating "Concentric" name now that "Adapted Eccentric" exists.)
     const SECTION_TITLES = {
       relay_type: "Constellation sizing",
-      adapted_rings: "Adapted Concentric rings",
-      adapted_eccentric_rings: "Adapted Eccentric rings",
+      adapted_rings: "Contoured Concentric rings",
+      adapted_eccentric_rings: "Contoured Eccentric rings",
     };
 
     for (const section in this.slidersData) {
@@ -4199,7 +4199,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=4.53");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=4.55");
     let result = null;
     try {
       result = await solveBandDistribution({
@@ -4393,6 +4393,7 @@ export class SimUi {
         case "laser_technology.current-throughput-gbps":
         case "laser_technology.current-distance-km":
         case "laser_technology.improvement-factor":
+        case "laser_technology.terminal-line-rate-gbps":
         case "ring_earth.laser-ports-per-satellite":
         case "ring_mars.laser-ports-per-satellite":
         case "circular_rings.laser-ports-per-satellite":
@@ -4476,6 +4477,7 @@ export class SimUi {
         case "adapted_eccentric_rings.earth-side-clearance-x":
         case "adapted_eccentric_rings.mars-side-clearance-x":
         case "adapted_eccentric_rings.earth-mars-orbit-inclination-pct":
+        case "adapted_eccentric_rings.junction-ring-count":
           this.simMain.setSatellitesConfig(
             this.getGroupsConfig([
               "economics",

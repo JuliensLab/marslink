@@ -1,23 +1,23 @@
 // simMain.js
 
-import { SimUi } from "./simUi.js?v=4.53";
-import { SimTime } from "./simTime.js?v=4.53";
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.53";
-import { SimSatellites } from "./simSatellites.js?v=4.53";
-import { SimDeployment } from "./simDeployment.js?v=4.53";
-import { SimMissionValidator } from "./simMissionValidator.js?v=4.53";
-import { SimLinkBudget } from "./simLinkBudget.js?v=4.53";
-import { SimNetwork } from "./simNetwork.js?v=4.53";
+import { SimUi } from "./simUi.js?v=4.55";
+import { SimTime } from "./simTime.js?v=4.55";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.55";
+import { SimSatellites } from "./simSatellites.js?v=4.55";
+import { SimDeployment } from "./simDeployment.js?v=4.55";
+import { SimMissionValidator } from "./simMissionValidator.js?v=4.55";
+import { SimLinkBudget } from "./simLinkBudget.js?v=4.55";
+import { SimNetwork } from "./simNetwork.js?v=4.55";
 // Import both SimDisplay implementations with unique names
-import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=4.53";
-import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=4.53";
-import { generateReport } from "./reportGenerator.js?v=4.53";
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.53";
-import { minOf, maxOf } from "./simMath.js?v=4.53";
-import { SimFlightController } from "./simFlightController.js?v=4.53";
-import { SimProbeController } from "./simProbeController.js?v=4.53";
-import { findDepartureWindows } from "./simTransfer.js?v=4.53";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.53";
+import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=4.55";
+import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=4.55";
+import { generateReport } from "./reportGenerator.js?v=4.55";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.55";
+import { minOf, maxOf } from "./simMath.js?v=4.55";
+import { SimFlightController } from "./simFlightController.js?v=4.55";
+import { SimProbeController } from "./simProbeController.js?v=4.55";
+import { findDepartureWindows } from "./simTransfer.js?v=4.55";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.55";
 
 export class SimMain {
   // Clamp argument to [-1, 1] to prevent NaN from Math.asin domain errors
@@ -70,7 +70,7 @@ export class SimMain {
     if (typeof window !== "undefined") window.simMain = this;
 
     // --- Worker + triple-buffered window cache (-1/0/+1) ---
-    this.simWorker = new Worker(new URL("./simWorker.js?v=4.53", import.meta.url), { type: "module" });
+    this.simWorker = new Worker(new URL("./simWorker.js?v=4.55", import.meta.url), { type: "module" });
     this.simWorker.onmessage = (event) => this.handleWorkerMessage(event);
     this.simWorker.onerror = (event) => console.error("[Marslink] Worker error:", event.message);
     this.simWorker.postMessage({ type: "init" });
@@ -1359,13 +1359,14 @@ export class SimMain {
     html += `</div>`;
     html += `<div class="metric-details" id="satellites-content" style="display: none;">`;
     if (this.resultTrees && this.resultTrees.length > 0) {
-      // Aggregate by ring type: earth, adapted, mars
-      const groups = { earth: { sats: 0, ports: 0 }, adapted: { sats: 0, ports: 0 }, mars: { sats: 0, ports: 0 } };
+      // Aggregate by ring type: earth, junction, relay (contoured/other), mars
+      const groups = { earth: { sats: 0, ports: 0 }, adapted: { sats: 0, ports: 0 }, jct: { sats: 0, ports: 0 }, mars: { sats: 0, ports: 0 } };
       for (const orbit of this.resultTrees) {
         const rn = orbit.ringName || "";
         const ports = this.simLinkBudget.getMaxLinksPerRing(rn);
         if (rn === "ring_earth") { groups.earth.sats += orbit.satCount; groups.earth.ports = ports; }
         else if (rn === "ring_mars") { groups.mars.sats += orbit.satCount; groups.mars.ports = ports; }
+        else if (rn.startsWith("ring_jct")) { groups.jct.sats += orbit.satCount; groups.jct.ports = ports; }
         else { groups.adapted.sats += orbit.satCount; groups.adapted.ports = ports; }
       }
       // Totals first so per-ring rows can show % of total laser ports.
@@ -1385,7 +1386,8 @@ export class SimMain {
         return `<div class="detail-row"><span class="detail-label">${label} <span style="color:var(--text-3)">${g.ports}p</span></span><span class="detail-value">${pct} · ${g.sats.toLocaleString()}</span></div>`;
       };
       html += ringLabel("Earth ring", groups.earth);
-      html += ringLabel("Adapted rings", groups.adapted);
+      html += ringLabel("Junction rings", groups.jct);
+      html += ringLabel("Contoured rings", groups.adapted);
       html += ringLabel("Mars ring", groups.mars);
 
       const totalFlights = this.resultTrees.reduce((s, o) => s + (o.deploymentFlights_count || 0), 0);
@@ -1441,13 +1443,14 @@ export class SimMain {
 
       // Active relay family (only one is enabled at a time). Drives the ring-count line
       // and the bottleneck label so the card reads correctly for every relay type — for
-      // adapted concentric these resolve to the same "adapted rings" / count as before.
-      const relayRingKeys = Object.keys(ringCapacities).filter((r) => r !== "ring_earth" && r !== "ring_mars");
+      // contoured concentric these resolve to the same "contoured rings" / count as before.
+      // Intermediate junction rings (ring_jct) are NOT relay rings — keep them out.
+      const relayRingKeys = Object.keys(ringCapacities).filter((r) => r !== "ring_earth" && r !== "ring_mars" && !r.startsWith("ring_jct"));
       const relayRingCount = relayRingKeys.length;
       const relayLabel = relayRingKeys.some((r) => r.startsWith("ring_adapt"))
-        ? "adapted concentric rings"
+        ? "contoured concentric rings"
         : relayRingKeys.some((r) => r.startsWith("ring_adecc"))
-        ? "adapted eccentric rings"
+        ? "contoured eccentric rings"
         : relayRingKeys.some((r) => r.startsWith("ring_circ"))
         ? "circular rings"
         : relayRingKeys.some((r) => r.startsWith("ring_ecce"))
@@ -2504,7 +2507,8 @@ export class SimMain {
       if (rn === "ring_earth") key = "Earth ring throughput";
       else if (rn === "ring_mars") key = "Mars ring throughput";
       else if (rn.startsWith("ring_adapt") || rn.startsWith("ring_circ")) key = "Relay ring count / throughput";
-      else if (rn.startsWith("ring_adecc")) key = "Adapted Eccentric rings";
+      else if (rn.startsWith("ring_adecc")) key = "Contoured Eccentric rings";
+      else if (rn.startsWith("ring_jct")) key = "Intermediate junction rings";
       else if (rn.startsWith("ring_ecce")) key = "Eccentric rings";
       else key = "the ring parameters";
       groups[key] = (groups[key] || 0) + (c.satCount || 0);

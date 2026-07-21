@@ -1,6 +1,6 @@
 // simLinkBudget.js
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.53";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.55";
 
 export class SimLinkBudget {
   constructor() {
@@ -150,6 +150,7 @@ export class SimLinkBudget {
     if (!ringName) return this.maxLinksPerSatellite;
     if (ringName === "ring_earth") return this.maxLinksPerRing.ring_earth;
     if (ringName === "ring_mars") return this.maxLinksPerRing.ring_mars;
+    if (ringName.startsWith("ring_jct")) return this.maxLinksPerRing.ring_earth; // Earth-ring clones
     if (ringName.startsWith("ring_circ")) return this.maxLinksPerRing.circular_rings;
     if (ringName.startsWith("ring_adecc")) return this.maxLinksPerRing.adapted_eccentric_rings || this.maxLinksPerSatellite;
     if (ringName.startsWith("ring_ecce")) return this.maxLinksPerRing.eccentric_rings;
