@@ -1,6 +1,6 @@
 // slidersData.js
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.49";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.50";
 
 export const slidersData = {
   display: {
@@ -1157,3 +1157,57 @@ export const slidersData = {
     },
   },
 };
+
+// ─── Slider value mapping (internal slider space ↔ user-facing units) ───
+// Pure functions, shared by the UI and the worker pipeline.
+export function mapSliderValueToUserFacing(slider, sliderValue) {
+  if (slider.scale === "pow2") {
+    return Math.pow(2, sliderValue);
+  } else if (slider.scale === "pow10") {
+    return Math.pow(10, sliderValue);
+  } else if (slider.scale === "signedPow2") {
+    // 0 → 0, +k → +2^(k-1), -k → -2^(k-1)
+    if (sliderValue === 0) return 0;
+    return Math.sign(sliderValue) * Math.pow(2, Math.abs(sliderValue) - 1);
+  } else if (slider.scale === "quadratic") {
+    return Math.round(sliderValue * sliderValue);
+  }
+  return sliderValue;
+}
+export function mapUserFacingToSliderValue(slider, userValue) {
+  if (slider.scale === "pow2") {
+    if (userValue <= 0) return slider.min;
+    return Math.round(Math.log2(userValue));
+  } else if (slider.scale === "pow10") {
+    if (userValue <= 0) return slider.min;
+    // Fractional (not rounded) so the auto-sizer can land on any throughput,
+    // not just exact powers of 10. The slider step snaps user drags.
+    return Math.log10(userValue);
+  } else if (slider.scale === "signedPow2") {
+    if (userValue === 0) return 0;
+    return Math.sign(userValue) * (Math.log2(Math.abs(userValue)) + 1);
+  } else if (slider.scale === "quadratic") {
+    if (userValue <= 0) return 0;
+    return Math.round(Math.sqrt(userValue));
+  }
+  return userValue;
+}
+
+// ─── THE canonical planetary-ring sizing (design decision 2026-07-21) ───
+// ONE function, called from BOTH the live auto-sizer and the sweep pipeline. The
+// canonical order is: (1) assign the relay network and measure its AGGREGATE capacity
+// (ring-intrinsic, junctions excluded); (2) size both planetary rings ONE-SHOT from it —
+// no feedback loop, because the sizing is closed-form: the ring builder guarantees the
+// worst-case (periapsis) in-ring link meets the required rate everywhere on the orbit;
+// (3) junction links are assigned against the sized rings on the next build.
+// Returns the user-facing per-link rate (Mbps): half the aggregate (a planet injects at
+// one gateway, two ways around the ring), ceiled to the next pow10 slider rung so the
+// snapped value can never fall below half-capacity.
+export function planetRingRequiredMbps(relayAggregateMbps) {
+  const sd = slidersData.ring_earth.requiredmbpsbetweensats; // both planet rings share this config
+  const planetMbps = Math.max(1, relayAggregateMbps / 2);
+  const step = parseFloat(sd.step) || 1, min = sd.min ?? 0;
+  const raw = mapUserFacingToSliderValue(sd, planetMbps);
+  const internal = min + Math.ceil((raw - min) / step - 1e-9) * step;
+  return mapSliderValueToUserFacing(sd, internal);
+}

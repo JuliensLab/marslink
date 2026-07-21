@@ -1,11 +1,16 @@
 // simUi.js
-import { slidersData } from "./slidersData.js?v=4.49";
-import { LukashianClock } from "./lukashianTime.js?v=4.49";
-import { wireAuthUi } from "./auth.js?v=4.49";
-import { SensitivityPool } from "./sensitivityPool.js?v=4.49";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.49";
-import { minOf } from "./simMath.js?v=4.49";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.49";
+import {
+  slidersData,
+  planetRingRequiredMbps,
+  mapSliderValueToUserFacing as mapToUserFacing,
+  mapUserFacingToSliderValue as mapToSliderInternal,
+} from "./slidersData.js?v=4.50";
+import { LukashianClock } from "./lukashianTime.js?v=4.50";
+import { wireAuthUi } from "./auth.js?v=4.50";
+import { SensitivityPool } from "./sensitivityPool.js?v=4.50";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.50";
+import { minOf } from "./simMath.js?v=4.50";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.50";
 
 export class SimUi {
   constructor(simMain) {
@@ -787,22 +792,22 @@ export class SimUi {
    * Returns true if it changed the sliders, false if they already matched (idempotent).
    */
   _writePlanetSizing(relayMbps) {
-    const planetMbps = Math.max(1, relayMbps / 2); // relay capacity ÷ 2 (two paths per planet)
+    // THE canonical one-shot sizing (slidersData.planetRingRequiredMbps) — the SAME code
+    // the sweep pipeline (simWorker.runScenario) uses: ½ the relay aggregate, ceiled to
+    // the next pow10 slider rung so the snapped value can never fall below half-capacity.
+    const userMbps = planetRingRequiredMbps(relayMbps);
     const eSd = this.slidersData.ring_earth.requiredmbpsbetweensats;
     const mSd = this.slidersData.ring_mars.requiredmbpsbetweensats;
-    // Round UP to the next slider step (these are log10 axes, so the rungs are ~12%
-    // apart). Rounding to nearest could land a rung BELOW half-capacity, making 2× the
-    // in-ring rate < relay capacity — the planet ring would bottleneck the relay. Ceiling
-    // guarantees 2 × (worst-case in-ring rate) ≥ relay capacity. The 1e-9 epsilon keeps a
-    // value already sitting on a step from being bumped up an extra rung by float noise.
-    const ceilToStep = (sd, mbps) => {
+    // userMbps sits exactly on a rung; map back to the slider's internal space and snap
+    // to the step grid to shed float noise.
+    const toInternal = (sd) => {
       const step = parseFloat(sd.step) || 1;
       const min = sd.min ?? 0;
-      const raw = this.mapUserFacingToSliderValue(sd, mbps);
-      return min + Math.ceil((raw - min) / step - 1e-9) * step;
+      const raw = mapToSliderInternal(sd, userMbps);
+      return min + Math.round((raw - min) / step) * step;
     };
-    const eInt = ceilToStep(eSd, planetMbps);
-    const mInt = ceilToStep(mSd, planetMbps);
+    const eInt = toInternal(eSd);
+    const mInt = toInternal(mSd);
     const eCur = parseFloat(this.sliders.ring_earth?.requiredmbpsbetweensats?.value);
     const mCur = parseFloat(this.sliders.ring_mars?.requiredmbpsbetweensats?.value);
 
@@ -825,12 +830,7 @@ export class SimUi {
    * with the solution being shown. Both planet rings share one slider config.
    */
   _planetRingMbps(relayMbps) {
-    const sd = this.slidersData.ring_earth.requiredmbpsbetweensats;
-    const planetMbps = Math.max(1, relayMbps / 2);
-    const step = parseFloat(sd.step) || 1, min = sd.min ?? 0;
-    const raw = this.mapUserFacingToSliderValue(sd, planetMbps);
-    const internal = min + Math.ceil((raw - min) / step - 1e-9) * step;
-    return this.mapSliderValueToUserFacing(sd, internal);
+    return planetRingRequiredMbps(relayMbps); // the shared canonical rule
   }
 
   /**
@@ -2185,19 +2185,7 @@ export class SimUi {
    * @returns {number} - The mapped user-facing value.
    */
   mapSliderValueToUserFacing(slider, sliderValue = slider.value) {
-    if (slider.scale === "pow2") {
-      return Math.pow(2, sliderValue);
-    } else if (slider.scale === "pow10") {
-      return Math.pow(10, sliderValue);
-    } else if (slider.scale === "signedPow2") {
-      // 0 → 0, +k → +2^(k-1), -k → -2^(k-1)
-      if (sliderValue === 0) return 0;
-      return Math.sign(sliderValue) * Math.pow(2, Math.abs(sliderValue) - 1);
-    } else if (slider.scale === "quadratic") {
-      return Math.round(sliderValue * sliderValue);
-    } else {
-      return sliderValue;
-    }
+    return mapToUserFacing(slider, sliderValue); // shared impl in slidersData.js
   }
 
   /**
@@ -4211,7 +4199,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=4.49");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=4.50");
     let result = null;
     try {
       result = await solveBandDistribution({
@@ -4321,24 +4309,7 @@ export class SimUi {
    * back into the internal slider position.
    */
   mapUserFacingToSliderValue(slider, userValue) {
-    if (slider.scale === "pow2") {
-      if (userValue <= 0) return slider.min;
-      return Math.round(Math.log2(userValue));
-    } else if (slider.scale === "pow10") {
-      if (userValue <= 0) return slider.min;
-      // Fractional (not rounded) so the auto-sizer can land on any throughput,
-      // not just exact powers of 10. The slider step snaps user drags.
-      return Math.log10(userValue);
-    } else if (slider.scale === "signedPow2") {
-      // Inverse of: 0→0, ±k→±2^(k-1). Continuous (no rounding) so the
-      // slider can be dragged smoothly through fractional positions.
-      if (userValue === 0) return 0;
-      return Math.sign(userValue) * (Math.log2(Math.abs(userValue)) + 1);
-    } else if (slider.scale === "quadratic") {
-      if (userValue <= 0) return 0;
-      return Math.round(Math.sqrt(userValue));
-    }
-    return userValue;
+    return mapToSliderInternal(slider, userValue); // shared impl in slidersData.js
   }
 
   clampInternalValue(value, min, max) {

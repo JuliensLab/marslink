@@ -9,14 +9,15 @@
 // Loaded as an ES module worker:
 //   new Worker(new URL("./simWorker.js", import.meta.url), { type: "module" })
 
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.49";
-import { SimSatellites } from "./simSatellites.js?v=4.49";
-import { SimLinkBudget } from "./simLinkBudget.js?v=4.49";
-import { SimNetwork } from "./simNetwork.js?v=4.49";
-import { SimDeployment } from "./simDeployment.js?v=4.49";
-import { SimMissionValidator } from "./simMissionValidator.js?v=4.49";
-import { minOf } from "./simMath.js?v=4.49";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.49";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.50";
+import { SimSatellites } from "./simSatellites.js?v=4.50";
+import { SimLinkBudget } from "./simLinkBudget.js?v=4.50";
+import { SimNetwork } from "./simNetwork.js?v=4.50";
+import { SimDeployment } from "./simDeployment.js?v=4.50";
+import { SimMissionValidator } from "./simMissionValidator.js?v=4.50";
+import { minOf } from "./simMath.js?v=4.50";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.50";
+import { planetRingRequiredMbps } from "./slidersData.js?v=4.50";
 
 // --- State (initialized lazily on the first compute) ---
 let simLinkBudget = null;
@@ -333,64 +334,30 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
     simSatellites.setSatellitesConfig(simSatellites.buildConfigFromUi(uiConfig));
   };
 
-  // 2. Feedback ring-sizing loop (mirrors the old simUi sensitivity loop, but
-  //    bounded: a low iteration cap, a wall-clock budget, and cycle detection so
-  //    a non-converging config can't spin ~100 expensive iterations — each rebuilds
-  //    the full constellation + topology, which both hangs the sweep and grows the
-  //    worker's share of the shared V8 heap cage until the renderer OOMs).
+  // 2. Planetary sizing — THE canonical one-shot (design decision 2026-07-21), the SAME
+  //    code the live auto-sizer calls (slidersData.planetRingRequiredMbps). Canonical
+  //    order: (a) assign the relay network and measure its AGGREGATE capacity on a first
+  //    build (ring-intrinsic relayOnlyThroughput — junctions excluded); (b) size both
+  //    planetary rings one-shot from it — no feedback loop, because the sizing is
+  //    closed-form: the ring builder guarantees the worst-case (periapsis) in-ring link
+  //    meets the required rate everywhere on the orbit; (c) junction links are assigned
+  //    against the sized rings on the rebuild.
   buildAndApply();
-  let iterations = 0;
-  let prevEarthMin = -1, prevMarsMin = -1;
-  const seenStates = new Set();
-  for (let i = 0; i < maxIterations; i++) {
-    iterations = i + 1;
-    if (performance.now() - t0 > sizingBudgetMs) {
-      console.log(`[ScenarioSizing] #${scenarioId} BUDGET-STOP after ${i} update(s), elapsed=${Math.round(performance.now() - t0)}ms of ${sizingBudgetMs}ms`);
-      break; // wall-clock guard
-    }
+  let iterations = 1;
+  {
     const planets = Object.values(simSolarSystem.updatePlanetsPositions(sizeDate));
     const satellites = simSatellites.updateSatellitesPositions(sizeDate);
-    const links = simNetwork.getPossibleLinks(planets, satellites);
+    simNetwork.getPossibleLinks(planets, satellites);
     const rs = simNetwork.routeSummary;
-    // Planetary rings are sized from the RELAY NETWORK AGGREGATE capacity (ring-intrinsic,
-    // junctions excluded — design decision 2026-07-21): sizing to the junction-capped
-    // totalThroughput would shrink the planet rings, and with them the junction candidates.
     const relayAggregate = rs ? (rs.relayOnlyThroughput ?? rs.totalThroughput) : 0;
-    if (!rs || !relayAggregate || relayAggregate <= 0) break;
-    const capInfo = calculateCapacityInfo(links);
-
-    const eInring = capInfo.ringCapacities?.["ring_earth"]?.inring || [];
-    const mInring = capInfo.ringCapacities?.["ring_mars"]?.inring || [];
-    const curEarth = eInring.length ? Math.round(2 * minOf(eInring)) : 0;
-    const curMars = mInring.length ? Math.round(2 * minOf(mInring)) : 0;
-    if (curEarth === prevEarthMin && curMars === prevMarsMin) break; // no-progress (period-1)
-    // Oscillation guard: if we revisit a measured state, the config is cycling
-    // (e.g. A→B→A) and will never settle in the band — stop on the current build.
-    const stateKey = `${curEarth},${curMars}`;
-    if (seenStates.has(stateKey)) break;
-    seenStates.add(stateKey);
-    prevEarthMin = curEarth;
-    prevMarsMin = curMars;
-
-    // _feedbackStep, integer-Mbps form
-    if (eInring.length === 0 || mInring.length === 0) break; // skip
-    const target = relayAggregate;
-    const earthMin = 2 * minOf(eInring);
-    const marsMin = 2 * minOf(mInring);
-    const lo = target * 1.02, hi = target * 1.04;
-    if (earthMin >= lo && earthMin <= hi && marsMin >= lo && marsMin <= hi) break; // converged
-
-    const oldEarth = uiConfig["ring_earth.requiredmbpsbetweensats"];
-    const oldMars = uiConfig["ring_mars.requiredmbpsbetweensats"];
-    const aim = target * 1.03;
-    const newEarth = earthMin > 0 ? Math.max(1, Math.round(oldEarth * aim / earthMin)) : oldEarth;
-    const newMars = marsMin > 0 ? Math.max(1, Math.round(oldMars * aim / marsMin)) : oldMars;
-    console.log(`[ScenarioSizing] #${scenarioId} it=${i} target=${Math.round(target)} earthMin=${Math.round(earthMin)} marsMin=${Math.round(marsMin)} rate E ${Math.round(oldEarth)}->${newEarth} M ${Math.round(oldMars)}->${newMars} elapsed=${Math.round(performance.now() - t0)}ms`);
-    if (newEarth === oldEarth && newMars === oldMars) break; // converged (no slider move)
-
-    uiConfig["ring_earth.requiredmbpsbetweensats"] = newEarth;
-    uiConfig["ring_mars.requiredmbpsbetweensats"] = newMars;
-    buildAndApply(); // rebuild for the next measurement
+    if (relayAggregate > 0) {
+      const rate = planetRingRequiredMbps(relayAggregate);
+      console.log(`[ScenarioSizing] #${scenarioId} one-shot: relayAggregate=${Math.round(relayAggregate)} -> planet rate ${Math.round(rate)} Mbps, elapsed=${Math.round(performance.now() - t0)}ms`);
+      uiConfig["ring_earth.requiredmbpsbetweensats"] = rate;
+      uiConfig["ring_mars.requiredmbpsbetweensats"] = rate;
+      buildAndApply(); // the rebuild the junction links attach against
+      iterations = 2;
+    }
   }
 
   // Fast path for optimizers: the adapted-ring relay capacity (routeSummary
