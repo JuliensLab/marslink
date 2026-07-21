@@ -1,14 +1,14 @@
 // simDisplay-3d.js
 
 import * as THREE from "three";
-import { OrbitControls } from "three/addons/controls/OrbitControls.js?v=4.80";
-import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js?v=4.80";
-import { RenderPass } from "three/addons/postprocessing/RenderPass.js?v=4.80";
-import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js?v=4.80";
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.80";
-import { createCarModel } from "./modelCar.js?v=4.80";
-import { positionFromSolarAngle } from "./simOrbits.js?v=4.80";
-import { stationKeepingAccel, THRUST_BINS, satSchemeT, rampHex, OVER_BUDGET_HEX, isThrustScheme, satStationKeeping, satTotalProp } from "./simStationKeeping.js?v=4.80";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js?v=4.81";
+import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js?v=4.81";
+import { RenderPass } from "three/addons/postprocessing/RenderPass.js?v=4.81";
+import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js?v=4.81";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.81";
+import { createCarModel } from "./modelCar.js?v=4.81";
+import { positionFromSolarAngle } from "./simOrbits.js?v=4.81";
+import { stationKeepingAccel, THRUST_BINS, satSchemeT, rampHex, OVER_BUDGET_HEX, isThrustScheme, satStationKeeping, satTotalProp } from "./simStationKeeping.js?v=4.81";
 
 /**
  * Converts astronomical units (AU) to 3D units using a scale factor.
@@ -17,7 +17,7 @@ import { stationKeepingAccel, THRUST_BINS, satSchemeT, rampHex, OVER_BUDGET_HEX,
  * @returns {number} Distance in 3D units
  */
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.80";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.81";
 
 export let sunScaleFactor = SIM_CONSTANTS.SUN_SCALE_FACTOR;
 export let planetScaleFactor = SIM_CONSTANTS.PLANET_SCALE_FACTOR;
@@ -112,13 +112,14 @@ export class SimDisplay {
     container.appendChild(this.renderer.domElement);
 
     // === Controls Setup ===
-    // Claim left-button drags before OrbitControls sees them: listeners on the
-    // same element fire in registration order, so this handler must be added
-    // ahead of the OrbitControls constructor for stopImmediatePropagation() to
-    // starve it. Plain left-drag rotates about the point where the pointer ray
-    // meets the ecliptic (scene y = 0); shift+left-drag keeps the classic
-    // rotation about the orbit target (the Sun unless panned/flown). Right-drag
-    // pan, ctrl/meta+left pan, wheel fly and touch gestures are untouched.
+    // Claim left- and middle-button drags before OrbitControls sees them:
+    // listeners on the same element fire in registration order, so this handler
+    // must be added ahead of the OrbitControls constructor for
+    // stopImmediatePropagation() to starve it. Plain left, shift+left and
+    // middle drags all rotate about the point where the pointer ray meets the
+    // ecliptic (scene y = 0), falling back to the orbit target when the ray
+    // misses. Right-drag pan, ctrl/meta+left pan, wheel fly and touch gestures
+    // are untouched.
     this._eclipticPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
     this._raycaster = new THREE.Raycaster();
     this._pivotDrag = null;
@@ -1196,19 +1197,22 @@ export class SimDisplay {
   }
 
   /**
-   * Claims plain and shift left-button drags for pivot rotation before
-   * OrbitControls processes them. Plain drag rotates about the pointer's
-   * intersection with the ecliptic plane; shift keeps the classic rotation
-   * about the orbit target. Ctrl/meta+left (pan) and touch fall through.
+   * Claims left-button (plain or shift) and middle-button drags for pivot
+   * rotation before OrbitControls processes them. All three rotate about the
+   * pointer's intersection with the ecliptic plane, falling back to the orbit
+   * target when the ray misses (or hits absurdly far away). Ctrl/meta+left
+   * (pan) and touch fall through.
    *
    * @param {PointerEvent} event - The pointerdown event.
    */
   onPointerDown(event) {
-    if (event.pointerType === "touch" || event.button !== 0) return;
+    if (event.pointerType === "touch" || (event.button !== 0 && event.button !== 1)) return;
     if (event.ctrlKey || event.metaKey || event.altKey) return;
+    // Middle-drag's browser default is autoscroll — suppress it.
+    if (event.button === 1) event.preventDefault();
 
     let pivot = null;
-    if (!event.shiftKey) {
+    {
       const rect = this.renderer.domElement.getBoundingClientRect();
       const ndc = new THREE.Vector2(
         ((event.clientX - rect.left) / rect.width) * 2 - 1,
