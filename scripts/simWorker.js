@@ -9,14 +9,14 @@
 // Loaded as an ES module worker:
 //   new Worker(new URL("./simWorker.js", import.meta.url), { type: "module" })
 
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.48";
-import { SimSatellites } from "./simSatellites.js?v=4.48";
-import { SimLinkBudget } from "./simLinkBudget.js?v=4.48";
-import { SimNetwork } from "./simNetwork.js?v=4.48";
-import { SimDeployment } from "./simDeployment.js?v=4.48";
-import { SimMissionValidator } from "./simMissionValidator.js?v=4.48";
-import { minOf } from "./simMath.js?v=4.48";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.48";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.49";
+import { SimSatellites } from "./simSatellites.js?v=4.49";
+import { SimLinkBudget } from "./simLinkBudget.js?v=4.49";
+import { SimNetwork } from "./simNetwork.js?v=4.49";
+import { SimDeployment } from "./simDeployment.js?v=4.49";
+import { SimMissionValidator } from "./simMissionValidator.js?v=4.49";
+import { minOf } from "./simMath.js?v=4.49";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.49";
 
 // --- State (initialized lazily on the first compute) ---
 let simLinkBudget = null;
@@ -352,7 +352,11 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
     const satellites = simSatellites.updateSatellitesPositions(sizeDate);
     const links = simNetwork.getPossibleLinks(planets, satellites);
     const rs = simNetwork.routeSummary;
-    if (!rs || !rs.totalThroughput || rs.totalThroughput <= 0) break;
+    // Planetary rings are sized from the RELAY NETWORK AGGREGATE capacity (ring-intrinsic,
+    // junctions excluded — design decision 2026-07-21): sizing to the junction-capped
+    // totalThroughput would shrink the planet rings, and with them the junction candidates.
+    const relayAggregate = rs ? (rs.relayOnlyThroughput ?? rs.totalThroughput) : 0;
+    if (!rs || !relayAggregate || relayAggregate <= 0) break;
     const capInfo = calculateCapacityInfo(links);
 
     const eInring = capInfo.ringCapacities?.["ring_earth"]?.inring || [];
@@ -370,7 +374,7 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
 
     // _feedbackStep, integer-Mbps form
     if (eInring.length === 0 || mInring.length === 0) break; // skip
-    const target = rs.totalThroughput;
+    const target = relayAggregate;
     const earthMin = 2 * minOf(eInring);
     const marsMin = 2 * minOf(mInring);
     const lo = target * 1.02, hi = target * 1.04;
