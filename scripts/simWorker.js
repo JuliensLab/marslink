@@ -9,15 +9,15 @@
 // Loaded as an ES module worker:
 //   new Worker(new URL("./simWorker.js", import.meta.url), { type: "module" })
 
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.73";
-import { SimSatellites } from "./simSatellites.js?v=4.73";
-import { SimLinkBudget } from "./simLinkBudget.js?v=4.73";
-import { SimNetwork } from "./simNetwork.js?v=4.73";
-import { SimDeployment } from "./simDeployment.js?v=4.73";
-import { SimMissionValidator } from "./simMissionValidator.js?v=4.73";
-import { minOf } from "./simMath.js?v=4.73";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.73";
-import { planetRingRequiredMbps, earthJunctionIsBottleneck, marsJunctionIsBottleneck } from "./slidersData.js?v=4.73";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.74";
+import { SimSatellites } from "./simSatellites.js?v=4.74";
+import { SimLinkBudget } from "./simLinkBudget.js?v=4.74";
+import { SimNetwork } from "./simNetwork.js?v=4.74";
+import { SimDeployment } from "./simDeployment.js?v=4.74";
+import { SimMissionValidator } from "./simMissionValidator.js?v=4.74";
+import { minOf } from "./simMath.js?v=4.74";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.74";
+import { planetRingRequiredMbps, earthJunctionIsBottleneck, marsJunctionIsBottleneck } from "./slidersData.js?v=4.74";
 
 // --- State (initialized lazily on the first compute) ---
 let simLinkBudget = null;

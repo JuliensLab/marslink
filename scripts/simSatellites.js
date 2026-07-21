@@ -1,7 +1,7 @@
 // simSatellites.js
 
-import { helioCoords, positionFromSolarAngle } from "./simOrbits.js?v=4.73";
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.73";
+import { helioCoords, positionFromSolarAngle } from "./simOrbits.js?v=4.74";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.74";
 
 export class SimSatellites {
   constructor(simLinkBudget, planets) {
@@ -459,6 +459,12 @@ export class SimSatellites {
           argPeri: 0,
           // Repurposed for junction rings: the planet→eccentric plane mix percentage.
           earthMarsInclinationPct: (100 * j) / (k + 1),
+          // Plane endpoints RIDE THE CONFIG: the worker generates satellites from
+          // the config array without running buildConfigFromUi, so instance-stash
+          // endpoints never reach it — its Earth ramps silently overshot to Mars.i
+          // and its Mars ramps collapsed onto Mars's plane (the 0-Mbps Mars
+          // junction). generateSatellites re-stashes this before generating.
+          jctPlane: { i: iMax, iMarsEnd: iMin },
         });
       }
     };
@@ -1363,6 +1369,8 @@ export class SimSatellites {
     // every corridor served as the sats stream through it). No in-ring neighbours —
     // these sats are vertical chain rungs, not an azimuthal transport ring.
     if (ringType == "Junction" || ringType == "JunctionMars") {
+      // Restore the plane endpoints carried on the config — see the builder note.
+      if (config.jctPlane) this._jctPlaneEnd = config.jctPlane;
       const { a, n } = this.getParams_a_n(ringType);
       const orbitdays = 360 / n;
       const longIncrement = 360 / satCount;
