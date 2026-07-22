@@ -1,6 +1,6 @@
 // slidersData.js
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.83";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.84";
 
 export const slidersData = {
   display: {
@@ -1136,26 +1136,26 @@ export const slidersData = {
     "earth-side-clearance-x": {
       label: "Earth-side clearance",
       min: 0,
-      max: 0.1,
+      max: 15000000,
       value: 0,
-      step: 0.001,
-      unit: " AU",
+      step: 10000,
+      unit: " km",
       scale: "linear",
       updateLongTermScore: true,
       description:
-        "Pushes each ring's perihelion this far OUTSIDE Earth's orbit, as a fixed radial gap in AU — an absolute distance, not a multiple of the varying in-ring spacing. 0 = perihelion sits exactly on Earth's orbit (touch). Raise it (e.g. 0.02 AU ≈ 3 million km) so no satellite dips inside Earth's orbit.",
+        "Pushes each ring's perihelion this far OUTSIDE Earth's orbit, as a fixed radial gap in km — an absolute distance, not a multiple of the varying in-ring spacing. 0 = perihelion sits exactly on Earth's orbit (touch). Raise it (e.g. 3,000,000 km ≈ 0.02 AU) so no satellite dips inside Earth's orbit.",
     },
     "mars-side-clearance-x": {
       label: "Mars-side clearance",
       min: 0,
-      max: 0.1,
+      max: 15000000,
       value: 0,
-      step: 0.001,
-      unit: " AU",
+      step: 10000,
+      unit: " km",
       scale: "linear",
       updateLongTermScore: true,
       description:
-        "Pulls each ring's aphelion this far INSIDE Mars's orbit, as a fixed radial gap in AU — an absolute distance, not a multiple of the varying in-ring spacing. 0 = aphelion sits exactly on Mars's orbit (touch). Raise it (e.g. 0.02 AU ≈ 3 million km) so no satellite overshoots Mars's orbit.",
+        "Pulls each ring's aphelion this far INSIDE Mars's orbit, as a fixed radial gap in km — an absolute distance, not a multiple of the varying in-ring spacing. 0 = aphelion sits exactly on Mars's orbit (touch). Raise it (e.g. 3,000,000 km ≈ 0.02 AU) so no satellite overshoots Mars's orbit.",
     },
     "earth-mars-orbit-inclination-pct": {
       label: "Earth vs Mars inclination",

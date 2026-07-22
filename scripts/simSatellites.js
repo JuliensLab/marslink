@@ -1,7 +1,7 @@
 // simSatellites.js
 
-import { helioCoords, positionFromSolarAngle } from "./simOrbits.js?v=4.83";
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.83";
+import { helioCoords, positionFromSolarAngle } from "./simOrbits.js?v=4.84";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.84";
 
 export class SimSatellites {
   constructor(simLinkBudget, planets) {
@@ -279,8 +279,9 @@ export class SimSatellites {
 
     const { M, E } = this._adaptedEccUParams();
     const num = (v, d) => (typeof v === "number" && !Number.isNaN(v) ? v : d);
-    const marsMargin = num(uiConfig["adapted_eccentric_rings.mars-side-clearance-x"], 0); // AU
-    const earthMargin = num(uiConfig["adapted_eccentric_rings.earth-side-clearance-x"], 0); // AU
+    // Clearance sliders are in km; the tangency solve works in AU.
+    const marsMargin = num(uiConfig["adapted_eccentric_rings.mars-side-clearance-x"], 0) / SIM_CONSTANTS.AU_IN_KM;
+    const earthMargin = num(uiConfig["adapted_eccentric_rings.earth-side-clearance-x"], 0) / SIM_CONSTANTS.AU_IN_KM;
 
     const satellitesConfig = [];
     for (let ringId = 0; ringId < ringCount; ringId++) {
@@ -332,8 +333,9 @@ export class SimSatellites {
   // endpoint) and aMin (min a → the FLATTEST plane, the Mars-side ramp endpoint).
   _jctWorstCase(uiConfig) {
     const num = (v, d) => (typeof v === "number" && !Number.isNaN(v) ? v : d);
-    const marsMargin = num(uiConfig["adapted_eccentric_rings.mars-side-clearance-x"], 0);
-    const earthMargin = num(uiConfig["adapted_eccentric_rings.earth-side-clearance-x"], 0);
+    // Clearance sliders are in km; the tangency solve works in AU.
+    const marsMargin = num(uiConfig["adapted_eccentric_rings.mars-side-clearance-x"], 0) / SIM_CONSTANTS.AU_IN_KM;
+    const earthMargin = num(uiConfig["adapted_eccentric_rings.earth-side-clearance-x"], 0) / SIM_CONSTANTS.AU_IN_KM;
     const worstKey = marsMargin + "|" + earthMargin;
     if (!this._jctWorst || this._jctWorst.key !== worstKey) {
       const { M, E } = this._adaptedEccUParams();
@@ -393,8 +395,9 @@ export class SimSatellites {
     // deciding contact (nearest node ± 90°).
     const { M: uM, E: uE } = this._adaptedEccUParams();
     const num2 = (v, d2) => (typeof v === "number" && !Number.isNaN(v) ? v : d2);
-    const mMar = num2(uiConfig["adapted_eccentric_rings.mars-side-clearance-x"], 0);
-    const mEar = num2(uiConfig["adapted_eccentric_rings.earth-side-clearance-x"], 0);
+    // Clearance sliders are in km; the tangency solve works in AU.
+    const mMar = num2(uiConfig["adapted_eccentric_rings.mars-side-clearance-x"], 0) / AU_IN_KM;
+    const mEar = num2(uiConfig["adapted_eccentric_rings.earth-side-clearance-x"], 0) / AU_IN_KM;
     const contacts = eccConfigs.map((c) => {
       const g = this._adaptedEccRingGeometry(c.argPeri, uM, uE, mMar, mEar);
       return { earthDeg: g.contactEarthDeg, marsDeg: g.contactMarsDeg, e: c.eccentricity || 0 };
