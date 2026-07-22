@@ -1,7 +1,7 @@
 // simSatellites.js
 
-import { helioCoords, positionFromSolarAngle } from "./simOrbits.js?v=4.82";
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.82";
+import { helioCoords, positionFromSolarAngle } from "./simOrbits.js?v=4.83";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.83";
 
 export class SimSatellites {
   constructor(simLinkBudget, planets) {
@@ -348,32 +348,35 @@ export class SimSatellites {
     return this._jctWorst;
   }
 
-  // Intermediate junction rings, both sides — CLOSED-FORM sizing (no iteration).
-  // Each side's k rings ride the planet's own orbit with inclination stepped
-  // toward the eccentric family's worst-case plane (the ladder's virtual top
-  // step): Earth ~0 -> i(aWorst) hinged on the Earth-Mars plane-node line;
-  // Mars: Mars.i -> i(aMin) at Mars's own RAAN. Ring j of k sits at j/(k+1).
+  // Intermediate junction rings, both sides — geometry & density only. Each side's
+  // k rings ride the planet's own orbit with inclination stepped toward the
+  // eccentric family's worst-case plane (the ladder's virtual top step): Earth
+  // ~0 -> i(aWorst) hinged on the Earth-Mars plane-node line; Mars: Mars.i ->
+  // i(aMin) at Mars's own RAAN. Ring j of k sits at j/(k+1).
   //
-  // AUTO COUNT (Julien's rule, 2026-07-21): per side, compute at every eccentric
-  // ring's TRUE contact longitude the distance between the planetary ring and the
-  // would-be top ring (the worst-case plane — the ladder step that is computed
-  // but never emitted): D(θ) = r_planet(θ)·sin(Δi_side)·|sin(θ − node)|. The
-  // LONGEST D is the deciding junction — the gap to fill. The target hop is the
-  // eccentric ring's worst-case (periapsis) in-ring spacing d — the distance the
-  // in-ring sizing already guarantees carries the required rate. Then
-  // k = D/d − 2 (his fencepost; hops span D/(k+1)), clamped to the slider range.
+  // COUNTS come from the sliders in BOTH modes. In AUTO they are driven by the
+  // EMPIRICAL growth loop (Julien's rule, 2026-07-22): build the topology, test
+  // each ring's junction bundle against the ring's own two-route capacity (the Y:
+  // both arcs squeeze through one junction — slidersData.junctionDeficits on
+  // routeSummary.ringDetail), and while a side has any shortfall, add one ring to
+  // it and rebuild ONLY the junction stage. Live: simUi.runJunctionSizingStep
+  // (one increment per links-ready). Sweeps: simWorker.runScenario (incremental
+  // applyJunctionStage loop). No analytic count model — the built topology is
+  // the authority (the sampled/closed-form predecessors missed narrow-corridor
+  // shortfalls the capacity card's per-junction min exposed, 2026-07-22).
   //
   // DENSITY: the junction rings take the WIDEST spacing of the two sides at the
-  // deciding contact — max(planet-ring spacing, eccentric-ring spacing at that
-  // tangent). The eccentric spacing at the Earth tangent IS d (periapsis); at the
-  // Mars tangent (apoapsis) it is d·(1−e)/(1+e) (spacing ∝ 1/r for even mean
-  // anomaly). Satellites are spread EVENLY (rotation symmetry keeps every fixed
-  // corridor served as the sats stream through it).
+  // deciding contact (the contact longitude nearest 90° from the plane nodes —
+  // the maximum inclination-driven separation) — max(planet-ring spacing,
+  // eccentric-ring spacing at that tangent). The eccentric spacing at the Earth
+  // tangent IS the periapsis spacing d (its longest). Satellites are spread
+  // EVENLY (rotation symmetry keeps every fixed corridor served as the sats
+  // stream through it).
   _buildIntermediateJunctionRings(uiConfig, eccConfigs) {
     if (!eccConfigs.length) return [];
-    const mode = uiConfig["adapted_eccentric_rings.junction-ring-mode"] || "manual";
-    let kE = Math.round(uiConfig["adapted_eccentric_rings.junction-ring-count"] || 0);
-    let kM = Math.round(uiConfig["adapted_eccentric_rings.junction-ring-count-mars"] || 0);
+    const kE = Math.round(uiConfig["adapted_eccentric_rings.junction-ring-count"] || 0);
+    const kM = Math.round(uiConfig["adapted_eccentric_rings.junction-ring-count-mars"] || 0);
+    if (kE <= 0 && kM <= 0) return [];
     const inclPct = eccConfigs[0].earthMarsInclinationPct;
     const worst = this._jctWorstCase(uiConfig);
     const iMax = this.addInterpolationBias(this.interpolateOrbitalElement(worst.aWorst, "i"), inclPct, "i");
@@ -382,11 +385,12 @@ export class SimSatellites {
 
     const rad = Math.PI / 180;
     const AU_IN_KM = SIM_CONSTANTS.AU_IN_KM;
-    // Target hop d: the eccentric worst-case (periapsis) in-ring spacing — the
-    // link length the in-ring sizing guarantees carries the required rate.
+    // Eccentric periapsis spacing d: the link length the in-ring sizing guarantees
+    // carries the required rate — the density floor on both sides.
     const dKm = this.simLinkBudget.calculateKm((uiConfig["adapted_eccentric_rings.requiredmbpsbetweensats"] || 1) / 1000);
 
-    // True contact longitudes + local geometry per eccentric ring.
+    // True contact longitudes per eccentric ring; density is measured at the
+    // deciding contact (nearest node ± 90°).
     const { M: uM, E: uE } = this._adaptedEccUParams();
     const num2 = (v, d2) => (typeof v === "number" && !Number.isNaN(v) ? v : d2);
     const mMar = num2(uiConfig["adapted_eccentric_rings.mars-side-clearance-x"], 0);
@@ -399,105 +403,17 @@ export class SimSatellites {
       (planet.a * (1 - planet.e * planet.e)) / (1 + planet.e * Math.cos((thetaDeg - planet.p) * rad)) * AU_IN_KM;
     const norm = (x) => ((x % 360) + 360) % 360;
     const angDist = (a, b) => Math.abs(((a - b + 540) % 360) - 180);
-    const maxDistKm = (uiConfig["simulation.maxDistanceAU"] || 1) * AU_IN_KM;
-    const demandMbps = 2 * (uiConfig["adapted_eccentric_rings.requiredmbpsbetweensats"] || 0);
-    const sliderMax = 8;
-
-    // AUTO COUNT — sampled worst-junction evaluation (Julien's rule, 2026-07-21):
-    //   1. The deciding junction = the contact longitude closest to 90° from the
-    //      plane nodes (maximum inclination-driven separation). Only it is solved;
-    //      every other junction is less constrained and accepts the same count.
-    //   2. Its corridor = the midpoints to the neighbouring contacts.
-    //   3. Starting at 0 rings, estimate the junction bundle: sample ~10 chain
-    //      capacities per flank, equally spaced from the tangent to the corridor
-    //      edge, and project the mean onto the actual number of link opportunities
-    //      (corridor width / junction-ring spacing). Increment the ring count
-    //      until the bundle meets the ring's two-arc demand (2× the in-ring rate)
-    //      or the slider max. Chain model (rung verified exact against built
-    //      topologies): rung = one plane step about the node axis; top hop = the
-    //      residual step to the deciding ring's own plane plus the radial
-    //      lift-off φ²/2·|1/p_planet − 1/p_ring|; a chain is its longest hop.
-    const SAMPLES = 10;
-    const evalSide = (planet, nodeLon, marsSide, iEnd, spacingDegOf) => {
-      // 1. Deciding contact: nearest to node ± 90°.
+    const decidingTheta = (marsSide, nodeLon) => {
       let di = 0, bestD = Infinity;
       contacts.forEach((ct, i2) => {
         const t = marsSide ? ct.marsDeg : ct.earthDeg;
         const d2 = Math.min(angDist(t, nodeLon + 90), angDist(t, nodeLon + 270));
         if (d2 < bestD) { bestD = d2; di = i2; }
       });
-      const theta = norm(marsSide ? contacts[di].marsDeg : contacts[di].earthDeg);
-      const decRing = eccConfigs[di];
-      const iEcc = this.addInterpolationBias(this.interpolateOrbitalElement(decRing.satDistanceSun, "i"), inclPct, "i");
-      const pRing = (decRing.satDistanceSun || planet.a) * (1 - (decRing.eccentricity || 0) ** 2);
-      const pPlanet = planet.a * (1 - planet.e * planet.e);
-      const rKm = rPlanetKm(planet, theta);
-      const spacingDeg = spacingDegOf(rKm);
-      // 2. Corridor: midpoints to the circular neighbours (single ring → ±180°).
-      let halfLo = 180, halfHi = 180;
-      if (contacts.length > 1) {
-        let below = Infinity, above = Infinity;
-        contacts.forEach((ct, i2) => {
-          if (i2 === di) return;
-          const t = norm(marsSide ? ct.marsDeg : ct.earthDeg);
-          const fwd = norm(t - theta);
-          if (fwd > 0 && fwd < above) above = fwd;
-          const back = norm(theta - t);
-          if (back > 0 && back < below) below = back;
-        });
-        halfHi = (isFinite(above) ? above : 360) / 2;
-        halfLo = (isFinite(below) ? below : 360) / 2;
-      }
-      // Chain capacity at offset φ with k rings.
-      const iPlanet = marsSide ? this.Mars.i : this.Earth.i;
-      const iEndRel = Math.abs(iEnd - iPlanet);
-      const cap = (phiDeg, k) => {
-        const sinNode = Math.abs(Math.sin((theta + phiDeg - nodeLon) * rad));
-        const stepI = iEndRel / (k + 1);
-        const iTop = iPlanet + Math.sign(iEnd - iPlanet) * stepI * k;
-        const rungKm = k > 0 ? rKm * Math.sin(stepI * rad) * sinNode : 0;
-        const topVertKm = rKm * Math.sin(Math.abs(iEcc - iTop) * rad) * sinNode;
-        const drKm = ((phiDeg * rad) ** 2 / 2) * Math.abs(1 / pPlanet - 1 / pRing) * planet.a * AU_IN_KM;
-        const topKm = Math.hypot(topVertKm, drKm);
-        const worstKm = Math.max(1000, rungKm, topKm);
-        if (worstKm > maxDistKm) return 0; // beyond link reach
-        return this.calculateGbps(worstKm) * 1000;
-      };
-      // 3. Grow k until the projected bundle meets the demand.
-      let k = 0;
-      for (; k < sliderMax; k++) {
-        let total = 0;
-        for (const [half, sign] of [[halfHi, 1], [halfLo, -1]]) {
-          const opportunities = Math.floor(half / Math.max(1e-6, spacingDeg));
-          if (!opportunities) continue;
-          let sum = 0;
-          for (let s2 = 0; s2 < SAMPLES; s2++) sum += cap(((s2 + 0.5) / SAMPLES) * half * sign, k);
-          total += (sum / SAMPLES) * opportunities;
-        }
-        if (total >= demandMbps) break;
-      }
-      return { k, theta, e: decRing.e || contacts[di].e };
+      return norm(marsSide ? contacts[di].marsDeg : contacts[di].earthDeg);
     };
-
-    // Junction-ring spacing (step 0): the WIDEST of the planet ring's spacing and
-    // the eccentric ring's periapsis spacing (its longest), in degrees locally.
-    const spacingDegFor = (planet) => {
-      const tpl = this._buildPlanetRing(uiConfig, planet === this.Earth ? "ring_earth" : "ring_mars")[0];
-      const planetSpacingDeg = tpl && tpl.satCount > 0 ? (tpl.sideExtensionDeg || 180) / Math.max(1, Math.ceil(tpl.satCount / 2)) : 360;
-      return (rKm) => Math.max(planetSpacingDeg, (dKm / (2 * Math.PI * rKm)) * 360);
-    };
-    const spacingE = spacingDegFor(this.Earth);
-    const spacingM = spacingDegFor(this.Mars);
-    const gapE = evalSide(this.Earth, this._planeNodeLon(), false, iMax, spacingE);
-    const gapM = evalSide(this.Mars, this.Mars.o, true, iMin, spacingM);
-    if (mode === "auto") {
-      kE = gapE.k;
-      kM = gapM.k;
-      // Reflect the computed counts so archives/sizedConfig record what was built.
-      uiConfig["adapted_eccentric_rings.junction-ring-count"] = kE;
-      uiConfig["adapted_eccentric_rings.junction-ring-count-mars"] = kM;
-    }
-    if (kE <= 0 && kM <= 0) return [];
+    const gapE = { theta: decidingTheta(false, this._planeNodeLon()) };
+    const gapM = { theta: decidingTheta(true, this.Mars.o) };
 
     const out = [];
     const buildSide = (k, planet, planetEnabled, gap, eccTangentSpacingKm, ringPrefix, ringType) => {

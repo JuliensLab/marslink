@@ -2,15 +2,16 @@
 import {
   slidersData,
   planetRingRequiredMbps,
+  junctionDeficits,
   mapSliderValueToUserFacing as mapToUserFacing,
   mapUserFacingToSliderValue as mapToSliderInternal,
-} from "./slidersData.js?v=4.82";
-import { LukashianClock } from "./lukashianTime.js?v=4.82";
-import { wireAuthUi } from "./auth.js?v=4.82";
-import { SensitivityPool } from "./sensitivityPool.js?v=4.82";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.82";
-import { minOf } from "./simMath.js?v=4.82";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.82";
+} from "./slidersData.js?v=4.83";
+import { LukashianClock } from "./lukashianTime.js?v=4.83";
+import { wireAuthUi } from "./auth.js?v=4.83";
+import { SensitivityPool } from "./sensitivityPool.js?v=4.83";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.83";
+import { minOf } from "./simMath.js?v=4.83";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.83";
 
 export class SimUi {
   constructor(simMain) {
@@ -772,17 +773,82 @@ export class SimUi {
     // switching to auto). The auto-write below does NOT re-arm, so it can't loop. Without
     // this gate, sizing on every links-ready chases the geometry-driven relay drift while
     // time runs (each write re-dirties the window, the clock advances, the relay shifts).
-    if (this._planetSizingMode() !== "auto" || !this._planetSizeArmed) return;
+    // Returns true when it wrote sliders (a rebuild is coming) so the junction step
+    // (runJunctionSizingStep) can skip evaluating the about-to-be-stale result.
+    if (this._planetSizingMode() !== "auto" || !this._planetSizeArmed) return false;
 
     const rs = this.simMain?.routeSummary;
-    if (!rs || !(rs.totalThroughput > 0)) return; // capacity not ready → stay armed, retry next
+    if (!rs || !(rs.totalThroughput > 0)) return false; // capacity not ready → stay armed, retry next
     this._planetSizeArmed = false;                // consume the arm: one re-size per design change
     // Relay-intrinsic capacity (planet hops excluded): sizing from the end-to-end number
     // fed the previous planet-ring size back into the next sizing — the satCount
     // "hysteresis" at fixed ring count. Fallback covers stale worker payloads.
-    this._writePlanetSizing(rs.relayOnlyThroughput ?? rs.totalThroughput);
-    // Junction rings need no step here: auto sizing is closed-form inside the
-    // config build, so the sizing rebuild above already carries the right counts.
+    const wrote = this._writePlanetSizing(rs.relayOnlyThroughput ?? rs.totalThroughput);
+    // Junction rings (auto): a design change restarts the empirical growth from 0 —
+    // runJunctionSizingStep regrows them on the following links-ready results.
+    const reset = this._jctAutoActive() ? this._writeJunctionCounts(0, 0) : false;
+    return wrote || reset;
+  }
+
+  /** Contoured-eccentric family active AND the junction-ring mode set to 'auto'. */
+  _jctAutoActive() {
+    if (this.getSelectedRelayType?.() !== "Contoured eccentric") return false;
+    return (this.slidersData.adapted_eccentric_rings?.["junction-ring-mode"]?.value || "manual") === "auto";
+  }
+
+  /**
+   * Auto junction-ring growth (Contoured eccentric) — EMPIRICAL, one increment per
+   * links-ready. Reads the live topology's per-ring junction bundles (routeSummary
+   * .ringDetail) against each ring's own two-route capacity (the Y: both arcs
+   * squeeze through one junction — the shared slidersData.junctionDeficits test);
+   * if a side has any shortfall, adds ONE ring to it and rebuilds. Race-free: the
+   * stale-epoch drop in handleWorkerMessage guarantees every evaluation sees the
+   * fleet built from the counts it set, and increments are monotone, so the loop
+   * settles (all junctions pass) or stops at the slider max. Counts reset to 0
+   * whenever the planet sizing re-arms (a design change) — see runPlanetSizingStep.
+   *
+   * @param planetWroteThisRound  true when runPlanetSizingStep just wrote sliders —
+   *                              the current routeSummary predates that rebuild.
+   */
+  runJunctionSizingStep(planetWroteThisRound) {
+    if (planetWroteThisRound || this._planetSizeArmed) return; // resize pending — wait for its result
+    if (!this._jctAutoActive()) return;
+    const rd = this.simMain?.routeSummary?.ringDetail;
+    if (!Array.isArray(rd) || !rd.length) return;
+    const fail = junctionDeficits(rd);
+    if (!fail.earth && !fail.mars) return;
+    const sd = this.slidersData.adapted_eccentric_rings || {};
+    const maxK = (sd["junction-ring-count"] && sd["junction-ring-count"].max) || 8;
+    const cur = (k) => {
+      const v = Math.round(parseFloat(this.sliders.adapted_eccentric_rings?.[k]?.value));
+      return Number.isFinite(v) ? v : 0;
+    };
+    const kE = cur("junction-ring-count"), kM = cur("junction-ring-count-mars");
+    const nE = fail.earth && kE < maxK ? kE + 1 : kE;
+    const nM = fail.mars && kM < maxK ? kM + 1 : kM;
+    if (nE === kE && nM === kM) return; // failing side(s) already at max — settle
+    console.log(`[JunctionSizing] junction shortfall (E:${fail.earth} M:${fail.mars}) -> rings E${nE}/M${nM}`);
+    this._writeJunctionCounts(nE, nM);
+  }
+
+  /**
+   * Idempotent write of the junction-ring count sliders through applySliderValues
+   * (dispatches change events, so updateValues persists + rebuilds — the junction
+   * count cases sit BELOW the _planetSizeArmed assignments in the updateValues
+   * fall-through, so these writes never re-arm the planet sizing).
+   * Returns true if anything changed.
+   */
+  _writeJunctionCounts(kE, kM) {
+    const cur = (k) => {
+      const v = Math.round(parseFloat(this.sliders.adapted_eccentric_rings?.[k]?.value));
+      return Number.isFinite(v) ? v : 0;
+    };
+    const w = {};
+    if (Number.isFinite(kE) && kE !== cur("junction-ring-count")) w["adapted_eccentric_rings.junction-ring-count"] = kE;
+    if (Number.isFinite(kM) && kM !== cur("junction-ring-count-mars")) w["adapted_eccentric_rings.junction-ring-count-mars"] = kM;
+    if (!Object.keys(w).length) return false;
+    this.applySliderValues(w);
+    return true;
   }
 
   /**
@@ -4232,7 +4298,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=4.82");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=4.83");
     let result = null;
     try {
       result = await solveBandDistribution({
@@ -4510,7 +4576,10 @@ export class SimUi {
         case "adapted_eccentric_rings.earth-side-clearance-x":
         case "adapted_eccentric_rings.mars-side-clearance-x":
         case "adapted_eccentric_rings.junction-ring-mode":
-          // Auto sizing is closed-form inside the config build — just rebuild.
+          // Switching TO auto restarts the empirical growth from 0 (display-only write —
+          // the fall-through rebuild below reads the zeroed sliders; the growth then
+          // re-increments on each links-ready via runJunctionSizingStep).
+          if (newValue === "auto") this.syncJunctionSliderDisplays(0, 0);
         // falls through to the shared relay rebuild below
         case "adapted_eccentric_rings.earth-mars-orbit-inclination-pct":
         case "adapted_eccentric_rings.junction-ring-count":

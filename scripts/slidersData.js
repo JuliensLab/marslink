@@ -1,6 +1,6 @@
 // slidersData.js
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.82";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.83";
 
 export const slidersData = {
   display: {
@@ -1260,36 +1260,23 @@ export function planetRingRequiredMbps(relayAggregateMbps) {
   return mapSliderValueToUserFacing(sd, internal);
 }
 
-// Auto junction-ring sizing (Contoured eccentric) — THE shared bottleneck test,
-// used by both the live step (simUi.runJunctionSizingStep) and the sweep pipeline
-// (simWorker.runScenario). True when the EARTH-side junction binds the deliverable:
-// the per-ring chain min improves materially (>2%) when the Earth junction is
-// ignored, so adding an intermediate junction ring can relieve it. Mars-side or
-// in-ring bottlenecks return false — more Earth ramp rings cannot help those.
-export function earthJunctionIsBottleneck(ringDetail) {
-  if (!Array.isArray(ringDetail) || !ringDetail.length) return false;
-  let capped = 0, cappedNoEarth = 0;
+// Auto junction-ring sizing (Contoured eccentric) — THE shared sufficiency test
+// (Julien's rule, 2026-07-22), used by both the live step (simUi.runJunctionSizingStep)
+// and the sweep pipeline (simWorker.runScenario). Per ring, the junction is a Y: the
+// ring's TWO routes (routesMbps — the combined two-arc capacity between the attachment
+// anchors) squeeze through ONE junction bundle. A side FAILS if any connecting ring's
+// junction bundle (ringDetail earth/mars.mbps, from the BUILT topology) is below its own
+// two-route capacity. The sizer grows the failing side's junction-ring count and
+// rebuilds only the junction stage until both sides pass or the slider max is hit.
+export function junctionDeficits(ringDetail) {
+  const out = { earth: false, mars: false };
+  if (!Array.isArray(ringDetail)) return out;
   for (const d of ringDetail) {
-    const arcs = d.routesMbps || 0;
-    const e = d.earth && isFinite(d.earth.mbps) ? d.earth.mbps : Infinity;
-    const m = d.mars && isFinite(d.mars.mbps) ? d.mars.mbps : Infinity;
-    capped += Math.min(arcs, e, m);
-    cappedNoEarth += Math.min(arcs, m);
+    const demand = (d.routesMbps || 0) - 1e-6; // epsilon: capacities are float sums
+    if (demand <= 0) continue;
+    if (((d.earth && d.earth.mbps) || 0) < demand) out.earth = true;
+    if (((d.mars && d.mars.mbps) || 0) < demand) out.mars = true;
+    if (out.earth && out.mars) break;
   }
-  return capped < cappedNoEarth * 0.98;
-}
-
-// Mars-side mirror of earthJunctionIsBottleneck: true when the MARS junction binds
-// the deliverable, so adding a Mars-side intermediate junction ring can relieve it.
-export function marsJunctionIsBottleneck(ringDetail) {
-  if (!Array.isArray(ringDetail) || !ringDetail.length) return false;
-  let capped = 0, cappedNoMars = 0;
-  for (const d of ringDetail) {
-    const arcs = d.routesMbps || 0;
-    const e = d.earth && isFinite(d.earth.mbps) ? d.earth.mbps : Infinity;
-    const m = d.mars && isFinite(d.mars.mbps) ? d.mars.mbps : Infinity;
-    capped += Math.min(arcs, e, m);
-    cappedNoMars += Math.min(arcs, e);
-  }
-  return capped < cappedNoMars * 0.98;
+  return out;
 }

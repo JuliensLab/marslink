@@ -1,23 +1,23 @@
 // simMain.js
 
-import { SimUi } from "./simUi.js?v=4.82";
-import { SimTime } from "./simTime.js?v=4.82";
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.82";
-import { SimSatellites } from "./simSatellites.js?v=4.82";
-import { SimDeployment } from "./simDeployment.js?v=4.82";
-import { SimMissionValidator } from "./simMissionValidator.js?v=4.82";
-import { SimLinkBudget } from "./simLinkBudget.js?v=4.82";
-import { SimNetwork } from "./simNetwork.js?v=4.82";
+import { SimUi } from "./simUi.js?v=4.83";
+import { SimTime } from "./simTime.js?v=4.83";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.83";
+import { SimSatellites } from "./simSatellites.js?v=4.83";
+import { SimDeployment } from "./simDeployment.js?v=4.83";
+import { SimMissionValidator } from "./simMissionValidator.js?v=4.83";
+import { SimLinkBudget } from "./simLinkBudget.js?v=4.83";
+import { SimNetwork } from "./simNetwork.js?v=4.83";
 // Import both SimDisplay implementations with unique names
-import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=4.82";
-import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=4.82";
-import { generateReport } from "./reportGenerator.js?v=4.82";
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.82";
-import { minOf, maxOf } from "./simMath.js?v=4.82";
-import { SimFlightController } from "./simFlightController.js?v=4.82";
-import { SimProbeController } from "./simProbeController.js?v=4.82";
-import { findDepartureWindows } from "./simTransfer.js?v=4.82";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.82";
+import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=4.83";
+import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=4.83";
+import { generateReport } from "./reportGenerator.js?v=4.83";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.83";
+import { minOf, maxOf } from "./simMath.js?v=4.83";
+import { SimFlightController } from "./simFlightController.js?v=4.83";
+import { SimProbeController } from "./simProbeController.js?v=4.83";
+import { findDepartureWindows } from "./simTransfer.js?v=4.83";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.83";
 
 export class SimMain {
   // Clamp argument to [-1, 1] to prevent NaN from Math.asin domain errors
@@ -70,7 +70,7 @@ export class SimMain {
     if (typeof window !== "undefined") window.simMain = this;
 
     // --- Worker + triple-buffered window cache (-1/0/+1) ---
-    this.simWorker = new Worker(new URL("./simWorker.js?v=4.82", import.meta.url), { type: "module" });
+    this.simWorker = new Worker(new URL("./simWorker.js?v=4.83", import.meta.url), { type: "module" });
     this.simWorker.onmessage = (event) => this.handleWorkerMessage(event);
     this.simWorker.onerror = (event) => console.error("[Marslink] Worker error:", event.message);
     this.simWorker.postMessage({ type: "init" });
@@ -381,17 +381,11 @@ export class SimMain {
     this.simSatellites.setMaxSatCount(uiConfig["simulation.maxSatCount"]);
 
     // Array shape is built by SimSatellites (shared with the parallel sensitivity
-    // worker) so the live path and batch path can never drift.
-    satellitesConfig.push(...this.simSatellites.buildConfigFromUi(uiConfig));
-    // Auto junction sizing mutates uiConfig with the computed ring counts —
-    // reflect them on the (disabled) sliders so the UI shows what was built.
-    if (uiConfig["adapted_eccentric_rings.junction-ring-mode"] === "auto" && this.ui?.syncJunctionSliderDisplays) {
-      this.ui.syncJunctionSliderDisplays(
-        uiConfig["adapted_eccentric_rings.junction-ring-count"],
-        uiConfig["adapted_eccentric_rings.junction-ring-count-mars"]
-      );
-    }
+    // worker) so the live path and batch path can never drift. Junction-ring counts
+    // are read straight from uiConfig (the empirical auto growth drives the sliders
+    // themselves — see simUi.runJunctionSizingStep), so no post-build sync is needed.
 
+    satellitesConfig.push(...this.simSatellites.buildConfigFromUi(uiConfig));
     this.newSatellitesConfig = satellitesConfig;
   }
 
@@ -2346,7 +2340,12 @@ export class SimMain {
         // Earth/Mars auto-size: size each planet ring's worst-case in-ring rate to half
         // the live relay capacity (the Capacity card number). Fires on the earlier
         // links-ready path so the user sees the correction without waiting for the flow.
-        if (this.ui?.runPlanetSizingStep) this.ui.runPlanetSizingStep();
+        // Then the junction growth step (auto mode): one increment per links-ready,
+        // skipped when the planet step just wrote (that result is about to be stale).
+        if (this.ui?.runPlanetSizingStep) {
+          const planetWrote = this.ui.runPlanetSizingStep() === true;
+          if (this.ui.runJunctionSizingStep) this.ui.runJunctionSizingStep(planetWrote);
+        }
         if (typeof msg.satellitesCount === "number") this.satellitesCount = msg.satellitesCount;
         if (this.simDisplay) {
           this.simDisplay.updatePossibleLinks(msg.possibleLinks || []);

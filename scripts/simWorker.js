@@ -9,15 +9,15 @@
 // Loaded as an ES module worker:
 //   new Worker(new URL("./simWorker.js", import.meta.url), { type: "module" })
 
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.82";
-import { SimSatellites } from "./simSatellites.js?v=4.82";
-import { SimLinkBudget } from "./simLinkBudget.js?v=4.82";
-import { SimNetwork } from "./simNetwork.js?v=4.82";
-import { SimDeployment } from "./simDeployment.js?v=4.82";
-import { SimMissionValidator } from "./simMissionValidator.js?v=4.82";
-import { minOf } from "./simMath.js?v=4.82";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.82";
-import { planetRingRequiredMbps } from "./slidersData.js?v=4.82";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.83";
+import { SimSatellites } from "./simSatellites.js?v=4.83";
+import { SimLinkBudget } from "./simLinkBudget.js?v=4.83";
+import { SimNetwork } from "./simNetwork.js?v=4.83";
+import { SimDeployment } from "./simDeployment.js?v=4.83";
+import { SimMissionValidator } from "./simMissionValidator.js?v=4.83";
+import { minOf } from "./simMath.js?v=4.83";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.83";
+import { planetRingRequiredMbps, junctionDeficits } from "./slidersData.js?v=4.83";
 
 // --- State (initialized lazily on the first compute) ---
 let simLinkBudget = null;
@@ -337,6 +337,18 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
     simSatellites.setSatellitesConfig(simSatellites.buildConfigFromUi(uiConfig));
   };
 
+  // Auto junction rings (Contoured eccentric): sizing is EMPIRICAL — measure the
+  // built topology, grow the failing side (step 2b below). Start every scenario
+  // from 0/0 so the planetary sizing measures a junction-free base and the
+  // growth is deterministic. Manual mode keeps the configured counts.
+  const jctAuto =
+    uiConfig["adapted_eccentric_rings.junction-ring-mode"] === "auto" &&
+    uiConfig["relay_type.selected"] === "Contoured eccentric";
+  if (jctAuto) {
+    uiConfig["adapted_eccentric_rings.junction-ring-count"] = 0;
+    uiConfig["adapted_eccentric_rings.junction-ring-count-mars"] = 0;
+  }
+
   // 2. Planetary sizing — THE canonical one-shot (design decision 2026-07-21), the SAME
   //    code the live auto-sizer calls (slidersData.planetRingRequiredMbps). Canonical
   //    order: (a) assign the relay network and measure its AGGREGATE capacity on a first
@@ -344,9 +356,8 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
   //    planetary rings one-shot from it — no feedback loop, because the sizing is
   //    closed-form: the ring builder guarantees the worst-case (periapsis) in-ring link
   //    meets the required rate everywhere on the orbit; (c) junction links are assigned
-  //    against the sized rings on the rebuild. Auto junction-ring counts are CLOSED-FORM
-  //    inside buildConfigFromUi (sampled worst-junction evaluation), so the sized rebuild
-  //    already carries the right junction rings — no growth iteration is needed.
+  //    against the sized rings on the rebuild (auto junction-ring counts grow
+  //    empirically in step 2b, on the junction stage only).
   buildAndApply();
   let iterations = 1;
   {
@@ -406,6 +417,47 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
       iterations,
       totalMs: Math.round(performance.now() - t0),
     };
+  }
+
+  // 2b. Auto junction-ring growth — EMPIRICAL (Julien's rule, 2026-07-22): measure
+  //     each ring's junction bundle against its own two-route capacity on the BUILT
+  //     topology (the shared slidersData.junctionDeficits test); while a side has
+  //     any shortfall, add one ring to it and re-run ONLY the junction stage — the
+  //     base topology (relay + planetary rings and all their links) is built once
+  //     and reused. Junction rings regenerate per step (they re-space at j/(k+1))
+  //     via a scratch SimSatellites; they are the cheap part.
+  if (jctAuto) {
+    const MAX_JCT = 8; // matches the junction-ring-count slider max
+    const planets = Object.values(simSolarSystem.updatePlanetsPositions(sizeDate));
+    const baseSats = simSatellites.updateSatellitesPositions(sizeDate); // fleet is k=0 here
+    const ctx = simNetwork.prepareBaseTopology(planets, baseSats);
+    const scratch = new SimSatellites(simLinkBudget, simSolarSystem.getSolarSystemData().planets);
+    scratch.setMaxSatCount(uiConfig["simulation.maxSatCount"]);
+    const jctSatsFor = () => {
+      const cfgs = scratch.buildConfigFromUi(uiConfig).filter((c) => (c.ringName || "").startsWith("ring_jct"));
+      scratch.setSatellitesConfig(cfgs);
+      return scratch.updateSatellitesPositions(sizeDate);
+    };
+    let kE = 0, kM = 0;
+    let rs = simNetwork.applyJunctionStage(ctx, []);
+    for (;;) {
+      const fail = junctionDeficits(rs && rs.ringDetail);
+      const eGrow = fail.earth && kE < MAX_JCT;
+      const mGrow = fail.mars && kM < MAX_JCT;
+      if (!eGrow && !mGrow) break;
+      if (eGrow) kE++;
+      if (mGrow) kM++;
+      uiConfig["adapted_eccentric_rings.junction-ring-count"] = kE;
+      uiConfig["adapted_eccentric_rings.junction-ring-count-mars"] = kM;
+      simNetwork.revertJunctionStage(ctx);
+      rs = simNetwork.applyJunctionStage(ctx, jctSatsFor());
+      iterations++;
+      console.log(`[ScenarioSizing] #${scenarioId} junction shortfall -> rings E${kE}/M${kM} (incremental, ${Math.round(performance.now() - t0)}ms)`);
+    }
+    // One full fleet build with the settled counts so the final compute (step 3, at
+    // the scenario's own date) sees the real constellation. 0/0 needs nothing —
+    // the fleet already matches.
+    if (kE > 0 || kM > 0) buildAndApply();
   }
 
   // 3. Final scenario compute (mirrors SimMain.longTermRun for a single date).
