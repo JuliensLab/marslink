@@ -21,5 +21,5 @@ export const SIM_CONSTANTS = {
   // Display constants
   SUN_SCALE_FACTOR: 1,
   PLANET_SCALE_FACTOR: 1,
-  SATELLITE_SCALE_FACTOR: 1,
+  SATELLITE_SCALE_FACTOR: 0.1, // 1x on the size slider = 1/10 of the pre-2026-07-22 size
 };

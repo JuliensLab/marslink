@@ -1,14 +1,14 @@
 // simDisplay-3d.js
 
 import * as THREE from "three";
-import { OrbitControls } from "three/addons/controls/OrbitControls.js?v=4.84";
-import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js?v=4.84";
-import { RenderPass } from "three/addons/postprocessing/RenderPass.js?v=4.84";
-import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js?v=4.84";
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.84";
-import { createCarModel } from "./modelCar.js?v=4.84";
-import { positionFromSolarAngle } from "./simOrbits.js?v=4.84";
-import { stationKeepingAccel, THRUST_BINS, satSchemeT, rampHex, OVER_BUDGET_HEX, isThrustScheme, satStationKeeping, satTotalProp } from "./simStationKeeping.js?v=4.84";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js?v=4.85";
+import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js?v=4.85";
+import { RenderPass } from "three/addons/postprocessing/RenderPass.js?v=4.85";
+import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js?v=4.85";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.85";
+import { createCarModel } from "./modelCar.js?v=4.85";
+import { positionFromSolarAngle } from "./simOrbits.js?v=4.85";
+import { stationKeepingAccel, THRUST_BINS, satSchemeT, rampHex, OVER_BUDGET_HEX, isThrustScheme, satStationKeeping, satTotalProp } from "./simStationKeeping.js?v=4.85";
 
 /**
  * Converts astronomical units (AU) to 3D units using a scale factor.
@@ -17,7 +17,7 @@ import { stationKeepingAccel, THRUST_BINS, satSchemeT, rampHex, OVER_BUDGET_HEX,
  * @returns {number} Distance in 3D units
  */
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.84";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.85";
 
 export let sunScaleFactor = SIM_CONSTANTS.SUN_SCALE_FACTOR;
 export let planetScaleFactor = SIM_CONSTANTS.PLANET_SCALE_FACTOR;
@@ -58,7 +58,7 @@ export class SimDisplay {
     this.planetSizeFactor = 1;
     this.roadsterSizeFactor = 1;
     this.satelliteSizeFactor = 1;
-    this.currentSatelliteScale = 100; // Default scale to make satellites visible initially
+    this.currentSatelliteScale = 10; // Default scale to make satellites visible initially
     this.satelliteColorMode = "Zone"; // Default color mode
     this.satPhysics = null; // ringName -> { dryMass, nRing, skPropRing, aThreshold, ports }
     this.skCfg = { F: 0.17, tm: 15, maxN: 64, n: 5, isp: 2500, capacity: 1500 };
