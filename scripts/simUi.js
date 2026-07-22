@@ -5,13 +5,13 @@ import {
   junctionDeficits,
   mapSliderValueToUserFacing as mapToUserFacing,
   mapUserFacingToSliderValue as mapToSliderInternal,
-} from "./slidersData.js?v=4.86";
-import { LukashianClock } from "./lukashianTime.js?v=4.86";
-import { wireAuthUi } from "./auth.js?v=4.86";
-import { SensitivityPool } from "./sensitivityPool.js?v=4.86";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.86";
-import { minOf } from "./simMath.js?v=4.86";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.86";
+} from "./slidersData.js?v=4.87";
+import { LukashianClock } from "./lukashianTime.js?v=4.87";
+import { wireAuthUi } from "./auth.js?v=4.87";
+import { SensitivityPool } from "./sensitivityPool.js?v=4.87";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.87";
+import { minOf } from "./simMath.js?v=4.87";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.87";
 
 export class SimUi {
   constructor(simMain) {
@@ -1897,6 +1897,19 @@ export class SimUi {
             }
           }
 
+          // Sized values (pipeline-computed, as flown) for the archive entry's dedicated
+          // `sized` section — from the worker's sizedConfig, wrapped with units so exports
+          // read without a decoder (mirrors the manual-save sizedFromLive shape).
+          const SIZED_UNITS = {
+            "ring_earth.requiredmbpsbetweensats": "Mbps",
+            "ring_mars.requiredmbpsbetweensats": "Mbps",
+            "adapted_eccentric_rings.junction-ring-count": "rings",
+            "adapted_eccentric_rings.junction-ring-count-mars": "rings",
+          };
+          const sizedOf = (res) => (res && res.sizedConfig
+            ? Object.fromEntries(Object.entries(res.sizedConfig).map(([k, v]) => [k, { value: v, unit: SIZED_UNITS[k] ?? "" }]))
+            : null);
+
           // Record one finished scenario into the charts + archive. Shared by the worker
           // pool and the in-process Main-thread path; does not touch progress counters.
           const recordScenarioResult = (res, s) => {
@@ -1954,7 +1967,7 @@ export class SimUi {
                 junctionAngles: res.capacityInfo?.junctionAngles || null,
               };
               const tag = `sweep: ${s.ringCount ?? "cur"} rings${s.techUserVal != null ? " · " + s.techUserVal + "x" : ""}${s.routeCount != null ? " · " + s.routeCount + " " + secondAxisMeta.unit : ""} · ${s.placement.label}`;
-              this._archiveAppend({ id: Date.now() + s.scenarioId, name: tag, ts: new Date().toISOString(), config: s.archiveConfig || {}, metrics: m });
+              this._archiveAppend({ id: Date.now() + s.scenarioId, name: tag, ts: new Date().toISOString(), config: s.archiveConfig || {}, sized: sizedOf(res), metrics: m });
             }
           };
 
@@ -2171,7 +2184,7 @@ export class SimUi {
                       junctionAngles: res.capacityInfo?.junctionAngles || null,
                     };
                     const tag = `opt: ${ringCount ?? "cur"} rings${techUserVal != null ? " · " + techUserVal + "x" : ""}${routeCount != null ? " · " + routeCount + " " + secondAxisMeta.unit : ""} · ${placement.label}`;
-                    this._archiveAppend({ id: Date.now() + scenarioId, name: tag, ts: new Date().toISOString(), config: this._archiveSnapshotConfig?.() || {}, metrics: m });
+                    this._archiveAppend({ id: Date.now() + scenarioId, name: tag, ts: new Date().toISOString(), config: this._archiveSnapshotConfig?.() || {}, sized: sizedOf(res), metrics: m });
                   }
                   completed++;
                   renderProgress();
@@ -2890,6 +2903,57 @@ export class SimUi {
       for (const [k, dflt] of SimUi.ADAPTED_CURVES) out[k] = this._getCurve(k, dflt);
       return out;
     };
+    // User-facing twin of snapshotSliders: the MAPPED value + unit per slider, so an
+    // export is readable without knowing each slider's scale (pow10/pow2 sliders store
+    // exponents internally — e.g. maxSatCount "6" means 1,000,000). Purely
+    // informational: the restore path (applySliders) keeps using the RAW `sliders` map.
+    const snapshotSlidersUser = () => {
+      const snap = {};
+      for (const section of BUILD_CATS) {
+        const group = this.slidersData[section];
+        if (!group) continue;
+        for (const sliderId in group) {
+          const fullId = `${section}.${sliderId}`;
+          if (VIZ_SLIDERS.has(fullId)) continue;
+          const input = this.sliders[section]?.[sliderId];
+          if (!input) continue;
+          const def = group[sliderId];
+          if (input.classList && input.classList.contains("radio-container")) {
+            const checked = input.querySelector("input[type=radio]:checked");
+            snap[fullId] = { value: checked ? checked.value : def.value, unit: "" };
+          } else {
+            const raw = parseFloat(input.value);
+            const user = Number.isFinite(raw) ? Math.round(this.mapSliderValueToUserFacing(def, raw) * 1e6) / 1e6 : input.value;
+            snap[fullId] = { value: user, unit: (def.unit || "").trim() };
+          }
+        }
+      }
+      return snap;
+    };
+    // Sized values — parameters the PIPELINE computes rather than the user setting them
+    // (auto planet-ring rates, auto junction-ring counts) — captured as flown, with
+    // units, into the entry's dedicated `sized` section. Manual saves read the live
+    // sliders (the live auto-sizers write their results there); sweep entries carry the
+    // worker's sizedConfig instead (see the sensitivity/optimized archive sites).
+    const SIZED_KEYS = [
+      ["ring_earth.requiredmbpsbetweensats", "Mbps"],
+      ["ring_mars.requiredmbpsbetweensats", "Mbps"],
+      ["adapted_eccentric_rings.junction-ring-count", "rings"],
+      ["adapted_eccentric_rings.junction-ring-count-mars", "rings"],
+    ];
+    const sizedFromLive = () => {
+      const out = {};
+      for (const [fullId, unit] of SIZED_KEYS) {
+        const [section, sliderId] = fullId.split(".");
+        const def = this.slidersData[section]?.[sliderId];
+        const input = this.sliders[section]?.[sliderId];
+        if (!def || !input) continue;
+        const raw = parseFloat(input.value);
+        out[fullId] = { value: Number.isFinite(raw) ? Math.round(this.mapSliderValueToUserFacing(def, raw) * 1e6) / 1e6 : input.value, unit };
+      }
+      return out;
+    };
+    this._archiveSizedFromLive = sizedFromLive;
     const captureMetrics = () => {
       const sm = this.simMain;
       let costs = null;
@@ -3163,7 +3227,7 @@ export class SimUi {
 
     // Hooks so other features (the optimized sensitivity sweep) can capture the current
     // config and append archive entries without going through the Save button/prompt.
-    this._archiveSnapshotConfig = () => ({ sliders: snapshotSliders(), curves: snapshotCurves() });
+    this._archiveSnapshotConfig = () => ({ sliders: snapshotSliders(), slidersUser: snapshotSlidersUser(), curves: snapshotCurves() });
     this._archiveAppend = (entry) => { const arr = load(); arr.unshift(entry); save(arr); renderAll(); };
 
     saveBtn.addEventListener("click", () => {
@@ -3172,7 +3236,7 @@ export class SimUi {
       const name = prompt("Name this saved config:", def);
       if (name === null) return;
       const arr = load();
-      arr.unshift({ id: Date.now(), name: name.trim() || def, ts: new Date().toISOString(), config: { sliders: snapshotSliders(), curves: snapshotCurves() }, metrics: m });
+      arr.unshift({ id: Date.now(), name: name.trim() || def, ts: new Date().toISOString(), config: { sliders: snapshotSliders(), slidersUser: snapshotSlidersUser(), curves: snapshotCurves() }, sized: sizedFromLive(), metrics: m });
       save(arr);
       renderAll();
     });
@@ -4298,7 +4362,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=4.86");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=4.87");
     let result = null;
     try {
       result = await solveBandDistribution({
