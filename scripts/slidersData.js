@@ -1,6 +1,6 @@
 // slidersData.js
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.87";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.88";
 
 export const slidersData = {
   display: {
@@ -93,7 +93,7 @@ export const slidersData = {
       label: "Satellite Size Factor",
       description: "Set to 0 to hide satellite meshes (links and sim still run).",
       min: 0,
-      max: 1024,
+      max: 256,
       value: 4,
       step: 1,
       unit: "x",
