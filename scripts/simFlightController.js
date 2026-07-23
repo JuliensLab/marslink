@@ -7,9 +7,9 @@
 // available. The fleet sim is cheap and deterministic, so it is recomputed only
 // when its config changes; per-frame work is just propagating in-transit ships.
 
-import { simulateFleet } from "./simFleet.js?v=4.92";
-import { shipPositionAt } from "./simTransfer.js?v=4.92";
-import { extractRootedBackbone, buildShipNodes, computeShipAccessStats } from "./simShipLinks.js?v=4.92";
+import { simulateFleet } from "./simFleet.js?v=4.93";
+import { shipPositionAt } from "./simTransfer.js?v=4.93";
+import { extractRootedBackbone, buildShipNodes, computeShipAccessStats } from "./simShipLinks.js?v=4.93";
 
 // Default manufacturing ramp (interplanetary Starships built per year). The UI
 // (editable chart) will overwrite this; it just makes the overlay show something
@@ -113,13 +113,20 @@ export class SimFlightController {
     const shipNodes = buildShipNodes(inTransit, simDate, this.config.portsPerShip);
     const res = computeShipAccessStats({ rooted, shipNodes, simLinkBudget, maxRangeAU: simLinkBudget.maxDistanceAU, possibleLinks });
 
-    // Resolve allocator links (ids → AU endpoints) for drawing.
+    // Resolve allocator links (ids → AU endpoints) for drawing, priced per hop
+    // from the endpoint distance (same budget as the chain stats) so the 3D
+    // M/L link labels can annotate them.
     const posById = new Map();
     for (const r of rooted) posById.set(r.id, r.position);
     for (const n of shipNodes) posById.set(n.id, n.position);
     const links = res.alloc.links
-      .map((l) => ({ from: posById.get(l.from), to: posById.get(l.to) }))
-      .filter((l) => l.from && l.to);
+      .map((l) => {
+        const from = posById.get(l.from), to = posById.get(l.to);
+        if (!from || !to) return null;
+        const km = simLinkBudget.convertAUtoKM(Math.hypot(from.x - to.x, from.y - to.y, from.z - to.z));
+        return { from, to, gbpsCapacity: simLinkBudget.calculateGbps(km), latencySeconds: simLinkBudget.calculateLatencySeconds(km) };
+      })
+      .filter(Boolean);
 
     return { links, perShip: res.perShip, summary: res.summary };
   }

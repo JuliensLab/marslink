@@ -8,7 +8,7 @@
 // (they don't compete or relay), so per-frame work is nil: the cloud is sampled
 // once per (count, seed) and re-measured on demand against the live backbone.
 
-import { sampleProbeVolume, measureProbes } from "./simProbeField.js?v=4.92";
+import { sampleProbeVolume, measureProbes } from "./simProbeField.js?v=4.93";
 
 export class SimProbeController {
   constructor() {
@@ -73,7 +73,9 @@ export class SimProbeController {
       const probes = meas.perProbe.map((p) => ({ x: p.x, y: p.y, z: p.z, connected: p.connected }));
       const links = meas.perProbe
         .filter((p) => p.connected && p.rootPos)
-        .map((p) => ({ from: { x: p.x, y: p.y, z: p.z }, to: p.rootPos }));
+        // Single-hop access link, so the per-probe chain stats ARE the link's
+        // values — carried for the 3D M/L link labels.
+        .map((p) => ({ from: { x: p.x, y: p.y, z: p.z }, to: p.rootPos, gbpsCapacity: p.capacityGbps, latencySeconds: p.accessLatencySec }));
       data = { probes, links, count: probes.length };
     } else {
       // Not yet measured — show the raw cloud (connectivity unknown).

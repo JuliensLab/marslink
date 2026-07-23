@@ -1,14 +1,14 @@
 // simDisplay-3d.js
 
 import * as THREE from "three";
-import { OrbitControls } from "three/addons/controls/OrbitControls.js?v=4.92";
-import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js?v=4.92";
-import { RenderPass } from "three/addons/postprocessing/RenderPass.js?v=4.92";
-import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js?v=4.92";
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.92";
-import { createCarModel } from "./modelCar.js?v=4.92";
-import { positionFromSolarAngle } from "./simOrbits.js?v=4.92";
-import { stationKeepingAccel, THRUST_BINS, satSchemeT, rampHex, OVER_BUDGET_HEX, isThrustScheme, satStationKeeping, satTotalProp } from "./simStationKeeping.js?v=4.92";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js?v=4.93";
+import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js?v=4.93";
+import { RenderPass } from "three/addons/postprocessing/RenderPass.js?v=4.93";
+import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js?v=4.93";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.93";
+import { createCarModel } from "./modelCar.js?v=4.93";
+import { positionFromSolarAngle } from "./simOrbits.js?v=4.93";
+import { stationKeepingAccel, THRUST_BINS, satSchemeT, rampHex, OVER_BUDGET_HEX, isThrustScheme, satStationKeeping, satTotalProp } from "./simStationKeeping.js?v=4.93";
 
 /**
  * Converts astronomical units (AU) to 3D units using a scale factor.
@@ -17,7 +17,7 @@ import { stationKeepingAccel, THRUST_BINS, satSchemeT, rampHex, OVER_BUDGET_HEX,
  * @returns {number} Distance in 3D units
  */
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.92";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.93";
 
 export let sunScaleFactor = SIM_CONSTANTS.SUN_SCALE_FACTOR;
 export let planetScaleFactor = SIM_CONSTANTS.PLANET_SCALE_FACTOR;
@@ -888,7 +888,9 @@ export class SimDisplay {
   updateLinksPositions() {
     if (this.linksColorsType === "None") {
       this.linksGeometry.setDrawRange(0, 0);
-      if (this.linkLabels.length > 0) this.updateLinkLabels([]);
+      // Overlay links (flight/probe) draw regardless of the relay-link colour
+      // mode, so their labels must keep refreshing here too.
+      if (this.linkLabelMode || this.linkLabels.length > 0) this.updateLinkLabels([]);
       return;
     }
 
@@ -1055,8 +1057,8 @@ export class SimDisplay {
    * @param {Array} validLinks - Array of valid links.
    */
   updateLinkLabels(validLinks) {
-    // Only show labels when a label mode is active and links are being drawn
-    if (!this.linkLabelMode || this.linksColorsType === "None") {
+    // Only show labels when a label mode is active
+    if (!this.linkLabelMode) {
       // Hide all pooled labels
       for (let i = 0; i < this.linkLabels.length; i++) this.linkLabels[i].visible = false;
       return;
@@ -1076,34 +1078,21 @@ export class SimDisplay {
     const isFlowMode = this.linksColorsType === "Flow";
 
     let labelIdx = 0;
-    for (let i = 0; i < validLinks.length; i++) {
-      const link = validLinks[i];
-      const from = pPos[link.fromId] || sPos[link.fromId];
-      const to = pPos[link.toId] || sPos[link.toId];
-      if (!from || !to) continue;
-
-      fromPos.set(from.x, from.y, from.z);
-      toPos.set(to.x, to.y, to.z);
+    // Pooled label emit for one link, endpoints already in DISPLAY coordinates.
+    const emitLabel = (fx, fy, fz, tx, ty, tz, labelText) => {
+      fromPos.set(fx, fy, fz);
+      toPos.set(tx, ty, tz);
       fromScreen.copy(fromPos).project(this.camera);
       toScreen.copy(toPos).project(this.camera);
 
       // Skip if both endpoints are off-screen
       const fIn = fromScreen.x >= -1 && fromScreen.x <= 1 && fromScreen.y >= -1 && fromScreen.y <= 1 && fromScreen.z >= -1 && fromScreen.z <= 1;
       const tIn = toScreen.x >= -1 && toScreen.x <= 1 && toScreen.y >= -1 && toScreen.y <= 1 && toScreen.z >= -1 && toScreen.z <= 1;
-      if (!fIn && !tIn) continue;
+      if (!fIn && !tIn) return;
 
       const dx = (fromScreen.x - toScreen.x) * halfW;
       const dy = (fromScreen.y - toScreen.y) * halfH;
-      if (dx * dx + dy * dy < 2500) continue; // screenDist < 50px (avoid sqrt)
-
-      let labelText;
-      if (isMbps) {
-        const v = isFlowMode ? link.gbpsFlow : link.gbpsCapacity;
-        labelText = `${Math.round(v * 1000)}`;
-      } else {
-        const s = link.latencySeconds ?? 0;
-        labelText = s >= 1 ? `${s.toFixed(1)}s` : `${Math.round(s * 1000)}ms`;
-      }
+      if (dx * dx + dy * dy < 2500) return; // screenDist < 50px (avoid sqrt)
 
       // Reuse or create sprite from pool
       let label;
@@ -1126,12 +1115,45 @@ export class SimDisplay {
         this.linkLabels.push(label);
       }
 
-      label.position.set(
-        (from.x + to.x) * 0.5,
-        (from.y + to.y) * 0.5,
-        (from.z + to.z) * 0.5
-      );
+      label.position.set((fx + tx) * 0.5, (fy + ty) * 0.5, (fz + tz) * 0.5);
       labelIdx++;
+    };
+    const latencyText = (s) => (s >= 1 ? `${s.toFixed(1)}s` : `${Math.round(s * 1000)}ms`);
+
+    // Relay links — only drawn (and therefore labelled) when a colour mode is on.
+    if (this.linksColorsType !== "None") {
+      for (let i = 0; i < validLinks.length; i++) {
+        const link = validLinks[i];
+        const from = pPos[link.fromId] || sPos[link.fromId];
+        const to = pPos[link.toId] || sPos[link.toId];
+        if (!from || !to) continue;
+        const labelText = isMbps
+          ? `${Math.round((isFlowMode ? link.gbpsFlow : link.gbpsCapacity) * 1000)}`
+          : latencyText(link.latencySeconds ?? 0);
+        emitLabel(from.x, from.y, from.z, to.x, to.y, to.z, labelText);
+      }
+    }
+
+    // Overlay links — spacecraft-flight extensions + coverage-probe access links.
+    // Their endpoints are sim-space {x,y,z} AU; apply the same transform their
+    // draw calls use (auTo3D(x), auTo3D(z), -auTo3D(y)). Drawn independently of
+    // the relay-link colour mode, so labelled independently too.
+    const overlaySets = [this.flightData && this.flightData.links, this.probeData && this.probeData.links];
+    for (const set of overlaySets) {
+      if (!set) continue;
+      for (let i = 0; i < set.length; i++) {
+        const l = set[i];
+        if (!l.from || !l.to) continue;
+        let labelText;
+        if (isMbps) {
+          if (l.gbpsCapacity == null) continue;
+          labelText = `${Math.round(l.gbpsCapacity * 1000)}`;
+        } else {
+          if (l.latencySeconds == null) continue;
+          labelText = latencyText(l.latencySeconds);
+        }
+        emitLabel(auTo3D(l.from.x), auTo3D(l.from.z), -auTo3D(l.from.y), auTo3D(l.to.x), auTo3D(l.to.z), -auTo3D(l.to.y), labelText);
+      }
     }
 
     // Hide unused pooled labels
