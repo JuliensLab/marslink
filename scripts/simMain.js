@@ -1,23 +1,23 @@
 // simMain.js
 
-import { SimUi } from "./simUi.js?v=4.89";
-import { SimTime } from "./simTime.js?v=4.89";
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.89";
-import { SimSatellites } from "./simSatellites.js?v=4.89";
-import { SimDeployment } from "./simDeployment.js?v=4.89";
-import { SimMissionValidator } from "./simMissionValidator.js?v=4.89";
-import { SimLinkBudget } from "./simLinkBudget.js?v=4.89";
-import { SimNetwork } from "./simNetwork.js?v=4.89";
+import { SimUi } from "./simUi.js?v=4.90";
+import { SimTime } from "./simTime.js?v=4.90";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.90";
+import { SimSatellites } from "./simSatellites.js?v=4.90";
+import { SimDeployment } from "./simDeployment.js?v=4.90";
+import { SimMissionValidator } from "./simMissionValidator.js?v=4.90";
+import { SimLinkBudget } from "./simLinkBudget.js?v=4.90";
+import { SimNetwork } from "./simNetwork.js?v=4.90";
 // Import both SimDisplay implementations with unique names
-import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=4.89";
-import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=4.89";
-import { generateReport } from "./reportGenerator.js?v=4.89";
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.89";
-import { minOf, maxOf } from "./simMath.js?v=4.89";
-import { SimFlightController } from "./simFlightController.js?v=4.89";
-import { SimProbeController } from "./simProbeController.js?v=4.89";
-import { findDepartureWindows } from "./simTransfer.js?v=4.89";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.89";
+import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=4.90";
+import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=4.90";
+import { generateReport } from "./reportGenerator.js?v=4.90";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.90";
+import { minOf, maxOf } from "./simMath.js?v=4.90";
+import { SimFlightController } from "./simFlightController.js?v=4.90";
+import { SimProbeController } from "./simProbeController.js?v=4.90";
+import { findDepartureWindows } from "./simTransfer.js?v=4.90";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.90";
 
 export class SimMain {
   // Clamp argument to [-1, 1] to prevent NaN from Math.asin domain errors
@@ -70,7 +70,7 @@ export class SimMain {
     if (typeof window !== "undefined") window.simMain = this;
 
     // --- Worker + triple-buffered window cache (-1/0/+1) ---
-    this.simWorker = new Worker(new URL("./simWorker.js?v=4.89", import.meta.url), { type: "module" });
+    this.simWorker = new Worker(new URL("./simWorker.js?v=4.90", import.meta.url), { type: "module" });
     this.simWorker.onmessage = (event) => this.handleWorkerMessage(event);
     this.simWorker.onerror = (event) => console.error("[Marslink] Worker error:", event.message);
     this.simWorker.postMessage({ type: "init" });
@@ -1386,14 +1386,16 @@ export class SimMain {
     html += `</div>`;
     html += `<div class="metric-details" id="satellites-content" style="display: none;">`;
     if (this.resultTrees && this.resultTrees.length > 0) {
-      // Aggregate by ring type: earth, junction, relay (contoured/other), mars
-      const groups = { earth: { sats: 0, ports: 0 }, adapted: { sats: 0, ports: 0 }, jct: { sats: 0, ports: 0 }, mars: { sats: 0, ports: 0 } };
+      // Aggregate by ring type: earth, Earth/Mars junction (separately), relay
+      // (contoured/other), mars. jctm before jct — the prefix overlaps.
+      const groups = { earth: { sats: 0, ports: 0 }, adapted: { sats: 0, ports: 0 }, jctE: { sats: 0, ports: 0 }, jctM: { sats: 0, ports: 0 }, mars: { sats: 0, ports: 0 } };
       for (const orbit of this.resultTrees) {
         const rn = orbit.ringName || "";
         const ports = this.simLinkBudget.getMaxLinksPerRing(rn);
         if (rn === "ring_earth") { groups.earth.sats += orbit.satCount; groups.earth.ports = ports; }
         else if (rn === "ring_mars") { groups.mars.sats += orbit.satCount; groups.mars.ports = ports; }
-        else if (rn.startsWith("ring_jct")) { groups.jct.sats += orbit.satCount; groups.jct.ports = ports; }
+        else if (rn.startsWith("ring_jctm")) { groups.jctM.sats += orbit.satCount; groups.jctM.ports = ports; }
+        else if (rn.startsWith("ring_jct")) { groups.jctE.sats += orbit.satCount; groups.jctE.ports = ports; }
         else { groups.adapted.sats += orbit.satCount; groups.adapted.ports = ports; }
       }
       // Totals first so per-ring rows can show % of total laser ports.
@@ -1412,9 +1414,11 @@ export class SimMain {
         const pct = fmtPct(g.sats * g.ports);
         return `<div class="detail-row"><span class="detail-label">${label} <span style="color:var(--text-3)">${g.ports}p</span></span><span class="detail-value">${pct} · ${g.sats.toLocaleString()}</span></div>`;
       };
+      // Radial order: Earth ring → Earth junction → relay → Mars junction → Mars ring.
       html += ringLabel("Earth ring", groups.earth);
-      html += ringLabel("Junction rings", groups.jct);
+      html += ringLabel("Earth junction rings", groups.jctE);
       html += ringLabel("Contoured rings", groups.adapted);
+      html += ringLabel("Mars junction rings", groups.jctM);
       html += ringLabel("Mars ring", groups.mars);
 
       const totalFlights = this.resultTrees.reduce((s, o) => s + (o.deploymentFlights_count || 0), 0);
