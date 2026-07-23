@@ -5,13 +5,13 @@ import {
   junctionDeficits,
   mapSliderValueToUserFacing as mapToUserFacing,
   mapUserFacingToSliderValue as mapToSliderInternal,
-} from "./slidersData.js?v=4.90";
-import { LukashianClock } from "./lukashianTime.js?v=4.90";
-import { wireAuthUi } from "./auth.js?v=4.90";
-import { SensitivityPool } from "./sensitivityPool.js?v=4.90";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.90";
-import { minOf } from "./simMath.js?v=4.90";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.90";
+} from "./slidersData.js?v=4.91";
+import { LukashianClock } from "./lukashianTime.js?v=4.91";
+import { wireAuthUi } from "./auth.js?v=4.91";
+import { SensitivityPool } from "./sensitivityPool.js?v=4.91";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.91";
+import { minOf } from "./simMath.js?v=4.91";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.91";
 
 export class SimUi {
   constructor(simMain) {
@@ -1112,10 +1112,6 @@ export class SimUi {
     }
     if (threadAvailEl) threadAvailEl.textContent = `of ${threadsAvailable} thread${threadsAvailable === 1 ? "" : "s"} available`;
 
-    // Toggle linear step visibility based on progression type
-    const progSelect = document.getElementById("sens-tech-progression");
-    const stepInput = document.getElementById("sens-tech-step");
-
     // --- Helpers to build value arrays (shared by estimate + run) ---
     const buildRingValues = () => {
       if (!document.getElementById("sens-ring-enable").checked) return [null];
@@ -1126,17 +1122,10 @@ export class SimUi {
       for (let r = s; r <= e; r += step) vals.push(r);
       return vals.length ? vals : [null];
     };
-    const buildTechValues = () => {
-      if (!document.getElementById("sens-tech-enable").checked) return [null];
-      const s = parseInt(document.getElementById("sens-tech-start").value);
-      const e = parseInt(document.getElementById("sens-tech-end").value);
-      const prog = progSelect.value;
-      const linStep = parseInt(stepInput.value) || 1;
-      const vals = [];
-      if (prog === "pow2") { for (let t = s; t <= e; t *= 2) vals.push(t); }
-      else { for (let t = s; t <= e; t += linStep) vals.push(t); }
-      return vals.length ? vals : [null];
-    };
+    // Laser-tech sweep axis REMOVED from the panel (2026-07-23): tech is a fixed
+    // config input now; [null] keeps the (ring x tech x route x placement)
+    // scenario grid shape without a tech dimension.
+    const buildTechValues = () => [null];
     // Route-count sweep. Disabled unless the concentric family is active with Auto Route
     // Count = no (manual) — otherwise the route count is auto-derived from ring count.
     const buildRouteValues = () => {
@@ -1249,11 +1238,6 @@ export class SimUi {
     };
     this._updateSensEstimate = updateEstimate;
 
-    progSelect.addEventListener("change", () => {
-      stepInput.style.display = progSelect.value === "linear" ? "" : "none";
-      updateEstimate();
-    });
-
     // Enable/disable the three metric rows via their checkboxes.
     const wireEnable = (checkboxId, rowSelectorInputs) => {
       const cb = document.getElementById(checkboxId);
@@ -1272,12 +1256,6 @@ export class SimUi {
       document.getElementById("sens-ring-start"),
       document.getElementById("sens-ring-end"),
       document.getElementById("sens-ring-step"),
-    ]);
-    wireEnable("sens-tech-enable", () => [
-      document.getElementById("sens-tech-start"),
-      document.getElementById("sens-tech-end"),
-      document.getElementById("sens-tech-progression"),
-      document.getElementById("sens-tech-step"),
     ]);
 
     // --- Simple / Optimized sub-mode toggle ---
@@ -1639,7 +1617,7 @@ export class SimUi {
       try {
         const optimizedMode = (this._sensMode || "simple") === "optimized";
         const ringEnabled = document.getElementById("sens-ring-enable").checked;
-        const techEnabled = document.getElementById("sens-tech-enable").checked;
+        const techEnabled = false; // tech axis removed from the panel (2026-07-23)
         const placementEnabled = placementIsDim();
         placementAxisLabel = "Geometry"; // only used when the placement axis is a swept dim (geometry modes)
         // Simple (parallel) mode: suppress the reactive updateLoop so it doesn't waste the
@@ -4362,7 +4340,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=4.90");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=4.91");
     let result = null;
     try {
       result = await solveBandDistribution({
