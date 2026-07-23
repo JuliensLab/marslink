@@ -5,13 +5,13 @@ import {
   junctionDeficits,
   mapSliderValueToUserFacing as mapToUserFacing,
   mapUserFacingToSliderValue as mapToSliderInternal,
-} from "./slidersData.js?v=4.93";
-import { LukashianClock } from "./lukashianTime.js?v=4.93";
-import { wireAuthUi } from "./auth.js?v=4.93";
-import { SensitivityPool } from "./sensitivityPool.js?v=4.93";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.93";
-import { minOf } from "./simMath.js?v=4.93";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.93";
+} from "./slidersData.js?v=4.94";
+import { LukashianClock } from "./lukashianTime.js?v=4.94";
+import { wireAuthUi } from "./auth.js?v=4.94";
+import { SensitivityPool } from "./sensitivityPool.js?v=4.94";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.94";
+import { minOf } from "./simMath.js?v=4.94";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.94";
 
 export class SimUi {
   constructor(simMain) {
@@ -2932,6 +2932,30 @@ export class SimUi {
       return out;
     };
     this._archiveSizedFromLive = sizedFromLive;
+    // Coverage-probe distributions (Monte-Carlo field), captured as flown when a
+    // measurement exists: per-connected-probe capacity to the relay network and
+    // end-to-end to each planet (Mbps, rounded), plus the matching latencies.
+    // Live-view only — sweeps never measure probes, so sweep entries carry none.
+    const captureCoverage = () => {
+      const meas = this.simMain?._probeMeas;
+      if (!meas || !meas.summary || !meas.summary.total) return null;
+      const conn = meas.perProbe.filter((p) => p.connected);
+      const arr = (key, scale, digits) => {
+        const f = 10 ** digits;
+        return conn.map((p) => (Number.isFinite(p[key]) ? Math.round(p[key] * scale * f) / f : null));
+      };
+      return {
+        total: meas.summary.total,
+        connected: meas.summary.connected,
+        capNetMbps: arr("capacityGbps", 1000, 0),
+        capEarthMbps: arr("capEarthGbps", 1000, 0),
+        capMarsMbps: arr("capMarsGbps", 1000, 0),
+        latNetSec: arr("accessLatencySec", 1, 1),
+        latEarthSec: arr("latEarthSec", 1, 1),
+        latMarsSec: arr("latMarsSec", 1, 1),
+      };
+    };
+    this._archiveCaptureCoverage = captureCoverage;
     const captureMetrics = () => {
       const sm = this.simMain;
       let costs = null;
@@ -3214,7 +3238,7 @@ export class SimUi {
       const name = prompt("Name this saved config:", def);
       if (name === null) return;
       const arr = load();
-      arr.unshift({ id: Date.now(), name: name.trim() || def, ts: new Date().toISOString(), config: { sliders: snapshotSliders(), slidersUser: snapshotSlidersUser(), curves: snapshotCurves() }, sized: sizedFromLive(), metrics: m });
+      arr.unshift({ id: Date.now(), name: name.trim() || def, ts: new Date().toISOString(), config: { sliders: snapshotSliders(), slidersUser: snapshotSlidersUser(), curves: snapshotCurves() }, sized: sizedFromLive(), coverage: captureCoverage(), metrics: m });
       save(arr);
       renderAll();
     });
@@ -4340,7 +4364,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=4.93");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=4.94");
     let result = null;
     try {
       result = await solveBandDistribution({

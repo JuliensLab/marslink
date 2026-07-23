@@ -1,6 +1,6 @@
 // simSolarSystem.js
 
-import { helioCoords, positionFromSolarAngle } from "./simOrbits.js?v=4.93";
+import { helioCoords, positionFromSolarAngle } from "./simOrbits.js?v=4.94";
 
 export class SimSolarSystem {
   constructor() {
