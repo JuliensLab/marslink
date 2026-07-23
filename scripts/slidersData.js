@@ -1,6 +1,6 @@
 // slidersData.js
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.88";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.89";
 
 export const slidersData = {
   display: {
@@ -1200,6 +1200,30 @@ export const slidersData = {
       value: 0,
       step: 1,
       unit: "",
+      scale: "linear",
+      updateLongTermScore: true,
+    },
+    "junction-ring-density": {
+      label: "Junction ring density (Earth)",
+      description:
+        "Scales each Earth-side junction ring's satellite count: 100% = the demand-derived density (the widest of the Earth ring's spacing and the eccentric periapsis spacing at the deciding contact), 0% = no satellites (the rings vanish). Applies in both manual and auto sizing modes — in auto, a lower density may make the sizer add more rings to compensate.",
+      min: 0,
+      max: 100,
+      value: 100,
+      step: 1,
+      unit: "%",
+      scale: "linear",
+      updateLongTermScore: true,
+    },
+    "junction-ring-density-mars": {
+      label: "Junction ring density (Mars)",
+      description:
+        "Scales each Mars-side junction ring's satellite count: 100% = the demand-derived density, 0% = no satellites (the rings vanish). Applies in both manual and auto sizing modes — in auto, a lower density may make the sizer add more rings to compensate.",
+      min: 0,
+      max: 100,
+      value: 100,
+      step: 1,
+      unit: "%",
       scale: "linear",
       updateLongTermScore: true,
     },

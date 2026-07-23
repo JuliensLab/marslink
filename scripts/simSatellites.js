@@ -1,7 +1,7 @@
 // simSatellites.js
 
-import { helioCoords, positionFromSolarAngle } from "./simOrbits.js?v=4.88";
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.88";
+import { helioCoords, positionFromSolarAngle } from "./simOrbits.js?v=4.89";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.89";
 
 export class SimSatellites {
   constructor(simLinkBudget, planets) {
@@ -418,8 +418,12 @@ export class SimSatellites {
     const gapE = { theta: decidingTheta(false, this._planeNodeLon()) };
     const gapM = { theta: decidingTheta(true, this.Mars.o) };
 
+    // Density scaling: 100% = the demand-derived density below; 0% = no satellites.
+    const densE = num2(uiConfig["adapted_eccentric_rings.junction-ring-density"], 100);
+    const densM = num2(uiConfig["adapted_eccentric_rings.junction-ring-density-mars"], 100);
+
     const out = [];
-    const buildSide = (k, planet, planetEnabled, gap, eccTangentSpacingKm, ringPrefix, ringType) => {
+    const buildSide = (k, planet, planetEnabled, gap, eccTangentSpacingKm, ringPrefix, ringType, densityPct) => {
       if (!(k > 0) || !planetEnabled) return;
       const planetTemplate = this._buildPlanetRing(uiConfig, planet === this.Earth ? "ring_earth" : "ring_mars")[0];
       if (!planetTemplate || !(planetTemplate.satCount > 0)) return;
@@ -430,7 +434,8 @@ export class SimSatellites {
       const rKm = rPlanetKm(planet, gap.theta);
       const eccSpacingDeg = (eccTangentSpacingKm / (2 * Math.PI * rKm)) * 360;
       const spacingDeg = Math.max(planetSpacingDeg, eccSpacingDeg);
-      const count = Math.max(2, Math.ceil(360 / spacingDeg));
+      const count = Math.round(Math.max(2, Math.ceil(360 / spacingDeg)) * Math.max(0, Math.min(100, densityPct)) / 100);
+      if (count < 1) return; // density 0% (or scaled below one sat) — no rings this side
       for (let j = 1; j <= k; j++) {
         out.push({
           satCount: count,
@@ -453,8 +458,8 @@ export class SimSatellites {
 
     // Junction-ring spacing (step 0) on BOTH sides: the eccentric ring's PERIAPSIS
     // spacing d — its longest — against the planet ring's own spacing.
-    buildSide(kE, this.Earth, !!uiConfig["ring_earth.side-extension-degrees-slider"], gapE, dKm, "ring_jct_", "Junction");
-    buildSide(kM, this.Mars, !!uiConfig["ring_mars.side-extension-degrees-slider"], gapM, dKm, "ring_jctm_", "JunctionMars");
+    buildSide(kE, this.Earth, !!uiConfig["ring_earth.side-extension-degrees-slider"], gapE, dKm, "ring_jct_", "Junction", densE);
+    buildSide(kM, this.Mars, !!uiConfig["ring_mars.side-extension-degrees-slider"], gapM, dKm, "ring_jctm_", "JunctionMars", densM);
     return out;
   }
 
