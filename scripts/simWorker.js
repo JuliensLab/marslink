@@ -9,15 +9,15 @@
 // Loaded as an ES module worker:
 //   new Worker(new URL("./simWorker.js", import.meta.url), { type: "module" })
 
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.91";
-import { SimSatellites } from "./simSatellites.js?v=4.91";
-import { SimLinkBudget } from "./simLinkBudget.js?v=4.91";
-import { SimNetwork } from "./simNetwork.js?v=4.91";
-import { SimDeployment } from "./simDeployment.js?v=4.91";
-import { SimMissionValidator } from "./simMissionValidator.js?v=4.91";
-import { minOf } from "./simMath.js?v=4.91";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.91";
-import { planetRingRequiredMbps, junctionDeficits } from "./slidersData.js?v=4.91";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.92";
+import { SimSatellites } from "./simSatellites.js?v=4.92";
+import { SimLinkBudget } from "./simLinkBudget.js?v=4.92";
+import { SimNetwork } from "./simNetwork.js?v=4.92";
+import { SimDeployment } from "./simDeployment.js?v=4.92";
+import { SimMissionValidator } from "./simMissionValidator.js?v=4.92";
+import { minOf } from "./simMath.js?v=4.92";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.92";
+import { planetRingRequiredMbps, junctionDeficits } from "./slidersData.js?v=4.92";
 
 // --- State (initialized lazily on the first compute) ---
 let simLinkBudget = null;
@@ -347,6 +347,16 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
   if (jctAuto) {
     uiConfig["adapted_eccentric_rings.junction-ring-count"] = 0;
     uiConfig["adapted_eccentric_rings.junction-ring-count-mars"] = 0;
+  }
+
+  // Measurement seed: the relay aggregate (relayOnlyThroughput) is relay-INTRINSIC —
+  // planet-ring size plays no part in it — so measure on MINIMAL planet rings. The
+  // analytic UI seed can overshoot the sat cap and blank the first build (concentric
+  // 61 rings @100k cap: 102,913-seed-sat fleet -> blanked -> aggregate 0 -> the sizing
+  // guard skipped -> scenario returned 0 sats), while the properly SIZED fleet fits.
+  if (uiConfig["relay_type.planet_sizing"] !== "off") {
+    uiConfig["ring_earth.requiredmbpsbetweensats"] = 1;
+    uiConfig["ring_mars.requiredmbpsbetweensats"] = 1;
   }
 
   // 2. Planetary sizing — THE canonical one-shot (design decision 2026-07-21), the SAME
