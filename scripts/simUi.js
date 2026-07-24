@@ -5,13 +5,13 @@ import {
   junctionDeficits,
   mapSliderValueToUserFacing as mapToUserFacing,
   mapUserFacingToSliderValue as mapToSliderInternal,
-} from "./slidersData.js?v=4.94";
-import { LukashianClock } from "./lukashianTime.js?v=4.94";
-import { wireAuthUi } from "./auth.js?v=4.94";
-import { SensitivityPool } from "./sensitivityPool.js?v=4.94";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.94";
-import { minOf } from "./simMath.js?v=4.94";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.94";
+} from "./slidersData.js?v=4.95";
+import { LukashianClock } from "./lukashianTime.js?v=4.95";
+import { wireAuthUi } from "./auth.js?v=4.95";
+import { SensitivityPool } from "./sensitivityPool.js?v=4.95";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.95";
+import { minOf } from "./simMath.js?v=4.95";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.95";
 
 export class SimUi {
   constructor(simMain) {
@@ -2963,6 +2963,17 @@ export class SimUi {
       const rs = sm.routeSummary;
       const gbps = rs && rs.totalThroughput > 0 ? rs.totalThroughput / 1000 : (sm.maxFlowGbps || 0);
       const lat = sm.lastLatencyData;
+      // Earth↔Mars latency from the route walker's distribution (flow-free): the
+      // flow-based latMinMin/latP50Min need the max-flow solve, which rarely runs
+      // at save time — but every route already carries latencySeconds. Unweighted
+      // percentiles across routes, in minutes (the paper's route-distribution basis).
+      const rl = (rs && Array.isArray(rs.routes) ? rs.routes : [])
+        .map((r) => r.latencySeconds).filter(Number.isFinite).sort((a, b) => a - b);
+      const rq = (q) => {
+        if (!rl.length) return null;
+        const i = q * (rl.length - 1), lo = Math.floor(i), hi = Math.min(lo + 1, rl.length - 1);
+        return Math.round(((rl[lo] + (rl[hi] - rl[lo]) * (i - lo)) / 60) * 10) / 10;
+      };
       return {
         relayType: this.getSelectedRelayType(),
         ringCount: parseFloat(this.sliders.relay_type?.ringcount?.value ?? this.slidersData.relay_type.ringcount.value) || 0,
@@ -2971,6 +2982,9 @@ export class SimUi {
         gbps: Math.round(gbps * 1000) / 1000,
         latMinMin: lat && Number.isFinite(lat.bestLatency) ? Math.round((lat.bestLatency / 60) * 10) / 10 : null,
         latP50Min: lat && Number.isFinite(lat.medianLatency) ? Math.round((lat.medianLatency / 60) * 10) / 10 : null,
+        latRouteP10Min: rq(0.10),
+        latRouteP50Min: rq(0.50),
+        latRouteP90Min: rq(0.90),
         totalCostM: costs && Number.isFinite(costs.totalCosts) ? Math.round(costs.totalCosts / 1e6) : null,
         costPerMbps: costs && Number.isFinite(costs.costPerMbps) ? costs.costPerMbps : null,
         launches: costs?.launchCount ?? null,
@@ -4364,7 +4378,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=4.94");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=4.95");
     let result = null;
     try {
       result = await solveBandDistribution({
