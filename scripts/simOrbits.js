@@ -1,6 +1,6 @@
 // simOrbits.js
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.96";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.97";
 
 /**
  * Ecliptic longitude (deg) where Earth's and Mars's orbits are closest, used as the
