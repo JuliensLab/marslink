@@ -20,7 +20,7 @@
 //
 // Pure geometry/graph logic; seeded RNG keeps a given (count, seed) reproducible.
 
-import { extractRootedBackbone, computeBackboneReach } from "./simShipLinks.js?v=4.95";
+import { extractRootedBackbone, computeBackboneReach } from "./simShipLinks.js?v=4.96";
 
 const DEG = Math.PI / 180;
 

@@ -1,6 +1,6 @@
 // simTopology.js — Topology building logic extracted from SimNetwork.
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.95";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.96";
 
 export class TopologyBuilder {
   constructor(simLinkBudget, simSatellites) {
@@ -1757,7 +1757,7 @@ export class TopologyBuilder {
   }
 
   /**
-   * Junction ramp (Contoured eccentric): when intermediate junction rings exist
+   * Junction ramp (Contoured transfer): when intermediate junction rings exist
    * (ring_jct_0 .. ring_jct_{k-1} — Earth-ring clones tilted progressively toward
    * Mars's plane), the Earth-side junction climbs them RING BY RING instead of
    * jumping the whole plane change in one link. The rings are congruent and share

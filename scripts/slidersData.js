@@ -1,6 +1,6 @@
 // slidersData.js
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.95";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.96";
 
 export const slidersData = {
   display: {
@@ -469,11 +469,11 @@ export const slidersData = {
     selected: {
       label: "Relay ring type",
       type: "radio",
-      options: ["Contoured concentric", "Contoured eccentric", "Circular", "Eccentric"],
+      options: ["Contoured concentric", "Contoured transfer", "Circular", "Eccentric"],
       value: "Contoured concentric",
       optionDescriptions: {
         "Contoured concentric": "Nested rings between Earth and Mars; relay traffic crosses radially ring-to-ring. The ring count sets the relay capacity.",
-        "Contoured eccentric": "Ellipses tangent to both planet orbits; each ring relays Earth→Mars along its azimuthal loop. The ring count (with the in-ring rate) sets the relay capacity.",
+        "Contoured transfer": "Ellipses tangent to both planet orbits; each ring relays Earth→Mars along its azimuthal loop. The ring count (with the in-ring rate) sets the relay capacity.",
         "Circular": "Plain concentric circular rings; relay traffic crosses radially ring-to-ring. The ring count sets the relay capacity.",
         "Eccentric": "Plain eccentric ellipses; relay traffic runs along each ring's azimuthal loop. The ring count (with the in-ring rate) sets the relay capacity.",
       },
@@ -1284,7 +1284,7 @@ export function planetRingRequiredMbps(relayAggregateMbps) {
   return mapSliderValueToUserFacing(sd, internal);
 }
 
-// Auto junction-ring sizing (Contoured eccentric) — THE shared sufficiency test
+// Auto junction-ring sizing (Contoured transfer) — THE shared sufficiency test
 // (Julien's rule, 2026-07-22), used by both the live step (simUi.runJunctionSizingStep)
 // and the sweep pipeline (simWorker.runScenario). Per ring, the junction is a Y: the
 // ring's TWO routes (routesMbps — the combined two-arc capacity between the attachment

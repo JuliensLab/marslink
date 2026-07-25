@@ -9,15 +9,15 @@
 // Loaded as an ES module worker:
 //   new Worker(new URL("./simWorker.js", import.meta.url), { type: "module" })
 
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.95";
-import { SimSatellites } from "./simSatellites.js?v=4.95";
-import { SimLinkBudget } from "./simLinkBudget.js?v=4.95";
-import { SimNetwork } from "./simNetwork.js?v=4.95";
-import { SimDeployment } from "./simDeployment.js?v=4.95";
-import { SimMissionValidator } from "./simMissionValidator.js?v=4.95";
-import { minOf } from "./simMath.js?v=4.95";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.95";
-import { planetRingRequiredMbps, junctionDeficits } from "./slidersData.js?v=4.95";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.96";
+import { SimSatellites } from "./simSatellites.js?v=4.96";
+import { SimLinkBudget } from "./simLinkBudget.js?v=4.96";
+import { SimNetwork } from "./simNetwork.js?v=4.96";
+import { SimDeployment } from "./simDeployment.js?v=4.96";
+import { SimMissionValidator } from "./simMissionValidator.js?v=4.96";
+import { minOf } from "./simMath.js?v=4.96";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.96";
+import { planetRingRequiredMbps, junctionDeficits } from "./slidersData.js?v=4.96";
 
 // --- State (initialized lazily on the first compute) ---
 let simLinkBudget = null;
@@ -337,13 +337,13 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
     simSatellites.setSatellitesConfig(simSatellites.buildConfigFromUi(uiConfig));
   };
 
-  // Auto junction rings (Contoured eccentric): sizing is EMPIRICAL — measure the
+  // Auto junction rings (Contoured transfer): sizing is EMPIRICAL — measure the
   // built topology, grow the failing side (step 2b below). Start every scenario
   // from 0/0 so the planetary sizing measures a junction-free base and the
   // growth is deterministic. Manual mode keeps the configured counts.
   const jctAuto =
     uiConfig["adapted_eccentric_rings.junction-ring-mode"] === "auto" &&
-    uiConfig["relay_type.selected"] === "Contoured eccentric";
+    uiConfig["relay_type.selected"] === "Contoured transfer";
   if (jctAuto) {
     uiConfig["adapted_eccentric_rings.junction-ring-count"] = 0;
     uiConfig["adapted_eccentric_rings.junction-ring-count-mars"] = 0;

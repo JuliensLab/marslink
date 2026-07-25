@@ -5,13 +5,13 @@ import {
   junctionDeficits,
   mapSliderValueToUserFacing as mapToUserFacing,
   mapUserFacingToSliderValue as mapToSliderInternal,
-} from "./slidersData.js?v=4.95";
-import { LukashianClock } from "./lukashianTime.js?v=4.95";
-import { wireAuthUi } from "./auth.js?v=4.95";
-import { SensitivityPool } from "./sensitivityPool.js?v=4.95";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.95";
-import { minOf } from "./simMath.js?v=4.95";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.95";
+} from "./slidersData.js?v=4.96";
+import { LukashianClock } from "./lukashianTime.js?v=4.96";
+import { wireAuthUi } from "./auth.js?v=4.96";
+import { SensitivityPool } from "./sensitivityPool.js?v=4.96";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.96";
+import { minOf } from "./simMath.js?v=4.96";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.96";
 
 export class SimUi {
   constructor(simMain) {
@@ -469,7 +469,7 @@ export class SimUi {
         const input = this.sliders[section]?.[sliderId];
         if (!input) continue;
         if (input.classList && input.classList.contains("radio-container")) {
-          const radio = input.querySelector(`input[type=radio][value="${CSS.escape(String(value))}"]`);
+          const radio = input.querySelector(`input[type=radio][value="${CSS.escape(SimUi.LEGACY_RADIO_VALUES[String(value)] ?? String(value))}"]`);
           if (radio) {
             radio.checked = true;
             radio.dispatchEvent(new Event("change", { bubbles: true }));
@@ -523,7 +523,7 @@ export class SimUi {
       const input = this.sliders[section]?.[sliderId];
       if (!input) continue;
       if (input.classList && input.classList.contains("radio-container")) {
-        const radio = input.querySelector(`input[type=radio][value="${CSS.escape(String(value))}"]`);
+        const radio = input.querySelector(`input[type=radio][value="${CSS.escape(SimUi.LEGACY_RADIO_VALUES[String(value)] ?? String(value))}"]`);
         if (radio) {
           radio.checked = true;
           radio.dispatchEvent(new Event("change", { bubbles: true }));
@@ -792,12 +792,12 @@ export class SimUi {
 
   /** Contoured-eccentric family active AND the junction-ring mode set to 'auto'. */
   _jctAutoActive() {
-    if (this.getSelectedRelayType?.() !== "Contoured eccentric") return false;
+    if (this.getSelectedRelayType?.() !== "Contoured transfer") return false;
     return (this.slidersData.adapted_eccentric_rings?.["junction-ring-mode"]?.value || "manual") === "auto";
   }
 
   /**
-   * Auto junction-ring growth (Contoured eccentric) — EMPIRICAL, one increment per
+   * Auto junction-ring growth (Contoured transfer) — EMPIRICAL, one increment per
    * links-ready. Reads the live topology's per-ring junction bundles (routeSummary
    * .ringDetail) against each ring's own two-route capacity (the Y: both arcs
    * squeeze through one junction — the shared slidersData.junctionDeficits test);
@@ -955,20 +955,33 @@ export class SimUi {
    * Metadata for the sensitivity panel's SECOND sweep axis, which adapts to the
    * active relay family:
    *   • Contoured concentric → "Route count"  (adapted_rings.route_count)
-   *   • Contoured eccentric  → "Throughput in ring (worst case)"
+   *   • Contoured transfer  → "Throughput in ring (worst case)"
    *                          (adapted_eccentric_rings.requiredmbpsbetweensats)
    * Other families have no swept second parameter (axis greyed).
    */
   _sensSecondAxis() {
     const t = this.getSelectedRelayType?.();
-    if (t === "Contoured eccentric") {
-      return {
-        kind: "throughput",
-        applyKey: "adapted_eccentric_rings.requiredmbpsbetweensats",
-        label: "Throughput in ring (worst case)",
-        prefix: "Mbps ",
-        unit: "Mbps",
-      };
+    if (t === "Contoured transfer") {
+      // Two rate modes (pane select): "inring" sweeps the per-ring worst-case rate
+      // (total capacity rises with ring count); "total" sweeps the TOTAL relay
+      // capacity (per scenario, in-ring = total / (2 x rings), holding the total
+      // constant as the ring count sweeps).
+      const mode = document.getElementById("sens-rate-mode")?.value || "inring";
+      return mode === "total"
+        ? {
+            kind: "throughput", mode,
+            applyKey: "adapted_eccentric_rings.requiredmbpsbetweensats",
+            label: "Total relay capacity",
+            prefix: "Total ",
+            unit: "Mbps total",
+          }
+        : {
+            kind: "throughput", mode,
+            applyKey: "adapted_eccentric_rings.requiredmbpsbetweensats",
+            label: "Throughput in ring (worst case)",
+            prefix: "Mbps ",
+            unit: "Mbps/ring",
+          };
     }
     return {
       kind: "routes",
@@ -984,7 +997,7 @@ export class SimUi {
    *  every other family leaves this axis inert. */
   _sensRouteGreyed() {
     const t = this.getSelectedRelayType?.();
-    if (t === "Contoured eccentric") return false;
+    if (t === "Contoured transfer") return false;
     if (t === "Contoured concentric") {
       const auto = this.slidersData.adapted_rings?.auto_route_count?.value || "yes";
       return auto !== "no";
@@ -1010,8 +1023,17 @@ export class SimUi {
     const note = document.getElementById("sens-route-note");
     if (note) note.textContent = !greyed ? ""
       : this.getSelectedRelayType?.() === "Contoured concentric"
-        ? "Route count is auto-derived — set Auto Route Count to ‘no’ (manual) in the concentric section to sweep it."
-        : "This axis applies to the Contoured concentric (route count) and Contoured eccentric (in-ring throughput) families.";
+        ? "Concentric needs only the ring count — routes are auto-derived (set Auto Route Count to ‘no’ in the concentric section to sweep them manually)."
+        : "This axis applies to the Contoured concentric (route count) and Contoured transfer (rate) families.";
+    // Sync the pane's layout radios with the main relay-type radio, and show the
+    // transfer rate-mode select only for the transfer family.
+    const fam = this.getSelectedRelayType?.();
+    const rc = document.getElementById("sens-family-conc");
+    const rt = document.getElementById("sens-family-tran");
+    if (rc) rc.checked = fam === "Contoured concentric";
+    if (rt) rt.checked = fam === "Contoured transfer";
+    const modeRow = document.getElementById("sens-rate-mode-row");
+    if (modeRow) modeRow.style.display = fam === "Contoured transfer" ? "flex" : "none";
   }
 
   applySimpleDefaults(ringCount, options = {}) {
@@ -1160,10 +1182,15 @@ export class SimUi {
     //     relay capacity, which for eccentric is derived from this in-ring rate.
     //   • route count: AFTER — applySimpleDefaults forces auto_route_count = yes, so we
     //     re-set it to manual and write the count.
-    const applySecondAxisPre = (v) => {
+    const applySecondAxisPre = (v, ringCount) => {
       if (v == null) return;
       const ax = this._sensSecondAxis();
-      if (ax.kind === "throughput") setSweptSlider(ax.applyKey, v);
+      if (ax.kind !== "throughput") return;
+      // Total-capacity mode: each transfer ring delivers two route arcs at the
+      // in-ring rate, so in-ring = total / (2 x rings).
+      const rc = Math.max(1, ringCount ?? parseFloat(this.sliders.relay_type?.ringcount?.value) ?? 1);
+      const applied = ax.mode === "total" ? Math.max(1, Math.round(v / (2 * rc))) : v;
+      setSweptSlider(ax.applyKey, applied);
     };
     const applySecondAxisPost = (v) => {
       if (v == null) return;
@@ -1214,6 +1241,26 @@ export class SimUi {
     // The second sweep axis's display metadata (route count vs in-ring throughput),
     // captured at run start; used for chart labels/titles. See _sensSecondAxis.
     let secondAxisMeta = this._sensSecondAxis();
+
+    // Pane-side layout radios: mirror the main relay-type radio both ways (the
+    // pane-show + change paths call _updateSensRouteGrey, which syncs back).
+    for (const id of ["sens-family-conc", "sens-family-tran"]) {
+      document.getElementById(id)?.addEventListener("change", (e) => {
+        if (!e.target.checked) return;
+        const radio = this.sliders.relay_type?.selected?.querySelector?.(
+          `input[type=radio][value="${CSS.escape(e.target.value)}"]`);
+        if (radio && !radio.checked) {
+          radio.checked = true;
+          radio.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+        this._updateSensRouteGrey();
+        updateEstimate();
+      });
+    }
+    document.getElementById("sens-rate-mode")?.addEventListener("change", () => {
+      this._updateSensRouteGrey();
+      updateEstimate();
+    });
 
     // --- Estimate display (iteration count + time) ---
     const updateEstimate = () => {
@@ -1852,7 +1899,7 @@ export class SimUi {
               for (const routeCount of routeValues) {
                 // Throughput axis (eccentric): set BEFORE seeding so the Earth/Mars rings
                 // size to half this scenario's relay capacity.
-                applySecondAxisPre(routeCount);
+                applySecondAxisPre(routeCount, ringCount);
                 if (ringCount != null) this.applySimpleDefaults(ringCount);
                 if (techUserVal != null) {
                   const techInternal = Math.round(Math.log2(techUserVal));
@@ -2091,7 +2138,7 @@ export class SimUi {
                 for (const placement of placements) {
                   if (stopRequested) break;
                   // 1. Apply this scenario's design live (the optimizer reads the live UI).
-                  applySecondAxisPre(routeCount);
+                  applySecondAxisPre(routeCount, ringCount);
                   if (ringCount != null) this.applySimpleDefaults(ringCount);
                   if (techUserVal != null) this.applySliderValues({ "laser_technology.improvement-factor": Math.round(Math.log2(techUserVal)) });
                   applySecondAxisPost(routeCount);
@@ -2190,7 +2237,7 @@ export class SimUi {
             const cur = s.input.querySelector("input[type=radio]:checked");
             if ((cur ? cur.value : null) === s.radio) continue; // unchanged
             if (s.radio != null) {
-              const radio = s.input.querySelector(`input[type=radio][value="${CSS.escape(String(s.radio))}"]`);
+              const radio = s.input.querySelector(`input[type=radio][value="${CSS.escape(SimUi.LEGACY_RADIO_VALUES[String(s.radio)] ?? String(s.radio))}"]`);
               if (radio) { radio.checked = true; radio.dispatchEvent(new Event("change", { bubbles: true })); }
             }
           } else {
@@ -2416,9 +2463,12 @@ export class SimUi {
   }
 
   // Map each relay_type.selected option to its config section key.
+  /** Old stored radio values (localStorage/presets/archives) -> current ones. */
+  static LEGACY_RADIO_VALUES = { "Contoured eccentric": "Contoured transfer" };
+
   static RELAY_TYPE_SECTIONS = {
     "Contoured concentric": "adapted_rings",
-    "Contoured eccentric": "adapted_eccentric_rings",
+    "Contoured transfer": "adapted_eccentric_rings",
     "Circular": "circular_rings",
     "Eccentric": "eccentric_rings",
   };
@@ -2465,7 +2515,7 @@ export class SimUi {
     const SECTION_TITLES = {
       relay_type: "Constellation sizing",
       adapted_rings: "Contoured Concentric rings",
-      adapted_eccentric_rings: "Contoured Eccentric rings",
+      adapted_eccentric_rings: "Contoured Transfer rings",
     };
 
     for (const section in this.slidersData) {
@@ -2999,7 +3049,7 @@ export class SimUi {
         const input = this.sliders[section]?.[sliderId];
         if (!input) continue;
         if (input.classList && input.classList.contains("radio-container")) {
-          const radio = input.querySelector(`input[type=radio][value="${CSS.escape(String(value))}"]`);
+          const radio = input.querySelector(`input[type=radio][value="${CSS.escape(SimUi.LEGACY_RADIO_VALUES[String(value)] ?? String(value))}"]`);
           if (radio) { radio.checked = true; radio.dispatchEvent(new Event("change", { bubbles: true })); }
         } else {
           input.value = value;
@@ -3053,7 +3103,7 @@ export class SimUi {
 
     // One scatter per metric, colored by relay family. The x-axis is switchable
     // between ring count and satellite count via the toggle below (xMode).
-    const ECC = (t) => /eccentric/i.test(t || "");
+    const ECC = (t) => /eccentric|transfer/i.test(t || "");
     const C_CONC = "#4a90e2", C_ECC = "#ffb454";
     // Eccentric points are shaded by ring count along a warm gradient (gold → deep
     // orange), so within the eccentric family the ring count is readable while the
@@ -4378,7 +4428,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=4.95");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=4.96");
     let result = null;
     try {
       result = await solveBandDistribution({

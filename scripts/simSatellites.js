@@ -1,7 +1,7 @@
 // simSatellites.js
 
-import { helioCoords, positionFromSolarAngle } from "./simOrbits.js?v=4.95";
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.95";
+import { helioCoords, positionFromSolarAngle } from "./simOrbits.js?v=4.96";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.96";
 
 export class SimSatellites {
   constructor(simLinkBudget, planets) {
@@ -95,15 +95,15 @@ export class SimSatellites {
       "Circular": () => this._buildCircularRings(uiConfig),
       "Eccentric": () => this._buildEccentricRings(uiConfig),
       "Contoured concentric": () => this._buildAdaptedRings(uiConfig),
-      "Contoured eccentric": () => this._buildAdaptedEccentricRings(uiConfig),
+      "Contoured transfer": () => this._buildAdaptedEccentricRings(uiConfig),
     };
     const build = relayBuilders[relayType] || relayBuilders["Contoured concentric"];
     const relayConfigs = build();
     satellitesConfig.push(...relayConfigs);
-    // Intermediate junction rings (Contoured eccentric only), both planet sides:
+    // Intermediate junction rings (Contoured transfer only), both planet sides:
     // plane-stepped rings evenly populated at corridor-derived density (rotation
     // symmetry keeps every tangent corridor served at every epoch).
-    if (relayType === "Contoured eccentric") {
+    if (relayType === "Contoured transfer") {
       satellitesConfig.push(...this._buildIntermediateJunctionRings(uiConfig, relayConfigs));
     }
     if (uiConfig["ring_mars.side-extension-degrees-slider"]) satellitesConfig.push(...this._buildPlanetRing(uiConfig, "ring_mars"));

@@ -1,6 +1,6 @@
 // simLinkBudget.js
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.95";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.96";
 
 export class SimLinkBudget {
   constructor() {
@@ -67,7 +67,8 @@ export class SimLinkBudget {
     // configs without the key still pick a working solver).
     const RELAY_SECTION = {
       "Contoured concentric": "adapted_rings",
-      "Contoured eccentric": "adapted_eccentric_rings",
+      "Contoured transfer": "adapted_eccentric_rings",
+      "Contoured eccentric": "adapted_eccentric_rings", // legacy stored value
       "Circular": "circular_rings",
       "Eccentric": "eccentric_rings",
     };
