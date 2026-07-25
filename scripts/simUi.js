@@ -5,13 +5,13 @@ import {
   junctionDeficits,
   mapSliderValueToUserFacing as mapToUserFacing,
   mapUserFacingToSliderValue as mapToSliderInternal,
-} from "./slidersData.js?v=4.97";
-import { LukashianClock } from "./lukashianTime.js?v=4.97";
-import { wireAuthUi } from "./auth.js?v=4.97";
-import { SensitivityPool } from "./sensitivityPool.js?v=4.97";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.97";
-import { minOf } from "./simMath.js?v=4.97";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.97";
+} from "./slidersData.js?v=4.98";
+import { LukashianClock } from "./lukashianTime.js?v=4.98";
+import { wireAuthUi } from "./auth.js?v=4.98";
+import { SensitivityPool } from "./sensitivityPool.js?v=4.98";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.98";
+import { minOf } from "./simMath.js?v=4.98";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.98";
 
 export class SimUi {
   constructor(simMain) {
@@ -1432,6 +1432,27 @@ export class SimUi {
       const seriesValues = seriesDim ? dimValues[seriesDim] : [null];
       const thirdValues = thirdDim ? dimValues[thirdDim] : [null];
 
+      // Many series (a 16-geometry sweep = 16 legend entries) grow the Chart.js
+      // legend to several rows inside the FIXED-height plot box, squeezing the plot
+      // to nothing. Compact the legend when crowded and grow each chart's wrapper
+      // by the legend's extra rows so the plot area keeps its intended height.
+      const nSeries = seriesValues.length * thirdValues.length;
+      const legendCompact = nSeries > 8;
+      const legendLabels = legendCompact
+        ? { color: textDim, font: { size: 8 }, boxWidth: 8, boxHeight: 8, padding: 4 }
+        : { color: textDim, font: { size: 9 }, boxWidth: 10 };
+      const sizeWrap = (canvas) => {
+        const wrap = canvas.parentElement;
+        if (!wrap || !wrap.classList.contains("chart-wrap")) return;
+        wrap.style.height = ""; // reset to the CSS default (150px, 260px expanded)
+        if (nSeries <= 1) return;
+        const base = wrap.clientHeight || 150;
+        const w = wrap.clientWidth || 300;
+        const itemW = legendCompact ? 76 : 92; // swatch + an "E180/M270"-class label
+        const rows = Math.ceil(nSeries / Math.max(1, Math.floor(w / itemW)));
+        if (rows > 1) wrap.style.height = `${base + (rows - 1) * 15}px`;
+      };
+
       const chartConfigs = [
         { id: "sens-chart-sats", title: "Satellites", unit: "", scale: 1, key: "sats" },
         { id: "sens-chart-flow", title: "Total Flow (achieved)", unit: "Gbps", scale: 1/1000, key: "flow" },
@@ -1477,6 +1498,7 @@ export class SimUi {
       for (const cfg of chartConfigs) {
         const canvas = document.getElementById(cfg.id);
         if (!canvas) continue;
+        sizeWrap(canvas);
 
         // ── Scatter charts: metric-vs-metric, {x,y} points, linear x-axis ──
         if (cfg.scatter) {
@@ -1504,7 +1526,7 @@ export class SimUi {
                     label: (ctx) => `${ctx.dataset.label}: ${fmtAx(ctx.parsed.x)} ${cfg.xLabel.match(/\(([^)]+)\)/)?.[1] || ""} → ${fmtAx(ctx.parsed.y)} ${cfg.yLabel.match(/\(([^)]+)\)/)?.[1] || ""}`,
                   },
                 },
-                legend: { display: datasets.length > 1, labels: { color: textDim, font: { size: 9 }, boxWidth: 10 } },
+                legend: { display: datasets.length > 1, labels: legendLabels },
                 title: { display: true, text: cfg.title, color: textMuted, font: { size: 11, weight: "normal" }, padding: { bottom: 4 } },
               },
             },
@@ -1587,7 +1609,7 @@ export class SimUi {
                   },
                 },
               },
-              legend: { display: datasets.length > 1, labels: { color: textDim, font: { size: 9 }, boxWidth: 10 } },
+              legend: { display: datasets.length > 1, labels: legendLabels },
               title: { display: true, text: cfg.title, color: textMuted, font: { size: 11, weight: "normal" }, padding: { bottom: 4 } },
             },
           },
@@ -4428,7 +4450,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=4.97");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=4.98");
     let result = null;
     try {
       result = await solveBandDistribution({
