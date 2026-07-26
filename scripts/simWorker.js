@@ -9,15 +9,15 @@
 // Loaded as an ES module worker:
 //   new Worker(new URL("./simWorker.js", import.meta.url), { type: "module" })
 
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.98";
-import { SimSatellites } from "./simSatellites.js?v=4.98";
-import { SimLinkBudget } from "./simLinkBudget.js?v=4.98";
-import { SimNetwork } from "./simNetwork.js?v=4.98";
-import { SimDeployment } from "./simDeployment.js?v=4.98";
-import { SimMissionValidator } from "./simMissionValidator.js?v=4.98";
-import { minOf } from "./simMath.js?v=4.98";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.98";
-import { planetRingRequiredMbps, junctionDeficits } from "./slidersData.js?v=4.98";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.99";
+import { SimSatellites } from "./simSatellites.js?v=4.99";
+import { SimLinkBudget } from "./simLinkBudget.js?v=4.99";
+import { SimNetwork } from "./simNetwork.js?v=4.99";
+import { SimDeployment } from "./simDeployment.js?v=4.99";
+import { SimMissionValidator } from "./simMissionValidator.js?v=4.99";
+import { minOf } from "./simMath.js?v=4.99";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.99";
+import { planetRingRequiredMbps, junctionDeficits } from "./slidersData.js?v=4.99";
 
 // --- State (initialized lazily on the first compute) ---
 let simLinkBudget = null;
@@ -148,6 +148,17 @@ function runPipeline({ requestId, windowIdx, configEpoch, uiConfig, satellitesCo
 
   // 3. Compute positions for the requested simDate
   t = performance.now();
+  // Main-UI geometry placement: mirror the live override from uiConfig so the
+  // worker's window computes place Earth/Mars exactly like the main thread does
+  // (simMain.setSatellitesConfig applies the same map to its own instance).
+  simSolarSystem.setAngleOverrides(
+    uiConfig && uiConfig["simulation.planet-placement"] === "Geometry"
+      ? {
+          Earth: EARTH_MARS_CLOSEST_APPROACH_DEG + (parseFloat(uiConfig["simulation.earth-angle-offset-deg"]) || 0),
+          Mars: EARTH_MARS_CLOSEST_APPROACH_DEG + (parseFloat(uiConfig["simulation.mars-angle-offset-deg"]) || 0),
+        }
+      : null
+  );
   const planetsObj = simSolarSystem.updatePlanetsPositions(simDate);
   const planets = Object.values(planetsObj);
   const satellites = simSatellites.updateSatellitesPositions(simDate);
@@ -317,6 +328,10 @@ function applyGeometryOffsets(earthAngleOffset, marsAngleOffset) {
  */
 function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flowCalctimeMs = 20000, maxIterations = 15, sizingBudgetMs = 6000, objectiveOnly = false, earthAngleOffset = null, marsAngleOffset = null, includeLinks = false, computeFlow = true }) {
   ensureState();
+  // Scenarios place planets explicitly (applyGeometryOffsets after each position
+  // update) — clear any persistent main-UI override a prior runPipeline left on
+  // this worker's shared solar system so it can't leak into scenario results.
+  simSolarSystem.setAngleOverrides(null);
   const t0 = performance.now();
   const date = new Date(simDate);
   // The constellation is sized once (serial path sizes at dateValues[0]); flow is

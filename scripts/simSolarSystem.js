@@ -1,6 +1,6 @@
 // simSolarSystem.js
 
-import { helioCoords, positionFromSolarAngle } from "./simOrbits.js?v=4.98";
+import { helioCoords, positionFromSolarAngle } from "./simOrbits.js?v=4.99";
 
 export class SimSolarSystem {
   constructor() {
@@ -213,7 +213,22 @@ export class SimSolarSystem {
   updatePlanetsPositions(simDaysSinceStart) {
     for (const [name, object] of Object.entries(this.solarSystemData.planets))
       this.solarSystemData.planets[name].position = helioCoords(object, simDaysSinceStart);
+    // Geometry-placement override: pin named planets at fixed solar angles,
+    // superseding the ephemeris for EVERY caller (main render loop, worker
+    // pipeline, probes, flights). Set from simulation.planet-placement.
+    if (this.angleOverrides)
+      for (const [name, deg] of Object.entries(this.angleOverrides)) this.setPlanetSolarAngle(name, deg);
     return this.solarSystemData.planets;
+  }
+
+  /**
+   * Persistent geometry override consulted by every updatePlanetsPositions call:
+   * a {planetName: absoluteSolarAngleDeg} map, or null/empty to follow the
+   * ephemerides again. The worker's runScenario clears this on entry — sweep
+   * scenarios place planets explicitly per step via applyGeometryOffsets.
+   */
+  setAngleOverrides(map) {
+    this.angleOverrides = map && Object.keys(map).length ? map : null;
   }
 
   /**

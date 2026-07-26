@@ -5,13 +5,13 @@ import {
   junctionDeficits,
   mapSliderValueToUserFacing as mapToUserFacing,
   mapUserFacingToSliderValue as mapToSliderInternal,
-} from "./slidersData.js?v=4.98";
-import { LukashianClock } from "./lukashianTime.js?v=4.98";
-import { wireAuthUi } from "./auth.js?v=4.98";
-import { SensitivityPool } from "./sensitivityPool.js?v=4.98";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.98";
-import { minOf } from "./simMath.js?v=4.98";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.98";
+} from "./slidersData.js?v=4.99";
+import { LukashianClock } from "./lukashianTime.js?v=4.99";
+import { wireAuthUi } from "./auth.js?v=4.99";
+import { SensitivityPool } from "./sensitivityPool.js?v=4.99";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.99";
+import { minOf } from "./simMath.js?v=4.99";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.99";
 
 export class SimUi {
   constructor(simMain) {
@@ -828,7 +828,9 @@ export class SimUi {
     const nM = fail.mars && kM < maxK ? kM + 1 : kM;
     if (nE === kE && nM === kM) return; // failing side(s) already at max — settle
     console.log(`[JunctionSizing] junction shortfall (E:${fail.earth} M:${fail.mars}) -> rings E${nE}/M${nM}`);
-    this._writeJunctionCounts(nE, nM);
+    // Return whether a write happened — the live-sweep settle probe (simMain
+    // links-ready) counts "no planet write AND no junction write" as a quiet round.
+    return this._writeJunctionCounts(nE, nM);
   }
 
   /**
@@ -1281,7 +1283,8 @@ export class SimUi {
         else timeStr = ` ~${(totalSec / 3600).toFixed(1)} hours`;
         timeStr += " compute time";
       }
-      estimateEl.textContent = `${total} iteration${total !== 1 ? "s" : ""}${timeStr}`;
+      const liveNote = !optimized && this._sensExec === "live" ? " · live: serial, waits for real convergence per scenario (slow)" : "";
+      estimateEl.textContent = `${total} iteration${total !== 1 ? "s" : ""}${timeStr}${liveNote}`;
     };
     this._updateSensEstimate = updateEstimate;
 
@@ -1326,10 +1329,10 @@ export class SimUi {
     const workerCountRow = document.getElementById("sens-worker-count-row");
     const mainOpts = document.getElementById("sens-main-opts");
     const syncExec = () => {
-      const main = this._sensExec === "main";
       for (const b of execBtns) b.classList.toggle("active", b.dataset.exec === this._sensExec);
-      if (workerCountRow) workerCountRow.style.display = main ? "none" : "";
-      if (mainOpts) mainOpts.style.display = main ? "" : "none";
+      if (workerCountRow) workerCountRow.style.display = this._sensExec === "worker" ? "" : "none";
+      if (mainOpts) mainOpts.style.display = this._sensExec === "main" ? "" : "none";
+      updateEstimate();
     };
     for (const b of execBtns) b.addEventListener("click", () => { this._sensExec = b.dataset.exec; syncExec(); });
     syncExec();
@@ -2087,6 +2090,110 @@ export class SimUi {
               recordScenarioResult(res, s);
               completed++; renderProgress();
               // Yield so the progress bar + charts paint between scenarios.
+              await new Promise((r) => setTimeout(r, 0));
+            }
+          } else if (this._sensExec === "live") {
+            // ── Live (sliders): drive the REAL UI serially and record what the live
+            //    sim converges to. No scenario runner at all — the normal pipeline
+            //    (slider write → rebuild → worker window → links-ready → planet/
+            //    junction sizing steps) does everything; we just write sliders, wait
+            //    for it to settle, and capture its state. Slowest mode, but immune to
+            //    live-vs-scenario divergence by construction: what you see in the
+            //    right panel is exactly what gets charted and archived. ──
+            this.simMain._sensitivityRunning = false; // the whole point is watching it
+            const needFlow = calcFlow;
+            // The live pipeline only solves flow when links are colored by Flow and
+            // the flow budget is nonzero — force both for the run (snapshot-restored).
+            if (needFlow) {
+              const w = { "display.links-colors": "Flow" };
+              if (!(parseFloat(this.sliders.simulation?.calctimeSec?.value) > 0))
+                w["simulation.calctimeSec"] = Number.isFinite(flowMs) ? Math.min(20, Math.max(5, flowMs / 1000)) : 20;
+              this.applySliderValues(w);
+            }
+            // Keep the clock moving fast so window results keep flowing once the
+            // design stops changing — each links-ready is one settle-probe round.
+            // (Raw slider position: signedPow2, 18 → 2^18 ≈ 262k×. Snapshot-restored.)
+            this.applySliderValues({ "simulation.time-acceleration-slider": 18 });
+            const LIVE_SETTLE_MS = Number.isFinite(flowMs) ? Math.min(600000, Math.max(120000, flowMs * 3)) : 600000;
+            // Settled = the design stopped rebuilding AND fresh results describe it.
+            // Sizing rounds (links-ready + planet/junction step) only fire after a
+            // rebuild — once the design is final they STOP, so "no new round while
+            // ≥3 full window results stream by, and the last round wrote nothing"
+            // is the convergence signal. Those ≥3 post-stability windows also carry
+            // the flow solve (Flow colors + calctime are forced on above), so
+            // flow/latency freshness is implied — no separate flow condition.
+            const waitForLiveSettle = async (maxMs) => {
+              const sm = this.simMain;
+              const t0 = performance.now();
+              let lastRound = sm._sizingRound || 0;
+              let wrAtRound = sm._windowResultCount || 0;
+              while (performance.now() - t0 < maxMs) {
+                if (stopRequested) return false;
+                await new Promise((r) => setTimeout(r, 300));
+                const round = sm._sizingRound || 0;
+                const wr = sm._windowResultCount || 0;
+                if (round !== lastRound) { lastRound = round; wrAtRound = wr; continue; }
+                const stable = round > 0 && !sm._sizingWroteLastRound && !this._planetSizeArmed;
+                if (stable && wr >= wrAtRound + 3) return true;
+              }
+              return false;
+            };
+            const renderProgress = () => {
+              const pct = Math.round((completed / totalScenarios) * 100);
+              progressBar.style.width = `${pct}%`;
+              progressText.textContent = `${pct}% (${completed}/${totalScenarios}) · live (sliders)`;
+            };
+            renderProgress();
+            console.log(`[Sensitivity] live (sliders): ${scenarios.length} scenarios serially`);
+            for (const s of scenarios) {
+              if (stopRequested) break;
+              // 1. Write this scenario's design to the real sliders (the same calls
+              //    the enumerator used to build configs — now the live sim runs them).
+              applySecondAxisPre(s.routeCount, s.ringCount);
+              if (s.ringCount != null) this.applySimpleDefaults(s.ringCount);
+              applySecondAxisPost(s.routeCount);
+              // 2. Placement: geometry samples pin Earth/Mars via the main-UI
+              //    simulation sliders ("current" leaves the clock/ephemeris alone).
+              if (s.placement.earthAngleOffset != null) {
+                this.applySliderValues({
+                  "simulation.planet-placement": "Geometry",
+                  "simulation.earth-angle-offset-deg": s.placement.earthAngleOffset,
+                  "simulation.mars-angle-offset-deg": s.placement.marsAngleOffset,
+                });
+              }
+              // 3. Converge.
+              const settled = await waitForLiveSettle(LIVE_SETTLE_MS);
+              if (stopRequested) break;
+              if (!settled) console.warn(`[Sensitivity] live scenario ${s.scenarioId} did not settle within ${Math.round(LIVE_SETTLE_MS / 1000)}s — recording current state as-is (flow omitted)`);
+              // 4. Capture the live state in worker-result shape and reuse the shared
+              //    chart + archive path. sizedConfig reads the live sliders the sizing
+              //    steps actually wrote — "as flown" by construction. Flow/latency are
+              //    recorded only when the settle condition proved them fresh.
+              const sm = this.simMain;
+              const flowFresh = needFlow && settled;
+              const sizedConfig = {};
+              for (const fullId of ["ring_earth.requiredmbpsbetweensats", "ring_mars.requiredmbpsbetweensats", "adapted_eccentric_rings.junction-ring-count", "adapted_eccentric_rings.junction-ring-count-mars"]) {
+                const [sec, id] = fullId.split(".");
+                const def = this.slidersData[sec]?.[id];
+                const input = this.sliders[sec]?.[id];
+                if (!def || !input) continue;
+                const raw = parseFloat(input.value);
+                if (Number.isFinite(raw)) sizedConfig[fullId] = Math.round(this.mapSliderValueToUserFacing(def, raw) * 1e6) / 1e6;
+              }
+              const res = {
+                satellitesCount: sm.satellitesCount || 0,
+                capacityInfo: sm.capacityInfo ? JSON.parse(JSON.stringify(sm.capacityInfo)) : null,
+                routeSummary: sm.routeSummary ? JSON.parse(JSON.stringify(sm.routeSummary)) : null,
+                latencyData: flowFresh ? sm.lastLatencyData : null,
+                maxFlowGbps: flowFresh ? sm.maxFlowGbps : null,
+                flowError: needFlow && !settled ? "live flow did not settle" : null,
+                flowSummary: null,
+                resultTreesData: sm.resultTrees || [],
+                sizedConfig,
+              };
+              recordScenarioResult(res, s);
+              completed++;
+              renderProgress();
               await new Promise((r) => setTimeout(r, 0));
             }
           } else {
@@ -4450,7 +4557,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=4.98");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=4.99");
     let result = null;
     try {
       result = await solveBandDistribution({
@@ -4652,6 +4759,9 @@ export class SimUi {
         case "satellite.satellite-empty-mass":
         case "laser_technology.laser-terminal-mass":
         case "simulation.maxDistanceAU":
+        case "simulation.planet-placement":
+        case "simulation.earth-angle-offset-deg":
+        case "simulation.mars-angle-offset-deg":
         case "simulation.maxSatCount":
         case "simulation.calctimeSec":
         case "simulation.solarExclusionDeg":

@@ -1,6 +1,6 @@
 // slidersData.js
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.98";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.99";
 
 export const slidersData = {
   display: {
@@ -153,6 +153,38 @@ export const slidersData = {
     //   scale: "linear",
     //   updateLongTermScore: true,
     // },
+    "planet-placement": {
+      type: "radio",
+      label: "Planet placement",
+      description:
+        "Date = Earth/Mars follow the real ephemerides at the sim date. Geometry = Earth/Mars are pinned at fixed angle offsets from the Earth–Mars closest-approach direction (the sim date then only drives satellite phasing and flights) — the same reference the sensitivity panel's geometry grid uses, so a 4×4 grid cell like E90/M270 is reproduced by setting the two offset sliders to 90 and 270. Offsets equal ≈ closest approach; offsets 180° apart ≈ conjunction (Sun between the planets).",
+      options: ["Date", "Geometry"],
+      value: "Date",
+      unit: "",
+      updateLongTermScore: true,
+    },
+    "earth-angle-offset-deg": {
+      label: "Earth angle offset",
+      description: "Earth's angle (degrees) from the closest-approach reference direction. Only applies when Planet placement = Geometry.",
+      min: 0,
+      max: 359,
+      value: 0,
+      step: 1,
+      unit: "°",
+      scale: "linear",
+      updateLongTermScore: true,
+    },
+    "mars-angle-offset-deg": {
+      label: "Mars angle offset",
+      description: "Mars's angle (degrees) from the closest-approach reference direction. Only applies when Planet placement = Geometry.",
+      min: 0,
+      max: 359,
+      value: 0,
+      step: 1,
+      unit: "°",
+      scale: "linear",
+      updateLongTermScore: true,
+    },
     maxDistanceAU: {
       label: "Maximum link range AU",
       min: 0,

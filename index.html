@@ -24,8 +24,8 @@
   <!-- Inline SVG favicon — no extra request, scales nicely. Same ◉ as the brand. -->
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230b0f1a'/%3E%3Ccircle cx='16' cy='16' r='8' fill='none' stroke='%23ff6b35' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='3' fill='%23ff6b35'/%3E%3C/svg%3E">
 
-  <script src="scripts/imported/chart/chart.js?v=4.98"></script>
-  <link rel="stylesheet" href="styles.css?v=4.98">
+  <script src="scripts/imported/chart/chart.js?v=4.99"></script>
+  <link rel="stylesheet" href="styles.css?v=4.99">
 </head>
 
 <body>
@@ -224,6 +224,7 @@
           <div class="sens-mode-toggle" role="tablist" style="display:flex; margin-bottom:var(--s-2); border:1px solid var(--border-2,#333); border-radius:6px; overflow:hidden; width:fit-content;">
             <button type="button" id="sens-exec-worker" class="sens-exec-btn active" data-exec="worker" title="Run scenarios in parallel across Web Workers — fast and never blocks the UI.">Worker pool</button>
             <button type="button" id="sens-exec-main" class="sens-exec-btn" data-exec="main" title="Run scenarios one at a time on the main thread. Blocks the UI during each solve, but there is no parallel-worker memory contention — large constellations that time out under the worker pool can finish here.">Main thread</button>
+            <button type="button" id="sens-exec-live" class="sens-exec-btn" data-exec="live" title="Serial, slowest, most faithful: each scenario writes the REAL sliders (including geometry placement) and waits for the live simulation to converge — planet auto-size and junction growth settle over real links-ready rounds — then records exactly what the live sim shows. No separate scenario runner, so live-vs-sweep divergence is impossible by construction.">Live (sliders)</button>
           </div>
           <div class="sens-row" id="sens-worker-count-row" style="display:flex; gap:var(--s-2); align-items:center;">
             <span class="muted">Worker threads</span>
@@ -398,7 +399,7 @@
       }
     }
   </script>
-  <script type="module" src="scripts/simMain.js?v=4.98"></script>
+  <script type="module" src="scripts/simMain.js?v=4.99"></script>
 </body>
 
 </html>

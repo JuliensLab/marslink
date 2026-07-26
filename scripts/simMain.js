@@ -1,23 +1,23 @@
 // simMain.js
 
-import { SimUi } from "./simUi.js?v=4.98";
-import { SimTime } from "./simTime.js?v=4.98";
-import { SimSolarSystem } from "./simSolarSystem.js?v=4.98";
-import { SimSatellites } from "./simSatellites.js?v=4.98";
-import { SimDeployment } from "./simDeployment.js?v=4.98";
-import { SimMissionValidator } from "./simMissionValidator.js?v=4.98";
-import { SimLinkBudget } from "./simLinkBudget.js?v=4.98";
-import { SimNetwork } from "./simNetwork.js?v=4.98";
+import { SimUi } from "./simUi.js?v=4.99";
+import { SimTime } from "./simTime.js?v=4.99";
+import { SimSolarSystem } from "./simSolarSystem.js?v=4.99";
+import { SimSatellites } from "./simSatellites.js?v=4.99";
+import { SimDeployment } from "./simDeployment.js?v=4.99";
+import { SimMissionValidator } from "./simMissionValidator.js?v=4.99";
+import { SimLinkBudget } from "./simLinkBudget.js?v=4.99";
+import { SimNetwork } from "./simNetwork.js?v=4.99";
 // Import both SimDisplay implementations with unique names
-import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=4.98";
-import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=4.98";
-import { generateReport } from "./reportGenerator.js?v=4.98";
-import { SIM_CONSTANTS } from "./simConstants.js?v=4.98";
-import { minOf, maxOf } from "./simMath.js?v=4.98";
-import { SimFlightController } from "./simFlightController.js?v=4.98";
-import { SimProbeController } from "./simProbeController.js?v=4.98";
-import { findDepartureWindows } from "./simTransfer.js?v=4.98";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.98";
+import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=4.99";
+import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=4.99";
+import { generateReport } from "./reportGenerator.js?v=4.99";
+import { SIM_CONSTANTS } from "./simConstants.js?v=4.99";
+import { minOf, maxOf } from "./simMath.js?v=4.99";
+import { SimFlightController } from "./simFlightController.js?v=4.99";
+import { SimProbeController } from "./simProbeController.js?v=4.99";
+import { findDepartureWindows } from "./simTransfer.js?v=4.99";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.99";
 
 export class SimMain {
   // Clamp argument to [-1, 1] to prevent NaN from Math.asin domain errors
@@ -70,7 +70,7 @@ export class SimMain {
     if (typeof window !== "undefined") window.simMain = this;
 
     // --- Worker + triple-buffered window cache (-1/0/+1) ---
-    this.simWorker = new Worker(new URL("./simWorker.js?v=4.98", import.meta.url), { type: "module" });
+    this.simWorker = new Worker(new URL("./simWorker.js?v=4.99", import.meta.url), { type: "module" });
     this.simWorker.onmessage = (event) => this.handleWorkerMessage(event);
     this.simWorker.onerror = (event) => console.error("[Marslink] Worker error:", event.message);
     this.simWorker.postMessage({ type: "init" });
@@ -339,6 +339,19 @@ export class SimMain {
 
   setSatellitesConfig(uiConfig) {
     this._lastUiConfig = uiConfig;
+    // Planet placement (simulation.planet-placement): Geometry pins Earth/Mars at
+    // fixed offsets from the closest-approach direction — the same reference the
+    // sensitivity geometry grid uses, so results reproduce independent of the sim
+    // date. The worker applies the identical override in runPipeline from this
+    // same uiConfig, keeping main-thread and worker planet positions bit-equal.
+    this.simSolarSystem.setAngleOverrides?.(
+      uiConfig["simulation.planet-placement"] === "Geometry"
+        ? {
+            Earth: EARTH_MARS_CLOSEST_APPROACH_DEG + (parseFloat(uiConfig["simulation.earth-angle-offset-deg"]) || 0),
+            Mars: EARTH_MARS_CLOSEST_APPROACH_DEG + (parseFloat(uiConfig["simulation.mars-angle-offset-deg"]) || 0),
+          }
+        : null
+    );
     const satellitesConfig = [];
 
     // Link update interval slider → window duration for the -1/0/+1 cache
@@ -2265,6 +2278,9 @@ export class SimMain {
    * Apply a cached window result to the display + UI.
    */
   applyWindowResult(result) {
+    // Live-sweep settle probe: full window results (flow included when enabled)
+    // increment this — the sweep waits for one AFTER the design stops changing.
+    this._windowResultCount = (this._windowResultCount || 0) + 1;
     this.lastNetworkData = result.networkData || null;
     this.lastLatencyData = result.latencyData || null; // surfaced to the archive metric capture
     this.maxFlowGbps = result.networkData ? result.networkData.maxFlowGbps || 0 : 0;
@@ -2348,7 +2364,11 @@ export class SimMain {
         // skipped when the planet step just wrote (that result is about to be stale).
         if (this.ui?.runPlanetSizingStep) {
           const planetWrote = this.ui.runPlanetSizingStep() === true;
-          if (this.ui.runJunctionSizingStep) this.ui.runJunctionSizingStep(planetWrote);
+          const jctWrote = this.ui.runJunctionSizingStep ? this.ui.runJunctionSizingStep(planetWrote) === true : false;
+          // Live-sweep settle probe: count sizing rounds and whether this round
+          // changed the design (a write triggers a rebuild → another round).
+          this._sizingRound = (this._sizingRound || 0) + 1;
+          this._sizingWroteLastRound = planetWrote || jctWrote;
         }
         if (typeof msg.satellitesCount === "number") this.satellitesCount = msg.satellitesCount;
         if (this.simDisplay) {
