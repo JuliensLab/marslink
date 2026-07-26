@@ -9,15 +9,15 @@
 // Loaded as an ES module worker:
 //   new Worker(new URL("./simWorker.js", import.meta.url), { type: "module" })
 
-import { SimSolarSystem } from "./simSolarSystem.js?v=5.06";
-import { SimSatellites } from "./simSatellites.js?v=5.06";
-import { SimLinkBudget } from "./simLinkBudget.js?v=5.06";
-import { SimNetwork } from "./simNetwork.js?v=5.06";
-import { SimDeployment } from "./simDeployment.js?v=5.06";
-import { SimMissionValidator } from "./simMissionValidator.js?v=5.06";
-import { minOf } from "./simMath.js?v=5.06";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.06";
-import { planetRingRequiredMbps, junctionDeficits } from "./slidersData.js?v=5.06";
+import { SimSolarSystem } from "./simSolarSystem.js?v=5.07";
+import { SimSatellites } from "./simSatellites.js?v=5.07";
+import { SimLinkBudget } from "./simLinkBudget.js?v=5.07";
+import { SimNetwork } from "./simNetwork.js?v=5.07";
+import { SimDeployment } from "./simDeployment.js?v=5.07";
+import { SimMissionValidator } from "./simMissionValidator.js?v=5.07";
+import { minOf } from "./simMath.js?v=5.07";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.07";
+import { planetRingRequiredMbps, junctionDeficits } from "./slidersData.js?v=5.07";
 
 // --- State (initialized lazily on the first compute) ---
 let simLinkBudget = null;
@@ -55,26 +55,27 @@ function calculateCapacityInfo(links) {
     if (fromRing === toRing) {
       const isPlanetLink = link.fromId === "Earth" || link.toId === "Earth" || link.fromId === "Mars" || link.toId === "Mars";
       if (isPlanetLink) {
+        // Planet-to-satellite ground links — track separately, don't mix into inring.
+        // Also keep each side's capacity verbatim (sat-name suffix sign gives the side:
+        // "0","1",… prograde → groundPos; "-0","-1",… retrograde → groundNeg) — the
+        // capacity card's planet flanks report exactly these two links. Mirrored in
+        // SimMain.calculateCapacityInfo.
         if (link.fromId === "Earth" || link.toId === "Earth") {
           const satId = link.fromId === "Earth" ? link.toId : link.fromId;
-          ringCapacities["ring_earth"].planetLinks.push({ cap, satId });
+          const rc = ringCapacities["ring_earth"];
+          rc.planetLinks.push({ cap, satId });
+          if (satId.slice("ring_earth".length + 1).startsWith("-")) rc.groundNeg = cap;
+          else rc.groundPos = cap;
         }
         if (link.fromId === "Mars" || link.toId === "Mars") {
           const satId = link.fromId === "Mars" ? link.toId : link.fromId;
-          ringCapacities["ring_mars"].planetLinks.push({ cap, satId });
+          const rc = ringCapacities["ring_mars"];
+          rc.planetLinks.push({ cap, satId });
+          if (satId.slice("ring_mars".length + 1).startsWith("-")) rc.groundNeg = cap;
+          else rc.groundPos = cap;
         }
       } else {
         ringCapacities[fromRing].inring.push(cap);
-        // Planetary rings: remember the chain hop ADJACENT to the planet on each
-        // side (sats 0↔1 and -0↔-1 ride with the planet), so the capacity card can
-        // show the planet stage at the CURRENT orbital position instead of the
-        // ring-wide (perihelion) minimum. Mirrored in SimMain.calculateCapacityInfo.
-        if (fromRing === "ring_earth" || fromRing === "ring_mars") {
-          const sfx = (id) => id.slice(fromRing.length + 1);
-          const pair = [sfx(link.fromId), sfx(link.toId)].sort().join("|");
-          if (pair === "0|1") ringCapacities[fromRing].flankPos = cap;
-          else if (pair === "-0|-1") ringCapacities[fromRing].flankNeg = cap;
-        }
       }
     } else {
       const isInterplanetary =

@@ -1,23 +1,23 @@
 // simMain.js
 
-import { SimUi } from "./simUi.js?v=5.06";
-import { SimTime } from "./simTime.js?v=5.06";
-import { SimSolarSystem } from "./simSolarSystem.js?v=5.06";
-import { SimSatellites } from "./simSatellites.js?v=5.06";
-import { SimDeployment } from "./simDeployment.js?v=5.06";
-import { SimMissionValidator } from "./simMissionValidator.js?v=5.06";
-import { SimLinkBudget } from "./simLinkBudget.js?v=5.06";
-import { SimNetwork } from "./simNetwork.js?v=5.06";
+import { SimUi } from "./simUi.js?v=5.07";
+import { SimTime } from "./simTime.js?v=5.07";
+import { SimSolarSystem } from "./simSolarSystem.js?v=5.07";
+import { SimSatellites } from "./simSatellites.js?v=5.07";
+import { SimDeployment } from "./simDeployment.js?v=5.07";
+import { SimMissionValidator } from "./simMissionValidator.js?v=5.07";
+import { SimLinkBudget } from "./simLinkBudget.js?v=5.07";
+import { SimNetwork } from "./simNetwork.js?v=5.07";
 // Import both SimDisplay implementations with unique names
-import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=5.06";
-import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=5.06";
-import { generateReport } from "./reportGenerator.js?v=5.06";
-import { SIM_CONSTANTS } from "./simConstants.js?v=5.06";
-import { minOf, maxOf } from "./simMath.js?v=5.06";
-import { SimFlightController } from "./simFlightController.js?v=5.06";
-import { SimProbeController } from "./simProbeController.js?v=5.06";
-import { findDepartureWindows } from "./simTransfer.js?v=5.06";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.06";
+import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=5.07";
+import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=5.07";
+import { generateReport } from "./reportGenerator.js?v=5.07";
+import { SIM_CONSTANTS } from "./simConstants.js?v=5.07";
+import { minOf, maxOf } from "./simMath.js?v=5.07";
+import { SimFlightController } from "./simFlightController.js?v=5.07";
+import { SimProbeController } from "./simProbeController.js?v=5.07";
+import { findDepartureWindows } from "./simTransfer.js?v=5.07";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.07";
 
 export class SimMain {
   // Clamp argument to [-1, 1] to prevent NaN from Math.asin domain errors
@@ -70,7 +70,7 @@ export class SimMain {
     if (typeof window !== "undefined") window.simMain = this;
 
     // --- Worker + triple-buffered window cache (-1/0/+1) ---
-    this.simWorker = new Worker(new URL("./simWorker.js?v=5.06", import.meta.url), { type: "module" });
+    this.simWorker = new Worker(new URL("./simWorker.js?v=5.07", import.meta.url), { type: "module" });
     this.simWorker.onmessage = (event) => this.handleWorkerMessage(event);
     this.simWorker.onerror = (event) => console.error("[Marslink] Worker error:", event.message);
     this.simWorker.postMessage({ type: "init" });
@@ -1516,38 +1516,19 @@ export class SimMain {
       const earthCap = { side1: 0, side2: 0 };
       const marsCap = { side1: 0, side2: 0 };
 
-      // Each planet-stage SIDE = min(that side's ground link, the FIRST in-ring hop
-      // on that side at the planet's CURRENT orbital position) — the local links
-      // that actually carry the side's traffic. NOT the ring-wide minimum: that
-      // link sits at perihelion wherever the planet is, so it made the flanks (and
-      // the planet-stage total) read as the worst-case value at every geometry —
-      // only correct when the planet itself is at perihelion. The worst-case basis
-      // (2×min) remains the SIZING convention (planet rings are sized so the
-      // perihelion hop still meets the target); this card shows the position.
-      const ringMinCap = (inring) => (inring && inring.length ? minOf(inring) : Infinity);
-      const earthRingMin = ringMinCap(earthInring);
-      const marsRingMin = ringMinCap(marsInring);
-
-      const earthPlanetLinks = ringCapacities["ring_earth"]?.planetLinks || [];
-      const earthCaps = earthPlanetLinks.map((l) => l.cap).sort((a, b) => b - a);
-      const marsPlanetLinks = ringCapacities["ring_mars"]?.planetLinks || [];
-      const marsCaps = marsPlanetLinks.map((l) => l.cap).sort((a, b) => b - a);
-      // Pair each side's ground link with its side's chain hop: the link to sat
-      // "0" belongs with the 0↔1 hop, "-0" with -0↔-1. Fall back to the two
-      // largest ground links / ring min if identities are unavailable.
-      const sideCaps = (ringKey, planetLinks, sortedCaps, fallbackMin) => {
+      // Each planet-stage SIDE = that side's planet↔satellite ground link, reported
+      // verbatim (groundPos = prograde "0"-side neighbour, groundNeg = retrograde
+      // "-0"-side) — the two links the viewer sees flanking the planet, the same
+      // per-side split the Flow card shows. The ring's own capacity spread is the
+      // separate "ring …" min|avg|max row; neither folds into the flanks. The
+      // worst-case basis (2×min) remains the SIZING convention; this card shows
+      // the current position.
+      const sideCaps = (ringKey) => {
         const rc = ringCapacities[ringKey];
-        const groundTo = (sfxWanted) => {
-          const l = planetLinks.find((pl) => pl.satId && pl.satId.slice(ringKey.length + 1) === sfxWanted);
-          return l ? l.cap : null;
-        };
-        return {
-          side1: Math.min(groundTo("0") ?? sortedCaps[0] ?? 0, rc?.flankPos ?? fallbackMin),
-          side2: Math.min(groundTo("-0") ?? sortedCaps[1] ?? 0, rc?.flankNeg ?? fallbackMin),
-        };
+        return { side1: rc?.groundPos ?? 0, side2: rc?.groundNeg ?? 0 };
       };
-      Object.assign(earthCap, sideCaps("ring_earth", earthPlanetLinks, earthCaps, earthRingMin));
-      Object.assign(marsCap, sideCaps("ring_mars", marsPlanetLinks, marsCaps, marsRingMin));
+      Object.assign(earthCap, sideCaps("ring_earth"));
+      Object.assign(marsCap, sideCaps("ring_mars"));
 
       const earthCapTotal = earthCap.side1 + earthCap.side2;
       const marsCapTotal = marsCap.side1 + marsCap.side2;
@@ -1943,11 +1924,19 @@ export class SimMain {
         const earthFlow = { side1: 0, side2: 0 };
         const marsFlow = { side1: 0, side2: 0 };
         if (networkData?.links) {
+          // Pair by side (sat-name suffix sign), matching the capacity card's flanks:
+          // side1 = prograde "0"-side ground link, side2 = retrograde "-0"-side.
           const getFlows = (planetName) => {
-            const flows = networkData.links
-              .filter((l) => l.fromId === planetName || l.toId === planetName)
-              .map((l) => (l.gbpsFlow || 0) * 1000).sort((a, b) => b - a);
-            return { side1: flows[0] || 0, side2: flows[1] || 0 };
+            const ringKey = planetName === "Earth" ? "ring_earth" : "ring_mars";
+            const out = { side1: 0, side2: 0 };
+            for (const l of networkData.links) {
+              if (l.fromId !== planetName && l.toId !== planetName) continue;
+              const satId = l.fromId === planetName ? l.toId : l.fromId;
+              const mbps = (l.gbpsFlow || 0) * 1000;
+              if (satId.slice(ringKey.length + 1).startsWith("-")) out.side2 = mbps;
+              else out.side1 = mbps;
+            }
+            return out;
           };
           const ef = getFlows("Earth");
           earthFlow.side1 = ef.side1; earthFlow.side2 = ef.side2;
@@ -2174,28 +2163,28 @@ export class SimMain {
       if (fromRing === toRing) {
         const isPlanetLink = link.fromId === "Earth" || link.toId === "Earth" || link.fromId === "Mars" || link.toId === "Mars";
         if (isPlanetLink) {
-          // Planet-to-satellite ground links — track separately, don't mix into inring
+          // Planet-to-satellite ground links — track separately, don't mix into inring.
+          // Also keep each side's capacity verbatim (sat-name suffix sign gives the side:
+          // "0","1",… prograde → groundPos; "-0","-1",… retrograde → groundNeg) — the
+          // capacity card's planet flanks report exactly these two links. Mirrored in
+          // the worker's twin.
           if (link.fromId === "Earth" || link.toId === "Earth") {
             const satId = link.fromId === "Earth" ? link.toId : link.fromId;
-            ringCapacities["ring_earth"].planetLinks.push({ cap, satId });
+            const rc = ringCapacities["ring_earth"];
+            rc.planetLinks.push({ cap, satId });
+            if (satId.slice("ring_earth".length + 1).startsWith("-")) rc.groundNeg = cap;
+            else rc.groundPos = cap;
           }
           if (link.fromId === "Mars" || link.toId === "Mars") {
             const satId = link.fromId === "Mars" ? link.toId : link.fromId;
-            ringCapacities["ring_mars"].planetLinks.push({ cap, satId });
+            const rc = ringCapacities["ring_mars"];
+            rc.planetLinks.push({ cap, satId });
+            if (satId.slice("ring_mars".length + 1).startsWith("-")) rc.groundNeg = cap;
+            else rc.groundPos = cap;
           }
         } else {
           // Actual satellite-to-satellite intra-ring links
           ringCapacities[fromRing].inring.push(cap);
-          // Planetary rings: remember the chain hop ADJACENT to the planet on each
-          // side (sats 0↔1 and -0↔-1 ride with the planet), so the capacity card can
-          // show the planet stage at the CURRENT orbital position instead of the
-          // ring-wide (perihelion) minimum. Mirrored in the worker's twin.
-          if (fromRing === "ring_earth" || fromRing === "ring_mars") {
-            const sfx = (id) => id.slice(fromRing.length + 1);
-            const pair = [sfx(link.fromId), sfx(link.toId)].sort().join("|");
-            if (pair === "0|1") ringCapacities[fromRing].flankPos = cap;
-            else if (pair === "-0|-1") ringCapacities[fromRing].flankNeg = cap;
-          }
         }
       } else {
         const isInterplanetary =
