@@ -5,13 +5,13 @@ import {
   junctionDeficits,
   mapSliderValueToUserFacing as mapToUserFacing,
   mapUserFacingToSliderValue as mapToSliderInternal,
-} from "./slidersData.js?v=5.08";
-import { LukashianClock } from "./lukashianTime.js?v=5.08";
-import { wireAuthUi } from "./auth.js?v=5.08";
-import { SensitivityPool } from "./sensitivityPool.js?v=5.08";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.08";
-import { minOf } from "./simMath.js?v=5.08";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.08";
+} from "./slidersData.js?v=5.09";
+import { LukashianClock } from "./lukashianTime.js?v=5.09";
+import { wireAuthUi } from "./auth.js?v=5.09";
+import { SensitivityPool } from "./sensitivityPool.js?v=5.09";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.09";
+import { minOf } from "./simMath.js?v=5.09";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.09";
 
 export class SimUi {
   constructor(simMain) {
@@ -1219,6 +1219,19 @@ export class SimUi {
         const iso = currentDateIso();
         return [{ label: iso.slice(0, 10), simDate: iso, earthAngleOffset: null, marsAngleOffset: null }];
       }
+      // Date range: N REAL ephemeris dates spread evenly across [now, now + days]
+      // (endpoints included) — every sweep cell runs once per date, so the archived
+      // rows aggregate (mean|min|max) into date-window capacity instead of a
+      // single-date snapshot. Same placement shape as "current": real date, no offsets.
+      if (geomModeVal() === "date-range") {
+        const days = Math.max(1, parseFloat(document.getElementById("sens-date-range-days")?.value) || 90);
+        const n = Math.max(2, Math.min(60, parseInt(document.getElementById("sens-date-range-samples")?.value, 10) || 10));
+        const t0 = new Date(currentDateIso()).getTime();
+        return Array.from({ length: n }, (_, i) => {
+          const iso = new Date(t0 + ((i * days) / (n - 1)) * 86400000).toISOString();
+          return { label: iso.slice(0, 10), simDate: iso, earthAngleOffset: null, marsAngleOffset: null };
+        });
+      }
       const count = geomModeVal() === "geometry-16" ? 16 : 4;
       return this._buildGeometries(count).map((g) => ({
         label: `E${g.earthOffset}/M${g.marsOffset}`,
@@ -1339,6 +1352,17 @@ export class SimUi {
     };
     for (const b of modeBtns) b.addEventListener("click", () => { this._sensMode = b.dataset.mode; syncMode(); });
 
+    // Date-range placement inputs: visible only in that mode, greyed together with
+    // the selector in live mode (placement isn't swept there).
+    const syncDateRangeOpts = () => {
+      const span = document.getElementById("sens-date-range-opts");
+      if (!span) return;
+      const live = this._sensExec === "live";
+      span.style.display = geomModeVal() === "date-range" ? "inline-flex" : "none";
+      span.style.opacity = live ? "0.4" : "";
+      for (const inp of span.querySelectorAll("input")) inp.disabled = live;
+    };
+
     // --- Execution location toggle (Simple mode): Worker pool vs Main thread ---
     this._sensExec = this._sensExec || "worker";
     const execBtns = [...document.querySelectorAll(".sens-exec-btn")];
@@ -1348,8 +1372,8 @@ export class SimUi {
       for (const b of execBtns) b.classList.toggle("active", b.dataset.exec === this._sensExec);
       if (workerCountRow) workerCountRow.style.display = this._sensExec === "worker" ? "" : "none";
       if (mainOpts) mainOpts.style.display = this._sensExec === "main" ? "" : "none";
-      // Live mode doesn't sweep placement — grey the geometry-grid selector and
-      // point at the main Simulation section instead.
+      // Live mode doesn't sweep placement — grey the placement selector (and the
+      // date-range inputs) and point at the main Simulation section instead.
       const geomSel = document.getElementById("sens-geom-mode");
       if (geomSel) {
         const live = this._sensExec === "live";
@@ -1357,8 +1381,9 @@ export class SimUi {
         geomSel.style.opacity = live ? "0.4" : "";
         geomSel.title = live
           ? "Not used in Live (sliders) mode: planet geometry is fixed for the whole run by the main Simulation section (Planet placement = Date, or Geometry with one Earth angle and one Mars angle)."
-          : "How Earth & Mars are placed for each scenario. 'Current date' uses real ephemeris at the current sim date (one scenario). 'Geometry ×4 / ×16' place the planets at orbital longitudes measured from the Earth–Mars closest-approach direction, decoupled from date (the relay sats stay at a fixed phase).";
+          : "How Earth & Mars are placed for each scenario. 'Current date' uses real ephemeris at the current sim date (one scenario). 'Geometry ×4 / ×16' place the planets at orbital longitudes measured from the Earth–Mars closest-approach direction, decoupled from date (the relay sats stay at a fixed phase). 'Date range' sweeps real ephemeris dates spread evenly across a window starting at the current sim date — capacity data that is date-window-aggregated rather than a single-date snapshot.";
       }
+      syncDateRangeOpts();
       updateEstimate();
     };
     for (const b of execBtns) b.addEventListener("click", () => { this._sensExec = b.dataset.exec; syncExec(); });
@@ -1385,7 +1410,10 @@ export class SimUi {
         geomInfoBtn.setAttribute("aria-expanded", String(show));
       });
     }
-    if (geomSel) geomSel.addEventListener("change", () => { if (geomHelp && !geomHelp.hidden) renderGeomHelp(); });
+    if (geomSel) geomSel.addEventListener("change", () => {
+      syncDateRangeOpts();
+      if (geomHelp && !geomHelp.hidden) renderGeomHelp();
+    });
 
     syncMode();
 
@@ -1718,7 +1746,8 @@ export class SimUi {
         const ringEnabled = document.getElementById("sens-ring-enable").checked;
         const techEnabled = false; // tech axis removed from the panel (2026-07-23)
         const placementEnabled = placementIsDim();
-        placementAxisLabel = "Geometry"; // only used when the placement axis is a swept dim (geometry modes)
+        // Only used when the placement axis is a swept dim (geometry / date-range modes).
+        placementAxisLabel = geomModeVal() === "date-range" ? "Date" : "Geometry";
         // Simple (parallel) mode: suppress the reactive updateLoop so it doesn't waste the
         // main thread rebuilding/rendering constellations the worker path computes. Optimized
         // mode is serial and SHOULD render — the user watches the layout evolve per scenario
@@ -4331,6 +4360,7 @@ export class SimUi {
    *   • "current"     → Earth & Mars at their actual current-date positions (1 scenario).
    *   • "geometry-4"  → Earth fixed at +90°, Mars at {0,90,180,270}° (4 scenarios).
    *   • "geometry-16" → Earth × Mars at {0,90,180,270}° each (16 scenarios).
+   *   • "date-range"  → N real ephemeris dates spread across a window from the current sim date.
    * Returns an HTML string (inline SVG + legend). Re-render when the mode changes.
    */
   _geometryHelp(mode = "geometry-4") {
@@ -4343,7 +4373,7 @@ export class SimUi {
     // Ecliptic longitude L (deg) → screen (y flipped so +longitude is CCW/up).
     const P = (o, L) => ({ x: cx + rad(o, L) * Math.cos(L * d2r) * scale, y: cy - rad(o, L) * Math.sin(L * d2r) * scale });
     const orbitPath = (o) => { let d = ""; for (let L = 0; L <= 360; L += 3) { const p = P(o, L); d += (L === 0 ? "M" : "L") + p.x.toFixed(1) + " " + p.y.toFixed(1) + " "; } return d + "Z"; };
-    const dot = (p, col, r2, title) => `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${r2}" fill="${col}"><title>${title}</title></circle>`;
+    const dot = (p, col, r2, title, op = 1) => `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${r2}" fill="${col}" opacity="${op}"><title>${title}</title></circle>`;
     // Current ecliptic longitude of a live planet (for "current" mode).
     const liveLon = (name) => {
       try {
@@ -4372,6 +4402,23 @@ export class SimUi {
       svg += dot(eP, C_E, 4.5, `Earth ${eL == null ? "" : Math.round(eL) + "°"}`);
       svg += dot(mP, C_M, 4.5, `Mars ${mL == null ? "" : Math.round(mL) + "°"}`);
       desc = `<b>Current date</b>: Earth &amp; Mars at their actual positions for the current sim date — a single scenario.`;
+    } else if (mode === "date-range") {
+      // Sample dots at the mean-motion-propagated longitudes over the window,
+      // fading toward the later dates. Good to a few degrees — an explainer, not
+      // an ephemeris; the sweep itself uses the real helioCoords per date.
+      const days = Math.max(1, parseFloat(document.getElementById("sens-date-range-days")?.value) || 90);
+      const n = Math.max(2, Math.min(60, parseInt(document.getElementById("sens-date-range-samples")?.value, 10) || 10));
+      const planets = this.simMain?.simSolarSystem?.getSolarSystemData?.()?.planets || [];
+      const meanMotion = (name, fb) => planets.find((p) => p.name === name)?.n ?? fb;
+      const eL0 = liveLon("Earth"), mL0 = liveLon("Mars");
+      const eN = meanMotion("Earth", 0.9856), mN = meanMotion("Mars", 0.5241);
+      for (let i = n - 1; i >= 0; i--) {
+        const d = (i * days) / (n - 1);
+        const op = (1 - (0.7 * i) / (n - 1)).toFixed(2);
+        if (eL0 != null) svg += dot(P(E, eL0 + eN * d), C_E, 3, `Earth +${Math.round(d)} d`, op);
+        if (mL0 != null) svg += dot(P(M, mL0 + mN * d), C_M, 3, `Mars +${Math.round(d)} d`, op);
+      }
+      desc = `<b>Date range</b>: ${n} real ephemeris dates spread evenly across the next ${days} days from the current sim date (endpoints included) — ${n} scenarios per sweep cell, fading dots = later dates. Aggregating the archived rows (mean|min|max) gives date-window capacity instead of a single-date snapshot.`;
     } else if (mode === "geometry-16") {
       for (const off of ANG) svg += dot(P(E, ref + off), C_E, 3.5, `Earth +${off}°`);
       for (const off of ANG) svg += dot(P(M, ref + off), C_M, 3.5, `Mars +${off}°`);
@@ -4382,7 +4429,7 @@ export class SimUi {
       desc = `<b>×4</b>: Earth fixed at +90°, Mars at {0, 90, 180, 270}° from the reference — 4 scenarios.`;
     }
     svg += `</svg>`;
-    const geomNote = mode === "current" ? "" :
+    const geomNote = !mode.startsWith("geometry") ? "" :
       `<div style="margin-top:4px;">Geometry modes place the planets by orbital longitude (relay sats held at a fixed phase), decoupled from any date — so results reflect the planet geometry, not a calendar.</div>`;
     const legend =
       `<div style="font-size:11px; line-height:1.5; margin-top:6px;">` +
@@ -4621,7 +4668,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=5.08");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=5.09");
     let result = null;
     try {
       result = await solveBandDistribution({
