@@ -123,6 +123,11 @@ function randomWeights(lo = 0, n = 10) {
  *   size — below 1 = smaller, smoother proposals; above 1 = bolder jumps
  * @param {Array<{start:number,length:number}>} [o.segments] index ranges of each chart's
  *   free values; in singleCoord mode one value is jittered per segment (per chart)
+ * @param {(ws:number[][])=>Promise<object[]>} [o.evaluateBatch] whole-generation
+ *   evaluator: given the batch's weight vectors, returns their metrics in order. When
+ *   set, every generation (calibration included) goes through it so the CALLER owns the
+ *   fan-out ordering — e.g. all candidates in parallel against one sample date, then the
+ *   same candidates on the next date. Falls back to per-candidate `evaluate`.
  * @returns {Promise<{weights:number[], metrics:object, baseline:object, score:number, baselineScore:number, evals:number, alpha:number}>}
  */
 export async function solveBandDistribution({
@@ -139,12 +144,13 @@ export async function solveBandDistribution({
   onBatch = () => {},
   stepScale = 1,
   segments = null,
+  evaluateBatch = null,
 }) {
   const lo = Math.min(100, Math.max(0, minValue || 0));
   const a = Math.min(1, Math.max(0, alpha || 0));
   const sScale = stepScale > 0 ? stepScale : 1; // scales the proposed per-step move size
   const pure = a <= 0 ? "cap" : a >= 1 ? "lat" : null; // skip normalization at the ends
-  const evalAll = (ws) => Promise.all(ws.map((w) => evaluate(w)));
+  const evalAll = (ws) => (evaluateBatch ? evaluateBatch(ws) : Promise.all(ws.map((w) => evaluate(w))));
   // The number of weights (= density anchors the optimizer searches) is whatever the
   // caller seeds; everything below is count-agnostic.
   const bandCount = initialWeights && initialWeights.length >= 2 ? initialWeights.length : 10;

@@ -5,13 +5,13 @@ import {
   junctionDeficits,
   mapSliderValueToUserFacing as mapToUserFacing,
   mapUserFacingToSliderValue as mapToSliderInternal,
-} from "./slidersData.js?v=5.05";
-import { LukashianClock } from "./lukashianTime.js?v=5.05";
-import { wireAuthUi } from "./auth.js?v=5.05";
-import { SensitivityPool } from "./sensitivityPool.js?v=5.05";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.05";
-import { minOf } from "./simMath.js?v=5.05";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.05";
+} from "./slidersData.js?v=5.08";
+import { LukashianClock } from "./lukashianTime.js?v=5.08";
+import { wireAuthUi } from "./auth.js?v=5.08";
+import { SensitivityPool } from "./sensitivityPool.js?v=5.08";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.08";
+import { minOf } from "./simMath.js?v=5.08";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.08";
 
 export class SimUi {
   constructor(simMain) {
@@ -1208,9 +1208,10 @@ export class SimUi {
     };
 
     // Planet-placement axis. "current" = a single scenario at the current sim date (real
-    // ephemeris). "geometry-4/16" = geometry samples (shared with the optimizer via
-    // _buildGeometries): the relay sats stay at FIXED_GEOM_DATE and each sample passes
-    // angle offsets measured from the Earth–Mars closest-approach reference (worker-side).
+    // ephemeris). "geometry-4/16" = geometry samples (_buildGeometries; sens sweep only —
+    // the band-solver optimizer samples DATES instead, see _runBandSolver): the relay sats
+    // stay at FIXED_GEOM_DATE and each sample passes angle offsets measured from the
+    // Earth–Mars closest-approach reference (worker-side).
     const FIXED_GEOM_DATE = new Date(Date.UTC(2000, 0, 1)).toISOString();
     const geomModeVal = () => document.getElementById("sens-geom-mode")?.value || "current";
     const buildPlacements = () => {
@@ -3781,21 +3782,15 @@ export class SimUi {
         <span class="muted" title="Optimize purely for latency.">Latency</span>
       </div>
       <div class="muted" style="display:flex; gap:10px; align-items:center; margin-top:6px; font-size:12px; flex-wrap:wrap;">
-        <label title="Earth/Mars geometries each layout is scored at. 'current' = the live layout at the current sim date. 4 / 16 place Earth & Mars on their orbits by geometry, measured from the Earth–Mars closest-approach direction, date-independent: 4 = Earth fixed +90° × Mars at {0,90,180,270}°; 16 = both at {0,90,180,270}° (4×4). Scores combine per the aggregate setting.">geoms
-          <select id="band-solver-geom" style="width:72px;">
-            <option value="1" selected>current</option>
-            <option value="4">4</option>
-            <option value="16">16</option>
-          </select></label>
-        <button type="button" id="band-solver-geom-info" class="icon-btn" aria-expanded="false" title="Show what these geometries sample" style="line-height:1; padding:2px 6px;">&#9432;</button>
-        <label title="How the per-geometry scores combine. Mean = best lifetime average; Worst = robust to the hardest geometry (e.g. conjunction).">aggregate
+        <label title="Date window each layout must serve: samples are real ephemeris dates spread evenly from the current sim date to now + range. 0 = score at the current date only.">range <input type="number" id="band-solver-date-range" value="90" min="0" max="2000" step="10" style="width:56px;">d</label>
+        <label title="How many dates in the window each layout is scored at — every candidate is evaluated at every sample, every step. Runtime scales with this count. Candidates fan out in parallel per date; the dates run one after another.">dates <input type="number" id="band-solver-date-samples" value="10" min="1" max="60" step="1" style="width:44px;"></label>
+        <label title="How the per-date scores combine. Mean = best average over the window; Worst = robust to the window's hardest date.">aggregate
           <select id="band-solver-agg" style="width:64px;">
             <option value="mean" selected>Mean</option>
             <option value="worst">Worst</option>
           </select></label>
         <label title="Fast-lane emphasis inside the latency goal: latency = this%·(fastest route) + rest·(traffic-weighted average). 0 = pure average.">fast-lane <input type="number" id="band-solver-fast" value="25" min="0" max="100" step="5" style="width:48px;">%</label>
       </div>
-      <div id="band-solver-geom-help" hidden style="margin:6px 0; padding:8px; border:1px solid var(--border-2,#333); border-radius:6px; background:var(--accent-dim,rgba(255,255,255,0.02));"></div>
       <label class="muted" style="display:flex; gap:6px; align-items:center; margin-top:6px; font-size:12px;" title="Reject any layout with satellites inside Earth's orbit or outside Mars's — keep the whole relay strictly between the two planet orbits.">
         <input type="checkbox" id="band-solver-keep-between" checked style="margin:0; cursor:pointer; flex:none;">
         Keep all rings between Earth &amp; Mars orbits (no inside-Earth / outside-Mars sats)
@@ -3805,23 +3800,6 @@ export class SimUi {
 
     wrap.querySelector("#band-solver-btn").addEventListener("click", () => this._runBandSolver());
     wrap.querySelector("#band-solver-stop").addEventListener("click", () => { this._bandSolverStop = true; });
-
-    // Geometry explainer popover (ⓘ) next to the optimizer's "geoms" selector. Maps the
-    // geom count (1/4/16) to the shared diagram mode and re-renders on change while open.
-    const bsGeomSel = wrap.querySelector("#band-solver-geom");
-    const bsGeomInfo = wrap.querySelector("#band-solver-geom-info");
-    const bsGeomHelp = wrap.querySelector("#band-solver-geom-help");
-    const bsMode = () => (bsGeomSel?.value === "16" ? "geometry-16" : bsGeomSel?.value === "4" ? "geometry-4" : "current");
-    const bsRender = () => { if (bsGeomHelp) bsGeomHelp.innerHTML = this._geometryHelp(bsMode()); };
-    if (bsGeomInfo && bsGeomHelp) {
-      bsGeomInfo.addEventListener("click", () => {
-        const show = bsGeomHelp.hidden;
-        if (show) bsRender();
-        bsGeomHelp.hidden = !show;
-        bsGeomInfo.setAttribute("aria-expanded", String(show));
-      });
-    }
-    if (bsGeomSel) bsGeomSel.addEventListener("change", () => { if (bsGeomHelp && !bsGeomHelp.hidden) bsRender(); });
   }
 
   /**
@@ -4434,7 +4412,10 @@ export class SimUi {
     const bandCount = Math.max(2, Math.min(40, parseInt(document.getElementById("band-solver-bands")?.value, 10) || 10));
     const alpha = Math.max(0, Math.min(1, (parseFloat(document.getElementById("band-solver-alpha")?.value) || 0) / 100));
     const wFast = Math.max(0, Math.min(1, (parseFloat(document.getElementById("band-solver-fast")?.value) || 0) / 100));
-    const geomCount = Math.max(1, parseInt(document.getElementById("band-solver-geom")?.value, 10) || 1);
+    const drRaw = parseFloat(document.getElementById("band-solver-date-range")?.value);
+    const dateRangeDays = Number.isFinite(drRaw) ? Math.max(0, drRaw) : 90;
+    const dsRaw = parseInt(document.getElementById("band-solver-date-samples")?.value, 10);
+    const dateSamples = Number.isFinite(dsRaw) ? Math.max(1, Math.min(60, dsRaw)) : 10;
     const aggregation = document.getElementById("band-solver-agg")?.value === "worst" ? "worst" : "mean";
     const keepBetween = document.getElementById("band-solver-keep-between")?.checked !== false; // default on
     const moveModes = [...document.querySelectorAll(".band-solver-move:checked")].map((c) => c.value);
@@ -4495,12 +4476,14 @@ export class SimUi {
       return segToAnchors(full);
     };
 
-    // Geometry samples (shared with the sensitivity sweep via _buildGeometries):
-    // 'current' scores the live layout at the current sim date; 4/16 place Earth & Mars
-    // by geometry, decoupled from date, holding the relay satellites at FIXED_GEOM_DATE.
-    const currentDateIso = (this.simMain?.simTime?.getDate?.() || new Date()).toISOString();
-    const FIXED_GEOM_DATE = new Date(Date.UTC(2000, 0, 1)).toISOString(); // fixed satellite phase
-    const geometries = this._buildGeometries(geomCount);
+    // Date samples: every candidate is scored at N REAL ephemeris dates spread evenly
+    // across [now, now + range] (now = the current sim date), so the layout must serve
+    // the whole window rather than overfit today's planet geometry. range 0 or a single
+    // sample → the current date only (the old behaviour).
+    const nowDate = this.simMain?.simTime?.getDate?.() || new Date();
+    const nDates = dateRangeDays > 0 ? dateSamples : 1;
+    const sampleDates = Array.from({ length: nDates }, (_, i) =>
+      new Date(nowDate.getTime() + (nDates > 1 ? (i * dateRangeDays) / (nDates - 1) : 0) * 86400000).toISOString());
 
     // Constellation size is independent of the band weights, so estimate worker
     // heap once for the memory-admission budget.
@@ -4524,40 +4507,46 @@ export class SimUi {
     // live, so the readout reflects threads actually running rather than the
     // momentary lull between batches.
     let active = 0;
+    let dateNote = "";
     let lastLine = "Starting…";
-    const renderProgress = () => { if (prog) prog.textContent = `${lastLine} · ${active}/${pool.size} workers`; };
+    const renderProgress = () => { if (prog) prog.textContent = `${lastLine}${dateNote} · ${active}/${pool.size} workers`; };
     pool.onActivity = ({ active: a }) => { active = a; renderProgress(); };
 
     let scenarioId = 0;
     const fmtCap = (mbps) => (mbps >= 1000 ? (mbps / 1000).toFixed(2) + " Gbps" : Math.round(mbps) + " Mbps");
     const fmtLat = (s) => (s != null && isFinite(s) ? (s / 60).toFixed(1) + " min" : "—");
 
-    // Evaluate one layout: score it at every geometry, then aggregate.
-    // Capacity = relay totalThroughput; latency = wFast·(fastest route) + rest·(avg).
-    const evaluate = async (weights) => {
-      const cfg = { ...baseConfig };
+    // One layout's full config. Forces Date placement so a main-UI Geometry pin can't
+    // freeze every sample at the same planet angles — the samples ARE the dates.
+    const cfgFor = (weights) => {
+      const cfg = { ...baseConfig, "simulation.planet-placement": "Date" };
       // Rebuild each curve from its fixed seed + the free values in the search vector.
       for (const p of plan) cfg[p.key] = anchorsFor(p, weights);
-      const per = await Promise.all(geometries.map((g) =>
-        pool.submit({
-          scenarioId: scenarioId++,
-          uiConfig: cfg,
-          simDate: g.current ? currentDateIso : FIXED_GEOM_DATE,
-          sizingDate: g.current ? currentDateIso : FIXED_GEOM_DATE,
-          earthAngleOffset: g.current ? null : g.earthOffset, // null → use the date's geometry (current)
-          marsAngleOffset: g.current ? null : g.marsOffset,
-          maxIterations: 0,     // relay capacity/latency are independent of planet-ring sizing
-          objectiveOnly: true,  // skip max-flow / cost — just the topology + routeSummary
-        }, estMB).then((res) => {
-          const rs = res && res.routeSummary;
-          const zc = (res && res.zoneCounts) || { insideEarth: 0, outsideMars: 0 };
-          const viol = (zc.insideEarth || 0) + (zc.outsideMars || 0);
-          if (!rs || !(rs.totalThroughput > 0)) return { cap: 0, lat: Infinity, viol };
-          const avg = rs.avgLatency, min = rs.minLatency;
-          const lat = isFinite(avg) && avg > 0 ? wFast * (isFinite(min) && min > 0 ? min : avg) + (1 - wFast) * avg : Infinity;
-          return { cap: rs.totalThroughput, lat, viol };
-        })
-      ));
+      return cfg;
+    };
+    // One (layout, date) probe → {cap, lat, viol}.
+    // Capacity = relay totalThroughput; latency = wFast·(fastest route) + rest·(avg).
+    const probe = (cfg, dateIso) =>
+      pool.submit({
+        scenarioId: scenarioId++,
+        uiConfig: cfg,
+        simDate: dateIso,
+        sizingDate: dateIso,
+        earthAngleOffset: null,
+        marsAngleOffset: null,
+        maxIterations: 0,     // relay capacity/latency are independent of planet-ring sizing
+        objectiveOnly: true,  // skip max-flow / cost — just the topology + routeSummary
+      }, estMB).then((res) => {
+        const rs = res && res.routeSummary;
+        const zc = (res && res.zoneCounts) || { insideEarth: 0, outsideMars: 0 };
+        const viol = (zc.insideEarth || 0) + (zc.outsideMars || 0);
+        if (!rs || !(rs.totalThroughput > 0)) return { cap: 0, lat: Infinity, viol };
+        const avg = rs.avgLatency, min = rs.minLatency;
+        const lat = isFinite(avg) && avg > 0 ? wFast * (isFinite(min) && min > 0 ? min : avg) + (1 - wFast) * avg : Infinity;
+        return { cap: rs.totalThroughput, lat, viol };
+      });
+    // Combine one layout's per-date probes into the {capacity, latency} the SA scores.
+    const aggregate = (per) => {
       const valid = per.filter(Boolean);
       if (!valid.length) return { capacity: 0, latency: Infinity, violation: 0 };
       const violation = valid.reduce((s, v) => s + (v.viol || 0), 0);
@@ -4575,6 +4564,26 @@ export class SimUi {
         latency = lats.length ? lats.reduce((s, v) => s + v, 0) / lats.length : Infinity;
       }
       return { capacity, latency, violation };
+    };
+    // Single-layout evaluation (the baseline): its dates run as one parallel wave.
+    const evaluate = async (weights) => {
+      const cfg = cfgFor(weights);
+      return aggregate(await Promise.all(sampleDates.map((d) => probe(cfg, d))));
+    };
+    // Whole-generation evaluation (SA batches + calibration): all candidates fan out
+    // in PARALLEL against the SAME date, then the SAME candidate set moves on to the
+    // next date — one wave per date — until every sample has scored every candidate.
+    const evaluateBatch = async (wsList) => {
+      const cfgs = wsList.map(cfgFor);
+      const per = cfgs.map(() => []);
+      for (let di = 0; di < sampleDates.length; di++) {
+        dateNote = sampleDates.length > 1 ? ` · date ${di + 1}/${sampleDates.length}` : "";
+        renderProgress();
+        const wave = await Promise.all(cfgs.map((cfg) => probe(cfg, sampleDates[di])));
+        wave.forEach((m, i) => per[i].push(m));
+      }
+      dateNote = "";
+      return per.map(aggregate);
     };
 
     // Live constellation preview: rebuild the main display from a weight vector (the SA's
@@ -4612,12 +4621,13 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=5.05");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=5.08");
     let result = null;
     try {
       result = await solveBandDistribution({
         initialWeights,
         evaluate,
+        evaluateBatch,
         shouldStop: () => this._bandSolverStop,
         maxEvals,
         alpha,
