@@ -1,23 +1,23 @@
 // simMain.js
 
-import { SimUi } from "./simUi.js?v=5.04";
-import { SimTime } from "./simTime.js?v=5.04";
-import { SimSolarSystem } from "./simSolarSystem.js?v=5.04";
-import { SimSatellites } from "./simSatellites.js?v=5.04";
-import { SimDeployment } from "./simDeployment.js?v=5.04";
-import { SimMissionValidator } from "./simMissionValidator.js?v=5.04";
-import { SimLinkBudget } from "./simLinkBudget.js?v=5.04";
-import { SimNetwork } from "./simNetwork.js?v=5.04";
+import { SimUi } from "./simUi.js?v=5.05";
+import { SimTime } from "./simTime.js?v=5.05";
+import { SimSolarSystem } from "./simSolarSystem.js?v=5.05";
+import { SimSatellites } from "./simSatellites.js?v=5.05";
+import { SimDeployment } from "./simDeployment.js?v=5.05";
+import { SimMissionValidator } from "./simMissionValidator.js?v=5.05";
+import { SimLinkBudget } from "./simLinkBudget.js?v=5.05";
+import { SimNetwork } from "./simNetwork.js?v=5.05";
 // Import both SimDisplay implementations with unique names
-import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=5.04";
-import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=5.04";
-import { generateReport } from "./reportGenerator.js?v=5.04";
-import { SIM_CONSTANTS } from "./simConstants.js?v=5.04";
-import { minOf, maxOf } from "./simMath.js?v=5.04";
-import { SimFlightController } from "./simFlightController.js?v=5.04";
-import { SimProbeController } from "./simProbeController.js?v=5.04";
-import { findDepartureWindows } from "./simTransfer.js?v=5.04";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.04";
+import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=5.05";
+import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=5.05";
+import { generateReport } from "./reportGenerator.js?v=5.05";
+import { SIM_CONSTANTS } from "./simConstants.js?v=5.05";
+import { minOf, maxOf } from "./simMath.js?v=5.05";
+import { SimFlightController } from "./simFlightController.js?v=5.05";
+import { SimProbeController } from "./simProbeController.js?v=5.05";
+import { findDepartureWindows } from "./simTransfer.js?v=5.05";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.05";
 
 export class SimMain {
   // Clamp argument to [-1, 1] to prevent NaN from Math.asin domain errors
@@ -70,7 +70,7 @@ export class SimMain {
     if (typeof window !== "undefined") window.simMain = this;
 
     // --- Worker + triple-buffered window cache (-1/0/+1) ---
-    this.simWorker = new Worker(new URL("./simWorker.js?v=5.04", import.meta.url), { type: "module" });
+    this.simWorker = new Worker(new URL("./simWorker.js?v=5.05", import.meta.url), { type: "module" });
     this.simWorker.onmessage = (event) => this.handleWorkerMessage(event);
     this.simWorker.onerror = (event) => console.error("[Marslink] Worker error:", event.message);
     this.simWorker.postMessage({ type: "init" });
@@ -344,14 +344,17 @@ export class SimMain {
     // sensitivity geometry grid uses, so results reproduce independent of the sim
     // date. The worker applies the identical override in runPipeline from this
     // same uiConfig, keeping main-thread and worker planet positions bit-equal.
-    this.simSolarSystem.setAngleOverrides?.(
+    const pinMap =
       uiConfig["simulation.planet-placement"] === "Geometry"
         ? {
             Earth: EARTH_MARS_CLOSEST_APPROACH_DEG + (parseFloat(uiConfig["simulation.earth-angle-offset-deg"]) || 0),
             Mars: EARTH_MARS_CLOSEST_APPROACH_DEG + (parseFloat(uiConfig["simulation.mars-angle-offset-deg"]) || 0),
           }
-        : null
-    );
+        : null;
+    this.simSolarSystem.setAngleOverrides?.(pinMap);
+    // The planetary rings rotate rigidly with their pinned planet (see
+    // simSatellites.setPlanetAngleOverrides) — same map, same lifecycle.
+    this.simSatellites.setPlanetAngleOverrides?.(pinMap);
     const satellitesConfig = [];
 
     // Link update interval slider → window duration for the -1/0/+1 cache

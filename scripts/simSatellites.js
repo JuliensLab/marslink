@@ -1,7 +1,7 @@
 // simSatellites.js
 
-import { helioCoords, positionFromSolarAngle } from "./simOrbits.js?v=5.04";
-import { SIM_CONSTANTS } from "./simConstants.js?v=5.04";
+import { helioCoords, positionFromSolarAngle } from "./simOrbits.js?v=5.05";
+import { SIM_CONSTANTS } from "./simConstants.js?v=5.05";
 
 export class SimSatellites {
   constructor(simLinkBudget, planets) {
@@ -1065,9 +1065,39 @@ export class SimSatellites {
     return positions;
   }
 
+  /**
+   * Geometry placement: {Earth: absoluteSolarAngleDeg, Mars: ...} or null. When a
+   * planet is pinned (simulation.planet-placement = Geometry), its planetary ring
+   * rotates rigidly with it: every ring_earth/ring_mars satellite rides the
+   * planet's exact orbit, so shifting each one by the planet's pin delta in TRUE
+   * longitude — and re-projecting onto its own ellipse — keeps the planet flanked
+   * by its two neighbors at the designed spacing, chain continuing to the
+   * anti-planet point, exactly as in Date mode. Mirrors
+   * simSolarSystem.setAngleOverrides; set/cleared from the same places.
+   */
+  setPlanetAngleOverrides(map) {
+    this.planetAngleOverrides = map && Object.keys(map).length ? map : null;
+  }
+
   updateSatellitesPositions(simDaysSinceStart) {
+    // Per-planet TRUE-longitude pin deltas for this instant (pinned − ephemeris).
+    let ringDelta = null;
+    if (this.planetAngleOverrides) {
+      ringDelta = {};
+      for (const [planetName, pinDeg] of Object.entries(this.planetAngleOverrides)) {
+        const planet = planetName === "Mars" ? this.Mars : this.Earth;
+        const eph = helioCoords(planet, simDaysSinceStart).solarAngle;
+        const d = pinDeg - eph;
+        if (Number.isFinite(d)) ringDelta[planetName === "Mars" ? "ring_mars" : "ring_earth"] = d;
+      }
+    }
     for (const satellite of this.satellites) {
       satellite.position = helioCoords(satellite, simDaysSinceStart);
+      if (ringDelta && ringDelta[satellite.ringName] !== undefined) {
+        const L = (((satellite.position.solarAngle + ringDelta[satellite.ringName]) % 360) + 360) % 360;
+        const pos = positionFromSolarAngle(satellite, L);
+        satellite.position = { ...satellite.position, x: pos.x, y: pos.y, z: pos.z, r: pos.r, solarAngle: L };
+      }
       satellite.orbitalZone = this.getRadialZone(satellite, satellite.ringName);
       if (satellite.ringName !== "ring_earth" && satellite.ringName !== "ring_mars") {
         const crossings = this.ringCrossings.get(satellite.ringName);

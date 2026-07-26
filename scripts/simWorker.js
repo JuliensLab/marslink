@@ -9,15 +9,15 @@
 // Loaded as an ES module worker:
 //   new Worker(new URL("./simWorker.js", import.meta.url), { type: "module" })
 
-import { SimSolarSystem } from "./simSolarSystem.js?v=5.04";
-import { SimSatellites } from "./simSatellites.js?v=5.04";
-import { SimLinkBudget } from "./simLinkBudget.js?v=5.04";
-import { SimNetwork } from "./simNetwork.js?v=5.04";
-import { SimDeployment } from "./simDeployment.js?v=5.04";
-import { SimMissionValidator } from "./simMissionValidator.js?v=5.04";
-import { minOf } from "./simMath.js?v=5.04";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.04";
-import { planetRingRequiredMbps, junctionDeficits } from "./slidersData.js?v=5.04";
+import { SimSolarSystem } from "./simSolarSystem.js?v=5.05";
+import { SimSatellites } from "./simSatellites.js?v=5.05";
+import { SimLinkBudget } from "./simLinkBudget.js?v=5.05";
+import { SimNetwork } from "./simNetwork.js?v=5.05";
+import { SimDeployment } from "./simDeployment.js?v=5.05";
+import { SimMissionValidator } from "./simMissionValidator.js?v=5.05";
+import { minOf } from "./simMath.js?v=5.05";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.05";
+import { planetRingRequiredMbps, junctionDeficits } from "./slidersData.js?v=5.05";
 
 // --- State (initialized lazily on the first compute) ---
 let simLinkBudget = null;
@@ -150,15 +150,18 @@ function runPipeline({ requestId, windowIdx, configEpoch, uiConfig, satellitesCo
   t = performance.now();
   // Main-UI geometry placement: mirror the live override from uiConfig so the
   // worker's window computes place Earth/Mars exactly like the main thread does
-  // (simMain.setSatellitesConfig applies the same map to its own instance).
-  simSolarSystem.setAngleOverrides(
+  // (simMain.setSatellitesConfig applies the same maps to its own instances).
+  // The planetary rings rotate rigidly with their pinned planet — same map on
+  // simSatellites (see setPlanetAngleOverrides).
+  const pinMap =
     uiConfig && uiConfig["simulation.planet-placement"] === "Geometry"
       ? {
           Earth: EARTH_MARS_CLOSEST_APPROACH_DEG + (parseFloat(uiConfig["simulation.earth-angle-offset-deg"]) || 0),
           Mars: EARTH_MARS_CLOSEST_APPROACH_DEG + (parseFloat(uiConfig["simulation.mars-angle-offset-deg"]) || 0),
         }
-      : null
-  );
+      : null;
+  simSolarSystem.setAngleOverrides(pinMap);
+  simSatellites.setPlanetAngleOverrides(pinMap);
   const planetsObj = simSolarSystem.updatePlanetsPositions(simDate);
   const planets = Object.values(planetsObj);
   const satellites = simSatellites.updateSatellitesPositions(simDate);
@@ -309,6 +312,14 @@ function applyGeometryOffsets(earthAngleOffset, marsAngleOffset) {
   const ref = EARTH_MARS_CLOSEST_APPROACH_DEG;
   simSolarSystem.setPlanetSolarAngle("Earth", ref + earthAngleOffset);
   simSolarSystem.setPlanetSolarAngle("Mars", ref + marsAngleOffset);
+  // Persist the pin so (a) any later updatePlanetsPositions keeps the planets
+  // placed, and (b) the NEXT updateSatellitesPositions rotates the planetary
+  // rings rigidly with their planet (the ring's hub gap must sit AT the pinned
+  // planet, not at the ephemeris position the ring was phased to). runScenario
+  // clears both maps on entry, so this never leaks across scenarios.
+  const pinMap = { Earth: ref + earthAngleOffset, Mars: ref + marsAngleOffset };
+  simSolarSystem.setAngleOverrides(pinMap);
+  simSatellites.setPlanetAngleOverrides(pinMap);
 }
 
 /**
@@ -331,7 +342,9 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
   // Scenarios place planets explicitly (applyGeometryOffsets after each position
   // update) — clear any persistent main-UI override a prior runPipeline left on
   // this worker's shared solar system so it can't leak into scenario results.
+  // applyGeometryOffsets re-establishes both maps for this scenario's own pin.
   simSolarSystem.setAngleOverrides(null);
+  simSatellites.setPlanetAngleOverrides(null);
   const t0 = performance.now();
   const date = new Date(simDate);
   // The constellation is sized once (serial path sizes at dateValues[0]); flow is
