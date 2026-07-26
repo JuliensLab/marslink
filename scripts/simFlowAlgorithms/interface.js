@@ -53,18 +53,22 @@
 //
 // ============================================================
 
-import { edmondsKarp } from "./edmondsKarp.js?v=5.04";
-import { pushRelabel } from "./pushRelabel.js?v=5.04";
-import { topologyAware } from "./topologyAware.js?v=5.04";
+import { edmondsKarp } from "./edmondsKarp.js?v=5.05";
+import { pushRelabel } from "./pushRelabel.js?v=5.05";
+import { topologyAware } from "./topologyAware.js?v=5.05";
 
 /** Registry of available max-flow algorithms. */
 export const FLOW_ALGORITHMS = {
   "edmonds-karp": edmondsKarp,
   "push-relabel": pushRelabel,
-  // Specialized for the CONCENTRIC relay families (ring_adapt_): exploits their
-  // radial ring chains. Returns 0 for eccentric families — pick a general solver there.
+  // EXPERIMENTAL — specialized for the CONCENTRIC relay families (ring_adapt_):
+  // exploits their radial ring chains for speed, but its route model drops
+  // multi-hop planet-ring attachments and ignores azimuthal lattice links, so
+  // it under-reports flow on Contoured concentric (see topologyAware.js header).
+  // Returns 0 for eccentric families. simNetwork cross-checks it against
+  // push-relabel and warns on >5% disagreement.
   "concentric-topology-aware": topologyAware,
 };
 
 /** The algorithm used when none is explicitly specified. */
-export const DEFAULT_ALGORITHM = "concentric-topology-aware";
+export const DEFAULT_ALGORITHM = "push-relabel";

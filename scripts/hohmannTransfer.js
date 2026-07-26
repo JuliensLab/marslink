@@ -7,9 +7,9 @@
 // All lengths are in AU, all times in milliseconds since Unix epoch, all rates
 // in launches/day. The scheduling math is closed-form; no numerical root-find.
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=5.04";
-import { helioCoords, positionFromSolarAngle } from "./simOrbits.js?v=5.04";
-import { authedFetch, isAuthed } from "./auth.js?v=5.04";
+import { SIM_CONSTANTS } from "./simConstants.js?v=5.05";
+import { helioCoords, positionFromSolarAngle } from "./simOrbits.js?v=5.05";
+import { authedFetch, isAuthed } from "./auth.js?v=5.05";
 
 const MS_PER_DAY = 86400000;
 const SECONDS_PER_DAY = 86400;

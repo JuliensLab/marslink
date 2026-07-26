@@ -1,6 +1,6 @@
 // slidersData.js
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=5.04";
+import { SIM_CONSTANTS } from "./simConstants.js?v=5.05";
 
 export const slidersData = {
   display: {
@@ -824,9 +824,9 @@ export const slidersData = {
       type: "radio",
       label: "Max-flow solver",
       description:
-        "Algorithm that computes Earth↔Mars throughput. 'concentric-topology-aware' exploits this family's radial ring chains for speed; the general solvers work on any graph.",
-      options: ["concentric-topology-aware", "push-relabel", "edmonds-karp"],
-      value: "concentric-topology-aware",
+        "Algorithm that computes Earth↔Mars throughput. 'concentric-topology-aware' is EXPERIMENTAL: fast, but it under-reports flow on Contoured concentric (drops multi-hop planet-ring attachments, ignores lattice links) — kept for comparison; a cross-check warns when it disagrees with push-relabel.",
+      options: ["push-relabel", "concentric-topology-aware", "edmonds-karp"],
+      value: "push-relabel",
       unit: "",
     },
     ringcount: {

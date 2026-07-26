@@ -2,6 +2,19 @@
 // for the CONCENTRIC relay families (ring_adapt_). It maps routes through the radial
 // ring chains and returns 0 for eccentric families, which must use a general solver.
 //
+// EXPERIMENTAL — demoted from section default (2026-07-26): on Contoured
+// concentric it disagrees with push-relabel (under-reports, sometimes to 0):
+//   • Routes whose origin/destination attach to the planet rings through
+//     MULTI-HOP radial chains are dropped — Step 1/Step 6 require a DIRECT
+//     ring↔adapted link, but a route's start sat can sit several rings out
+//     from the Earth ring (see walkToPlanetRing in simTopology.js, which
+//     exists precisely because of that).
+//   • Azimuthal "Circular lattice" links within the adapted rings open flow
+//     paths the radial-route greedy cannot represent at all.
+// Fixing either means growing this into a general solver, so it stays a
+// comparison curiosity. simNetwork.getNetworkData cross-checks it against
+// push-relabel on small instances and console.warns on >5% disagreement.
+//
 // Exploits the known structure:
 //
 //   1. Earth and Mars rings are FULL LOOPS composed of two half-chains joined

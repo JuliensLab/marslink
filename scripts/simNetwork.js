@@ -1,7 +1,7 @@
 // simNetwork.js — Thin orchestrator delegating to simTopology.js and simMaxFlow.js.
 
-import { TopologyBuilder } from "./simTopology.js?v=5.04";
-import { simplifyNetwork, desimplifyNetwork, computeMaxFlow, calculateLatencies } from "./simMaxFlow.js?v=5.04";
+import { TopologyBuilder } from "./simTopology.js?v=5.05";
+import { simplifyNetwork, desimplifyNetwork, computeMaxFlow, calculateLatencies } from "./simMaxFlow.js?v=5.05";
 
 export class SimNetwork {
   constructor(simLinkBudget, simSatellites) {
@@ -162,6 +162,47 @@ export class SimNetwork {
     });
 
     if (maxFlowResult === null) return { links: [], maxFlowGbps: 0, error: "timed out" };
+
+    // --- STEP 2b: EXPERIMENTAL-SOLVER CROSS-CHECK ---
+    // concentric-topology-aware is EXPERIMENTAL (drops multi-hop planet-ring
+    // attachments, ignores lattice links — see topologyAware.js). When it is
+    // selected anyway, spot-check it against push-relabel on the same
+    // (unsimplified, unmutated) graph and warn on >5% disagreement. Only on
+    // small instances, throttled, and with its own small time budget so the
+    // check can never dominate the frame.
+    if (algorithm === "concentric-topology-aware") {
+      const CROSS_CHECK_MAX_NODES = 3000;
+      const CROSS_CHECK_INTERVAL_MS = 10000;
+      const now = performance.now();
+      const last = this._lastFlowCrossCheckMs;
+      if (
+        nodeIdCounter <= CROSS_CHECK_MAX_NODES &&
+        (last === undefined || now - last >= CROSS_CHECK_INTERVAL_MS)
+      ) {
+        this._lastFlowCrossCheckMs = now;
+        const ref = computeMaxFlow({
+          graph,
+          capacities,
+          source,
+          sink,
+          perfStart: now,
+          calctimeMs: Math.min(calctimeMs, 2000),
+          algorithm: "push-relabel",
+        });
+        if (ref !== null) {
+          const fast = maxFlowResult.maxFlow;
+          const diff = Math.abs(fast - ref.maxFlow) / Math.max(ref.maxFlow, fast, 1e-9);
+          if (diff > 0.05) {
+            console.warn(
+              `[MaxFlow] concentric-topology-aware disagrees with push-relabel by ` +
+                `${(diff * 100).toFixed(1)}%: ${fast.toFixed(3)} vs ${ref.maxFlow.toFixed(3)} Gbps ` +
+                `(${nodeIdCounter} nodes). The experimental solver's number is being displayed — ` +
+                `switch the section's Max-flow solver to push-relabel for a correct flow.`
+            );
+          }
+        }
+      }
+    }
 
     // --- STEP 3: DESIMPLIFY ---
     if (useSimplification) {

@@ -7,9 +7,9 @@
 // available. The fleet sim is cheap and deterministic, so it is recomputed only
 // when its config changes; per-frame work is just propagating in-transit ships.
 
-import { simulateFleet } from "./simFleet.js?v=5.04";
-import { shipPositionAt } from "./simTransfer.js?v=5.04";
-import { extractRootedBackbone, buildShipNodes, computeShipAccessStats } from "./simShipLinks.js?v=5.04";
+import { simulateFleet } from "./simFleet.js?v=5.05";
+import { shipPositionAt } from "./simTransfer.js?v=5.05";
+import { extractRootedBackbone, buildShipNodes, computeShipAccessStats } from "./simShipLinks.js?v=5.05";
 
 // Default manufacturing ramp (interplanetary Starships built per year). The UI
 // (editable chart) will overwrite this; it just makes the overlay show something

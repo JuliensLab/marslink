@@ -5,13 +5,13 @@ import {
   junctionDeficits,
   mapSliderValueToUserFacing as mapToUserFacing,
   mapUserFacingToSliderValue as mapToSliderInternal,
-} from "./slidersData.js?v=5.04";
-import { LukashianClock } from "./lukashianTime.js?v=5.04";
-import { wireAuthUi } from "./auth.js?v=5.04";
-import { SensitivityPool } from "./sensitivityPool.js?v=5.04";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.04";
-import { minOf } from "./simMath.js?v=5.04";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.04";
+} from "./slidersData.js?v=5.05";
+import { LukashianClock } from "./lukashianTime.js?v=5.05";
+import { wireAuthUi } from "./auth.js?v=5.05";
+import { SensitivityPool } from "./sensitivityPool.js?v=5.05";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.05";
+import { minOf } from "./simMath.js?v=5.05";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.05";
 
 export class SimUi {
   constructor(simMain) {
@@ -2140,16 +2140,17 @@ export class SimUi {
               const w = { "display.links-colors": "Flow" };
               if (!(parseFloat(this.sliders.simulation?.calctimeSec?.value) > 0))
                 w["simulation.calctimeSec"] = Number.isFinite(flowMs) ? Math.min(20, Math.max(5, flowMs / 1000)) : 20;
-              // Concentric contoured rings: only push-relabel currently returns a valid
-              // flow — the concentric-topology-aware fast path (the section default) is
-              // broken for this family, so a defaults run would archive flow gaps.
+              // Concentric contoured rings: push-relabel is the section default, but the
+              // config may carry the EXPERIMENTAL concentric-topology-aware solver (which
+              // under-reports flow on this family — see topologyAware.js) or edmonds-karp
+              // (can time out at sweep scale); either would archive flow gaps.
               // Forced only for the run; the snapshot restore puts the choice back.
               if (/concentric/i.test(this.getSelectedRelayType?.() || "")) {
                 const solverEl = this.sliders.adapted_rings?.["flow-solver"];
                 const cur = solverEl?.querySelector?.("input[type=radio]:checked")?.value;
                 if (cur !== "push-relabel") {
                   w["adapted_rings.flow-solver"] = "push-relabel";
-                  console.log("[Sensitivity] live: forcing push-relabel flow solver (concentric-topology-aware is broken for contoured concentric)");
+                  console.log("[Sensitivity] live: forcing push-relabel flow solver (the selected solver is experimental/slow for contoured concentric)");
                 }
               }
               this.applySliderValues(w);
@@ -4611,7 +4612,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=5.04");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=5.05");
     let result = null;
     try {
       result = await solveBandDistribution({

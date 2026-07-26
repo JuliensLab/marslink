@@ -1,6 +1,6 @@
 // simLinkBudget.js
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=5.04";
+import { SIM_CONSTANTS } from "./simConstants.js?v=5.05";
 
 export class SimLinkBudget {
   constructor() {
@@ -61,10 +61,12 @@ export class SimLinkBudget {
     this.solarExclusionDeg = technologyConfig["simulation.solarExclusionDeg"] || 0;
     this.solarExclusionRad = this.solarExclusionDeg * SIM_CONSTANTS.DEG_TO_RAD;
 
-    // Max-flow solver, now chosen PER RING TYPE: the concentric families have a fast
-    // specialized solver, the eccentric families need a general one. Resolve the active
-    // relay family's "<section>.flow-solver" (with a per-family code default so legacy
-    // configs without the key still pick a working solver).
+    // Max-flow solver, now chosen PER RING TYPE. Every family defaults to the general
+    // push-relabel solver — the specialized 'concentric-topology-aware' fast path is
+    // EXPERIMENTAL (under-reports flow on Contoured concentric; see topologyAware.js)
+    // and stays selectable for comparison only. Resolve the active relay family's
+    // "<section>.flow-solver" (with a per-family code default so legacy configs
+    // without the key still pick a working solver).
     const RELAY_SECTION = {
       "Contoured concentric": "adapted_rings",
       "Contoured transfer": "adapted_eccentric_rings",
@@ -73,7 +75,7 @@ export class SimLinkBudget {
       "Eccentric": "eccentric_rings",
     };
     const DEFAULT_SOLVER = {
-      adapted_rings: "concentric-topology-aware",
+      adapted_rings: "push-relabel",
       circular_rings: "push-relabel",
       eccentric_rings: "push-relabel",
       adapted_eccentric_rings: "push-relabel",
