@@ -5,13 +5,13 @@ import {
   junctionDeficits,
   mapSliderValueToUserFacing as mapToUserFacing,
   mapUserFacingToSliderValue as mapToSliderInternal,
-} from "./slidersData.js?v=4.99";
-import { LukashianClock } from "./lukashianTime.js?v=4.99";
-import { wireAuthUi } from "./auth.js?v=4.99";
-import { SensitivityPool } from "./sensitivityPool.js?v=4.99";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=4.99";
-import { minOf } from "./simMath.js?v=4.99";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=4.99";
+} from "./slidersData.js?v=5.00";
+import { LukashianClock } from "./lukashianTime.js?v=5.00";
+import { wireAuthUi } from "./auth.js?v=5.00";
+import { SensitivityPool } from "./sensitivityPool.js?v=5.00";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.00";
+import { minOf } from "./simMath.js?v=5.00";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.00";
 
 export class SimUi {
   constructor(simMain) {
@@ -2191,6 +2191,11 @@ export class SimUi {
                 resultTreesData: sm.resultTrees || [],
                 sizedConfig,
               };
+              // The enumeration-time config snapshot predates the live run (it says
+              // placement=Date and carries pre-convergence planet rates). Re-snapshot
+              // NOW so the archive records the constellation exactly as flown —
+              // geometry sliders, sized planet rates, grown junction counts and all.
+              if (s.archiveConfig && this._archiveSnapshotConfig) s.archiveConfig = this._archiveSnapshotConfig() || s.archiveConfig;
               recordScenarioResult(res, s);
               completed++;
               renderProgress();
@@ -4557,7 +4562,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=4.99");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=5.00");
     let result = null;
     try {
       result = await solveBandDistribution({
