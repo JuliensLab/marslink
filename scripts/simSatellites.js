@@ -1,7 +1,7 @@
 // simSatellites.js
 
-import { helioCoords, positionFromSolarAngle } from "./simOrbits.js?v=5.05";
-import { SIM_CONSTANTS } from "./simConstants.js?v=5.05";
+import { helioCoords, positionFromSolarAngle } from "./simOrbits.js?v=5.06";
+import { SIM_CONSTANTS } from "./simConstants.js?v=5.06";
 
 export class SimSatellites {
   constructor(simLinkBudget, planets) {
@@ -1080,24 +1080,36 @@ export class SimSatellites {
   }
 
   updateSatellitesPositions(simDaysSinceStart) {
-    // Per-planet TRUE-longitude pin deltas for this instant (pinned − ephemeris).
-    let ringDelta = null;
-    if (this.planetAngleOverrides) {
-      ringDelta = {};
+    // Per-planet EPOCH shift (days) for pinned planets: Δt such that the planet's
+    // ephemeris TRUE longitude at t+Δt equals the pin. Evaluating the ring at
+    // t+Δt shows the REAL co-orbital system with the planet at the pinned
+    // position — even mean-longitude spacing (physically widest at perihelion),
+    // the planet-centered hub, and the ring's capacity distribution are all
+    // preserved by construction. (A rigid TRUE-longitude rotation is NOT
+    // equivalent: it drags the spacing pattern along with the planet, narrowing
+    // it by the local-radius ratio — the flank links then wrongly track the ring
+    // max and the ring's min/max shift with the pin.)
+    // (The date param is a Date object despite the name — shift via milliseconds.)
+    const DAY_MS = 86400000;
+    const atShift = (dtDays) => new Date(simDaysSinceStart.getTime() + dtDays * DAY_MS);
+    let ringShift = null;
+    if (this.planetAngleOverrides && simDaysSinceStart instanceof Date) {
+      ringShift = {};
       for (const [planetName, pinDeg] of Object.entries(this.planetAngleOverrides)) {
         const planet = planetName === "Mars" ? this.Mars : this.Earth;
-        const eph = helioCoords(planet, simDaysSinceStart).solarAngle;
-        const d = pinDeg - eph;
-        if (Number.isFinite(d)) ringDelta[planetName === "Mars" ? "ring_mars" : "ring_earth"] = d;
+        let dt = 0;
+        for (let it = 0; it < 5; it++) {
+          const L = helioCoords(planet, atShift(dt)).solarAngle;
+          const d = ((pinDeg - L + 540) % 360) - 180;
+          dt += d / planet.n; // mean motion (deg/day); true-rate deviation converges in 2-3 steps
+          if (Math.abs(d) < 1e-6) break;
+        }
+        if (Number.isFinite(dt)) ringShift[planetName === "Mars" ? "ring_mars" : "ring_earth"] = dt;
       }
     }
     for (const satellite of this.satellites) {
-      satellite.position = helioCoords(satellite, simDaysSinceStart);
-      if (ringDelta && ringDelta[satellite.ringName] !== undefined) {
-        const L = (((satellite.position.solarAngle + ringDelta[satellite.ringName]) % 360) + 360) % 360;
-        const pos = positionFromSolarAngle(satellite, L);
-        satellite.position = { ...satellite.position, x: pos.x, y: pos.y, z: pos.z, r: pos.r, solarAngle: L };
-      }
+      const shift = ringShift ? ringShift[satellite.ringName] : undefined;
+      satellite.position = helioCoords(satellite, shift !== undefined ? atShift(shift) : simDaysSinceStart);
       satellite.orbitalZone = this.getRadialZone(satellite, satellite.ringName);
       if (satellite.ringName !== "ring_earth" && satellite.ringName !== "ring_mars") {
         const crossings = this.ringCrossings.get(satellite.ringName);

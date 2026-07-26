@@ -9,15 +9,15 @@
 // Loaded as an ES module worker:
 //   new Worker(new URL("./simWorker.js", import.meta.url), { type: "module" })
 
-import { SimSolarSystem } from "./simSolarSystem.js?v=5.05";
-import { SimSatellites } from "./simSatellites.js?v=5.05";
-import { SimLinkBudget } from "./simLinkBudget.js?v=5.05";
-import { SimNetwork } from "./simNetwork.js?v=5.05";
-import { SimDeployment } from "./simDeployment.js?v=5.05";
-import { SimMissionValidator } from "./simMissionValidator.js?v=5.05";
-import { minOf } from "./simMath.js?v=5.05";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.05";
-import { planetRingRequiredMbps, junctionDeficits } from "./slidersData.js?v=5.05";
+import { SimSolarSystem } from "./simSolarSystem.js?v=5.06";
+import { SimSatellites } from "./simSatellites.js?v=5.06";
+import { SimLinkBudget } from "./simLinkBudget.js?v=5.06";
+import { SimNetwork } from "./simNetwork.js?v=5.06";
+import { SimDeployment } from "./simDeployment.js?v=5.06";
+import { SimMissionValidator } from "./simMissionValidator.js?v=5.06";
+import { minOf } from "./simMath.js?v=5.06";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.06";
+import { planetRingRequiredMbps, junctionDeficits } from "./slidersData.js?v=5.06";
 
 // --- State (initialized lazily on the first compute) ---
 let simLinkBudget = null;
@@ -65,6 +65,16 @@ function calculateCapacityInfo(links) {
         }
       } else {
         ringCapacities[fromRing].inring.push(cap);
+        // Planetary rings: remember the chain hop ADJACENT to the planet on each
+        // side (sats 0↔1 and -0↔-1 ride with the planet), so the capacity card can
+        // show the planet stage at the CURRENT orbital position instead of the
+        // ring-wide (perihelion) minimum. Mirrored in SimMain.calculateCapacityInfo.
+        if (fromRing === "ring_earth" || fromRing === "ring_mars") {
+          const sfx = (id) => id.slice(fromRing.length + 1);
+          const pair = [sfx(link.fromId), sfx(link.toId)].sort().join("|");
+          if (pair === "0|1") ringCapacities[fromRing].flankPos = cap;
+          else if (pair === "-0|-1") ringCapacities[fromRing].flankNeg = cap;
+        }
       }
     } else {
       const isInterplanetary =
