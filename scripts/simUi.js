@@ -5,13 +5,13 @@ import {
   junctionDeficits,
   mapSliderValueToUserFacing as mapToUserFacing,
   mapUserFacingToSliderValue as mapToSliderInternal,
-} from "./slidersData.js?v=5.00";
-import { LukashianClock } from "./lukashianTime.js?v=5.00";
-import { wireAuthUi } from "./auth.js?v=5.00";
-import { SensitivityPool } from "./sensitivityPool.js?v=5.00";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.00";
-import { minOf } from "./simMath.js?v=5.00";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.00";
+} from "./slidersData.js?v=5.04";
+import { LukashianClock } from "./lukashianTime.js?v=5.04";
+import { wireAuthUi } from "./auth.js?v=5.04";
+import { SensitivityPool } from "./sensitivityPool.js?v=5.04";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.04";
+import { minOf } from "./simMath.js?v=5.04";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.04";
 
 export class SimUi {
   constructor(simMain) {
@@ -1228,7 +1228,21 @@ export class SimUi {
     };
     // The placement dimension is a real swept axis only in the geometry modes (>1 sample);
     // "current" is a single fixed point. Drives chart dims + the "Fixed:" label.
-    const placementIsDim = () => geomModeVal() !== "current";
+    // Live (sliders) mode (simple only) never sweeps placement: geometry is fixed
+    // for the whole run by the main Simulation section (Planet placement + the two
+    // angle sliders). Optimized mode ignores the exec toggle entirely.
+    const liveExec = () => this._sensExec === "live" && (this._sensMode || "simple") === "simple";
+    const placementIsDim = () => !liveExec() && geomModeVal() !== "current";
+    // The live run's single placement, described from the main-UI state: no offsets
+    // are passed (the live sim already holds them) — only the label for charts/archive.
+    const livePlacement = () => {
+      const iso = currentDateIso();
+      if ((this.slidersData.simulation?.["planet-placement"]?.value || "Date") === "Geometry") {
+        const ang = (id) => Math.round(parseFloat(this.sliders.simulation?.[id]?.value)) || 0;
+        return { label: `E${ang("earth-angle-offset-deg")}/M${ang("mars-angle-offset-deg")}`, simDate: iso, earthAngleOffset: null, marsAngleOffset: null };
+      }
+      return { label: iso.slice(0, 10), simDate: iso, earthAngleOffset: null, marsAngleOffset: null };
+    };
     // Per-scenario max-flow time budget (ms), from the panel field. Scenarios whose solve
     // exceeds it are reported as flow gaps (not 0). Separate from the live view's
     // "Allowed flow calc time" (simulation.calctimeSec). 0 = no limit (run the solve to
@@ -1266,7 +1280,8 @@ export class SimUi {
 
     // --- Estimate display (iteration count + time) ---
     const updateEstimate = () => {
-      const total = buildRingValues().length * buildTechValues().length * buildRouteValues().length * buildPlacements().length;
+      const placeCount = liveExec() ? 1 : buildPlacements().length;
+      const total = buildRingValues().length * buildTechValues().length * buildRouteValues().length * placeCount;
       const optimized = (this._sensMode || "simple") === "optimized";
       const wt = this.simMain?.lastWorkerTimings;
       const perIterMs = wt?.totalMs || wt?.links || 0;
@@ -1332,6 +1347,17 @@ export class SimUi {
       for (const b of execBtns) b.classList.toggle("active", b.dataset.exec === this._sensExec);
       if (workerCountRow) workerCountRow.style.display = this._sensExec === "worker" ? "" : "none";
       if (mainOpts) mainOpts.style.display = this._sensExec === "main" ? "" : "none";
+      // Live mode doesn't sweep placement — grey the geometry-grid selector and
+      // point at the main Simulation section instead.
+      const geomSel = document.getElementById("sens-geom-mode");
+      if (geomSel) {
+        const live = this._sensExec === "live";
+        geomSel.disabled = live;
+        geomSel.style.opacity = live ? "0.4" : "";
+        geomSel.title = live
+          ? "Not used in Live (sliders) mode: planet geometry is fixed for the whole run by the main Simulation section (Planet placement = Date, or Geometry with one Earth angle and one Mars angle)."
+          : "How Earth & Mars are placed for each scenario. 'Current date' uses real ephemeris at the current sim date (one scenario). 'Geometry ×4 / ×16' place the planets at orbital longitudes measured from the Earth–Mars closest-approach direction, decoupled from date (the relay sats stay at a fixed phase).";
+      }
       updateEstimate();
     };
     for (const b of execBtns) b.addEventListener("click", () => { this._sensExec = b.dataset.exec; syncExec(); });
@@ -1706,7 +1732,9 @@ export class SimUi {
         const techValues = buildTechValues();
         const routeValues = buildRouteValues();
         const routeEnabled = routeValues[0] != null;
-        const placements = buildPlacements();
+        // Live mode: exactly ONE placement, read from the main UI (Date, or the two
+        // geometry angle sliders) — the geometry grid is a worker/main-mode feature.
+        const placements = liveExec() ? [livePlacement()] : buildPlacements();
         const totalScenarios = ringValues.length * techValues.length * routeValues.length * placements.length;
         let completed = 0;
         let flowTimeouts = 0; // scenarios whose max-flow solve exceeded the time budget (plotted as gaps)
@@ -1735,8 +1763,12 @@ export class SimUi {
           fixedParts.push(`Laser tech: ${cur}x`);
         }
         if (!placementEnabled) {
-          const cur = this.simMain?.simTime?.getDate();
-          fixedParts.push(`Date: ${cur ? cur.toISOString().slice(0, 10) : "?"}`);
+          if (liveExec() && placements[0] && /^E\d+\/M\d+$/.test(placements[0].label)) {
+            fixedParts.push(`Geometry: ${placements[0].label}`);
+          } else {
+            const cur = this.simMain?.simTime?.getDate();
+            fixedParts.push(`Date: ${cur ? cur.toISOString().slice(0, 10) : "?"}`);
+          }
         }
         fixedEl.textContent = fixedParts.length ? `Fixed: ${fixedParts.join(" · ")}` : "";
 
@@ -2108,33 +2140,56 @@ export class SimUi {
               const w = { "display.links-colors": "Flow" };
               if (!(parseFloat(this.sliders.simulation?.calctimeSec?.value) > 0))
                 w["simulation.calctimeSec"] = Number.isFinite(flowMs) ? Math.min(20, Math.max(5, flowMs / 1000)) : 20;
+              // Concentric contoured rings: only push-relabel currently returns a valid
+              // flow — the concentric-topology-aware fast path (the section default) is
+              // broken for this family, so a defaults run would archive flow gaps.
+              // Forced only for the run; the snapshot restore puts the choice back.
+              if (/concentric/i.test(this.getSelectedRelayType?.() || "")) {
+                const solverEl = this.sliders.adapted_rings?.["flow-solver"];
+                const cur = solverEl?.querySelector?.("input[type=radio]:checked")?.value;
+                if (cur !== "push-relabel") {
+                  w["adapted_rings.flow-solver"] = "push-relabel";
+                  console.log("[Sensitivity] live: forcing push-relabel flow solver (concentric-topology-aware is broken for contoured concentric)");
+                }
+              }
               this.applySliderValues(w);
             }
-            // Keep the clock moving fast so window results keep flowing once the
-            // design stops changing — each links-ready is one settle-probe round.
-            // (Raw slider position: signedPow2, 18 → 2^18 ≈ 262k×. Snapshot-restored.)
-            this.applySliderValues({ "simulation.time-acceleration-slider": 18 });
             const LIVE_SETTLE_MS = Number.isFinite(flowMs) ? Math.min(600000, Math.max(120000, flowMs * 3)) : 600000;
-            // Settled = the design stopped rebuilding AND fresh results describe it.
-            // Sizing rounds (links-ready + planet/junction step) only fire after a
-            // rebuild — once the design is final they STOP, so "no new round while
-            // ≥3 full window results stream by, and the last round wrote nothing"
-            // is the convergence signal. Those ≥3 post-stability windows also carry
-            // the flow solve (Flow colors + calctime are forced on above), so
-            // flow/latency freshness is implied — no separate flow condition.
+            // Settled = converge, then PROVE it. Sizing rounds (links-ready +
+            // planet/junction step) only fire after a rebuild, so once a round goes
+            // quiet we trigger ONE verification recompute of the same config: if its
+            // round is also quiet and its full window result (flow included — a
+            // config push always solves flow) has been applied, the recorded state
+            // describes the settled design. Clock-independent by design: no time
+            // acceleration, no window prefetch, immune to the cache-pause thrash the
+            // live view can enter at high accel.
             const waitForLiveSettle = async (maxMs) => {
               const sm = this.simMain;
               const t0 = performance.now();
               let lastRound = sm._sizingRound || 0;
-              let wrAtRound = sm._windowResultCount || 0;
+              let verifyRound = null;
+              let wrAtVerify = 0;
               while (performance.now() - t0 < maxMs) {
                 if (stopRequested) return false;
                 await new Promise((r) => setTimeout(r, 300));
                 const round = sm._sizingRound || 0;
                 const wr = sm._windowResultCount || 0;
-                if (round !== lastRound) { lastRound = round; wrAtRound = wr; continue; }
-                const stable = round > 0 && !sm._sizingWroteLastRound && !this._planetSizeArmed;
-                if (stable && wr >= wrAtRound + 3) return true;
+                if (round === lastRound) {
+                  // Verification passed: a post-verify round happened (round > verifyRound
+                  // checked when it arrived), stayed quiet, and its full result landed.
+                  if (verifyRound != null && round > verifyRound && !sm._sizingWroteLastRound && !this._planetSizeArmed && wr > wrAtVerify) return true;
+                  continue;
+                }
+                lastRound = round;
+                if (sm._sizingWroteLastRound || this._planetSizeArmed) { verifyRound = null; continue; }
+                if (verifyRound == null) {
+                  // First quiet round: push the identical config once — configEpoch bumps,
+                  // the worker recomputes links AND flow for the current window, and the
+                  // next links-ready round re-runs the sizing checks as the proof.
+                  verifyRound = round;
+                  wrAtVerify = wr;
+                  if (sm._lastUiConfig) sm.setSatellitesConfig(sm._lastUiConfig);
+                }
               }
               return false;
             };
@@ -2152,16 +2207,10 @@ export class SimUi {
               applySecondAxisPre(s.routeCount, s.ringCount);
               if (s.ringCount != null) this.applySimpleDefaults(s.ringCount);
               applySecondAxisPost(s.routeCount);
-              // 2. Placement: geometry samples pin Earth/Mars via the main-UI
-              //    simulation sliders ("current" leaves the clock/ephemeris alone).
-              if (s.placement.earthAngleOffset != null) {
-                this.applySliderValues({
-                  "simulation.planet-placement": "Geometry",
-                  "simulation.earth-angle-offset-deg": s.placement.earthAngleOffset,
-                  "simulation.mars-angle-offset-deg": s.placement.marsAngleOffset,
-                });
-              }
-              // 3. Converge.
+              // Placement is NOT written here: the main Simulation section already
+              // holds it (Date, or Geometry + the two angle sliders), fixed for the
+              // whole run; s.placement only carries the label for charts/archive.
+              // 2. Converge.
               const settled = await waitForLiveSettle(LIVE_SETTLE_MS);
               if (stopRequested) break;
               if (!settled) console.warn(`[Sensitivity] live scenario ${s.scenarioId} did not settle within ${Math.round(LIVE_SETTLE_MS / 1000)}s — recording current state as-is (flow omitted)`);
@@ -4562,7 +4611,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=5.00");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=5.04");
     let result = null;
     try {
       result = await solveBandDistribution({
