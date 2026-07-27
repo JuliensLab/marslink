@@ -5,13 +5,15 @@ import {
   junctionDeficits,
   mapSliderValueToUserFacing as mapToUserFacing,
   mapUserFacingToSliderValue as mapToSliderInternal,
-} from "./slidersData.js?v=5.09";
-import { LukashianClock } from "./lukashianTime.js?v=5.09";
-import { wireAuthUi } from "./auth.js?v=5.09";
-import { SensitivityPool } from "./sensitivityPool.js?v=5.09";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.09";
-import { minOf } from "./simMath.js?v=5.09";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.09";
+} from "./slidersData.js?v=5.11";
+import { LukashianClock } from "./lukashianTime.js?v=5.11";
+import { wireAuthUi } from "./auth.js?v=5.11";
+import { SensitivityPool } from "./sensitivityPool.js?v=5.11";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.11";
+import { minOf } from "./simMath.js?v=5.11";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.11";
+import { archiveStore } from "./simArchiveStore.js?v=5.11";
+import { PAPER_PLAN } from "./paperPlan.js?v=5.11";
 
 export class SimUi {
   constructor(simMain) {
@@ -2488,6 +2490,9 @@ export class SimUi {
         console.error("Sensitivity analysis error:", error);
       } finally {
         this.simMain._sensitivityRunning = false;
+        // Single end-of-run signal for programmatic drivers (the paper-plan runner
+        // awaits this to sequence its items). Fired for every exec mode.
+        try { this._onSweepComplete?.(); } catch {}
         // Restore any slider `max` attributes lifted to allow out-of-range sweep values
         // (the base value was already restored from baseSliderState above).
         if (this._sensWidenedMaxes) {
@@ -3096,6 +3101,142 @@ export class SimUi {
     this._injectFlightUI();
     this._injectProbeUI();
     this._injectConfigArchive();
+    this._injectPaperPlanUI();
+  }
+
+  /**
+   * "Measure all" panel: the paper's measurement plan (paperPlan.js) with one
+   * checkbox per item, run sequentially — each item becomes one measurement SET
+   * in the archive (baseline saved once, per-run deltas only). Lives at the
+   * bottom of the Sensitivity pane, whose controls the runner drives.
+   */
+  _injectPaperPlanUI() {
+    const body = document.querySelector("#sensitivity-pane .drawer-body");
+    if (!body || document.getElementById("paper-plan-panel")) return;
+    const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    const wrap = document.createElement("div");
+    wrap.id = "paper-plan-panel";
+    wrap.className = "form-group";
+    wrap.style.cssText = "border:1px solid var(--border-2,#333); border-radius:8px; padding:10px; margin-top:12px;";
+    const totalMin = PAPER_PLAN.filter((p) => !p.manual).reduce((s, p) => s + (p.estMin || 0), 0);
+    const rows = PAPER_PLAN.map((p) =>
+      `<label style="display:flex; gap:6px; align-items:flex-start; font-size:12px;${p.manual ? " opacity:0.55;" : ""}">` +
+      `<input type="checkbox" class="paper-plan-item" data-id="${esc(p.id)}"${p.manual ? " disabled" : " checked"} style="margin-top:2px; flex:none;">` +
+      `<span><b>${esc(p.title)}</b> <span class="muted">— ${esc(p.feeds)}${p.manual ? " · manual" : ` · ~${p.estMin} min`}</span>` +
+      (p.manual ? `<br><span class="muted" style="font-size:11px;">${esc(p.note)}</span>` : "") +
+      `</span></label>`).join("");
+    wrap.innerHTML =
+      `<div style="display:flex; align-items:baseline; gap:8px; margin-bottom:6px; flex-wrap:wrap;">` +
+      `<span style="font-weight:600;">📐 Paper measurements</span>` +
+      `<span class="muted" style="font-size:11px;">every simulation the paper's figures/tables need — each item runs as its own sweep into one measurement set (~${totalMin} min total, sequential)</span></div>` +
+      `<div style="display:flex; flex-direction:column; gap:5px; margin-bottom:8px;">${rows}</div>` +
+      `<div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">` +
+      `<button type="button" id="paper-plan-run" class="btn btn-primary">▶ Measure all checked</button>` +
+      `<button type="button" id="paper-plan-stop" class="btn" style="display:none;">Stop after current</button>` +
+      `<label class="muted" style="font-size:11px; display:flex; gap:4px; align-items:center;"><input type="checkbox" id="paper-plan-rerun"> re-measure items that already have a set</label>` +
+      `</div>` +
+      `<div id="paper-plan-status" class="muted" style="font-size:12px; margin-top:6px;"></div>`;
+    body.appendChild(wrap);
+    document.getElementById("paper-plan-run").addEventListener("click", () => this._runPaperPlan());
+    document.getElementById("paper-plan-stop").addEventListener("click", () => {
+      this._paperPlanStop = true;
+      const st = document.getElementById("paper-plan-status");
+      if (st) st.textContent += " · stopping after the current sweep…";
+    });
+  }
+
+  /**
+   * Sequential paper-plan runner. Per checked item: apply the clean baseline
+   * sliders, configure the sensitivity controls (family, exec, axes, placement,
+   * flow), open a measurement set, run each ring segment as one sweep, close the
+   * set. Items whose set already exists are skipped unless re-measure is checked.
+   */
+  async _runPaperPlan() {
+    if (this._paperPlanRunning) return;
+    const runBtn = document.getElementById("paper-plan-run");
+    const stopBtn = document.getElementById("paper-plan-stop");
+    const statusEl = document.getElementById("paper-plan-status");
+    const status = (t) => { if (statusEl) statusEl.textContent = t; };
+    this._paperPlanRunning = true;
+    this._paperPlanStop = false;
+    if (runBtn) runBtn.disabled = true;
+    if (stopBtn) stopBtn.style.display = "";
+    const fire = (el, ev) => el && el.dispatchEvent(new Event(ev, { bubbles: true }));
+    const setNum = (id, v) => { const e = document.getElementById(id); if (e) { e.value = String(v); fire(e, "input"); fire(e, "change"); } };
+    const setCheck = (id, on) => { const e = document.getElementById(id); if (e && e.checked !== !!on) { e.checked = !!on; fire(e, "change"); } };
+    const setSel = (id, v) => { const e = document.getElementById(id); if (e) { e.value = v; fire(e, "change"); } };
+    const runOnce = () => new Promise((resolve) => {
+      this._onSweepComplete = () => { this._onSweepComplete = null; resolve(); };
+      const btn = [...document.querySelectorAll("#sensitivity-pane button")].find((b) => /Run Sensitivity/i.test(b.textContent));
+      if (btn) btn.click(); else { this._onSweepComplete = null; resolve(); }
+    });
+    try {
+      await this._archiveReady; // archive store + set hooks ready
+      // The sensitivity pane's controls wire on first open — make sure it is.
+      document.querySelector('.mode-tab[data-mode="sensitivity"]')?.click();
+      const wanted = new Set([...document.querySelectorAll(".paper-plan-item:checked")].map((c) => c.dataset.id));
+      const rerun = document.getElementById("paper-plan-rerun")?.checked;
+      const items = PAPER_PLAN.filter((p) => !p.manual && wanted.has(p.id));
+      let n = 0;
+      for (const item of items) {
+        if (this._paperPlanStop) break;
+        n++;
+        const existing = archiveStore.all().find((e) => e.kind === "set" && e.planId === item.id);
+        if (existing && !rerun) { status(`${n}/${items.length} · ${item.title}: already measured — skipped`); continue; }
+        status(`${n}/${items.length} · preparing ${item.title}…`);
+        // Simple mode + family + clean baseline. The pane's family radio mirrors
+        // the main relay-type radio through its own change handler.
+        document.getElementById("sens-mode-simple")?.click();
+        setCheck(item.family === "Contoured transfer" ? "sens-family-tran" : "sens-family-conc", true);
+        this.applySliderValues(item.sliders || {});
+        // Exec: live (sliders) unless the item needs a worker-only axis.
+        document.getElementById(item.exec === "worker" ? "sens-exec-worker" : "sens-exec-live")?.click();
+        // Placement, flow, archive.
+        const pl = item.sens.placement;
+        if (pl && typeof pl === "object" && pl.dateRangeDays) {
+          setSel("sens-geom-mode", "date-range");
+          setNum("sens-date-range-days", pl.dateRangeDays);
+          setNum("sens-date-range-samples", pl.samples);
+        } else setSel("sens-geom-mode", "current");
+        setCheck("sens-calc-flow", !!item.sens.flow);
+        if (item.sens.flow) setNum("sens-flow-budget", item.sens.flow.budgetSec);
+        setCheck("opt-archive", true);
+        // Second axis (in-ring / total rate) or off.
+        if (item.sens.rate) {
+          setCheck("sens-route-enable", true);
+          setSel("sens-rate-mode", item.sens.rate.mode);
+          setNum("sens-route-start", item.sens.rate.start);
+          setNum("sens-route-end", item.sens.rate.end);
+          setNum("sens-route-step", item.sens.rate.step);
+        } else setCheck("sens-route-enable", false);
+        // One measurement set for the whole item; each ring segment is one sweep.
+        this._archiveOpenSet({ planId: item.id, name: item.title });
+        try {
+          const segs = item.sens.ringSegs || [];
+          for (let si = 0; si < segs.length; si++) {
+            if (this._paperPlanStop) break;
+            const sg = segs[si];
+            setCheck("sens-ring-enable", true);
+            setNum("sens-ring-start", sg.start);
+            setNum("sens-ring-end", sg.end);
+            setNum("sens-ring-step", sg.step || 1);
+            status(`${n}/${items.length} · ${item.title} — segment ${si + 1}/${segs.length} running…`);
+            await runOnce();
+          }
+        } finally {
+          this._archiveCloseSet();
+        }
+      }
+      status(this._paperPlanStop ? "Stopped — completed sets are archived." : `Done — ${items.length} item(s) processed. Sets are in the Archive tab; 📋 Copy results JSON exports the flat shape.`);
+    } catch (e) {
+      console.error("[PaperPlan] failed:", e);
+      status("Failed: " + (e?.message || e));
+    } finally {
+      this._archiveCloseSet();
+      this._paperPlanRunning = false;
+      if (runBtn) runBtn.disabled = false;
+      if (stopBtn) stopBtn.style.display = "none";
+    }
   }
 
   /**
@@ -3105,14 +3246,41 @@ export class SimUi {
    * load any entry back (re-applies sliders + curves and rebuilds). Stored in
    * localStorage under "marslinkArchive"; injected at the top of the advanced panel.
    */
-  _injectConfigArchive() {
+  async _injectConfigArchive() {
     const host = document.getElementById("archive-pane-body");
     if (!host || host.dataset.wired) return;
     host.dataset.wired = "1";
 
-    const KEY = "marslinkArchive";
-    const load = () => { try { const a = JSON.parse(localStorage.getItem(KEY)); return Array.isArray(a) ? a : []; } catch { return []; } };
-    const save = (arr) => { try { localStorage.setItem(KEY, JSON.stringify(arr)); } catch (e) { console.error("[Archive] save failed", e); } };
+    // IndexedDB-backed store (disk quota — no more 5 MB localStorage cap silently
+    // discarding sweep results). load() stays synchronous via the store's memory
+    // view; the old localStorage archive is migrated once and left as a backup.
+    this._archiveReady = archiveStore.init();
+    await this._archiveReady;
+    const load = () => archiveStore.all();
+    const save = (arr) => archiveStore.replaceAll(arr);
+    // Measurement sets (kind: "set") store the baseline config ONCE and per-run
+    // items as {label, deltaSliders, sized, metrics}. Everything that consumes
+    // entries (charts, export) sees them through this flattener, which merges
+    // base + delta back into the classic flat entry shape — downstream tools
+    // keep working unchanged.
+    const flattenArchive = (arr) => {
+      const out = [];
+      for (const e of arr) {
+        if (e && e.kind === "set" && Array.isArray(e.items)) {
+          const base = e.baseConfig || {};
+          e.items.forEach((it, i) => out.push({
+            id: `${e.id}:${i}`,
+            name: `${e.name} · ${it.label}`,
+            ts: it.ts || e.ts,
+            config: { sliders: { ...(base.sliders || {}), ...(it.deltaSliders || {}) }, curves: base.curves || {} },
+            sized: it.sized,
+            metrics: it.metrics || {},
+          }));
+        } else out.push(e);
+      }
+      return out;
+    };
+    this._archiveFlatten = () => flattenArchive(load());
     const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
     const fmtInt = (n) => (Number.isFinite(n) ? Math.round(n) : 0).toLocaleString();
 
@@ -3429,7 +3597,7 @@ export class SimUi {
     const chartsWrap = document.createElement("div");
     chartsWrap.style.cssText = "display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:10px;";
     const renderCharts = () => {
-      const arr = normalizeArr(load());
+      const arr = normalizeArr(flattenArchive(load()));
       const xm = X_MODES[xMode] || X_MODES.ring;
       // Reflect the eccentric ring-count span in the legend's gradient labels.
       const eccRings = arr.filter((e) => ECC((e.metrics || {}).relayType)).map((e) => +(e.metrics || {}).ringCount).filter(Number.isFinite);
@@ -3455,7 +3623,7 @@ export class SimUi {
     const costVsMbpsWrap = document.createElement("div");
     costVsMbpsWrap.style.cssText = "display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:10px;";
     const renderCostVsMbps = () => {
-      const arr = normalizeArr(load());
+      const arr = normalizeArr(flattenArchive(load()));
       costVsMbpsWrap.innerHTML = "";
       const card = document.createElement("div");
       card.style.cssText = "border:1px solid var(--border-2,#333); border-radius:8px; padding:6px 8px;";
@@ -3467,10 +3635,32 @@ export class SimUi {
     listEl.style.cssText = "display:flex; flex-direction:column; gap:6px;";
     const renderList = () => {
       const arr = load();
-      const cEl = legend.querySelector("#archive-count"); if (cEl) cEl.textContent = arr.length ? `${arr.length} saved` : "";
+      const flatCount = flattenArchive(arr).length;
+      const cEl = legend.querySelector("#archive-count");
+      if (cEl) cEl.textContent = arr.length ? `${arr.length} saved · ${flatCount} runs` : "";
       if (!arr.length) { listEl.innerHTML = `<div class="muted" style="font-size:12px; padding:4px 2px;">No saved configs yet — click Save.</div>`; return; }
       listEl.innerHTML = "";
       for (const e of arr) {
+        if (e.kind === "set") {
+          // Measurement set: one row for the whole set — baseline config stored
+          // once, each run only its swept deltas + metrics.
+          let sdate = ""; try { sdate = new Date(e.ts).toLocaleString(); } catch {}
+          const row = document.createElement("div");
+          row.style.cssText = "border:1px solid var(--border-2,#333); border-radius:6px; padding:6px 8px;";
+          row.innerHTML =
+            `<div style="display:flex; justify-content:space-between; gap:8px; align-items:flex-start;">` +
+            `<div style="min-width:0;">` +
+            `<div style="font-weight:600; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">📐 ${esc(e.name)}</div>` +
+            `<div class="muted" style="font-size:11px;">measurement set · ${(e.items || []).length} runs${e.planId ? ` · ${esc(e.planId)}` : ""}</div>` +
+            `<div class="muted" style="font-size:10px; opacity:0.65;">${esc(sdate)}</div>` +
+            `</div>` +
+            `<div style="display:flex; flex-direction:column; gap:4px; flex:none;">` +
+            `<button class="btn archive-load" data-id="${esc(e.id)}" title="Apply the set's baseline config" style="font-size:11px; padding:2px 8px;">Load</button>` +
+            `<button class="btn archive-del" data-id="${esc(e.id)}" title="Delete the whole set" style="font-size:11px; padding:2px 8px;">✕</button>` +
+            `</div></div>`;
+          listEl.appendChild(row);
+          continue;
+        }
         const m = e.metrics || {};
         const hasM = m.relayType || m.ringCount || m.satCount;
         const cost = m.totalCostM != null ? `$${fmtInt(m.totalCostM)}M` : "—";
@@ -3495,7 +3685,7 @@ export class SimUi {
       }
       listEl.querySelectorAll(".archive-load").forEach((b) => b.addEventListener("click", () => {
         const e = load().find((x) => String(x.id) === b.dataset.id);
-        if (e) loadEntry(e);
+        if (e) loadEntry(e.kind === "set" ? { config: e.baseConfig || {} } : e);
       }));
       listEl.querySelectorAll(".archive-del").forEach((b) => b.addEventListener("click", () => {
         if (!confirm("Delete this saved config?")) return;
@@ -3505,10 +3695,41 @@ export class SimUi {
     };
     const renderAll = () => { renderCharts(); renderCostVsMbps(); renderList(); };
 
-    // Hooks so other features (the optimized sensitivity sweep) can capture the current
-    // config and append archive entries without going through the Save button/prompt.
+    // Hooks so other features (the sensitivity sweeps, the paper-plan runner) can
+    // capture the current config and append archive entries without the Save button.
     this._archiveSnapshotConfig = () => ({ sliders: snapshotSliders(), slidersUser: snapshotSlidersUser(), curves: snapshotCurves() });
-    this._archiveAppend = (entry) => { const arr = load(); arr.unshift(entry); save(arr); renderAll(); };
+    // While a measurement set is open, sweep entries are folded INTO it: only the
+    // sliders that differ from the set's baseline are stored per run (the dedup
+    // that keeps 100-run sets a fraction of 100 standalone entries).
+    this._archiveAppend = (entry) => {
+      const set = this._activeMeasureSet;
+      if (set) {
+        const base = set.baseConfig?.sliders || {};
+        const es = entry.config?.sliders || {};
+        const delta = {};
+        for (const [k, v] of Object.entries(es)) if (String(v) !== String(base[k])) delta[k] = v;
+        set.items.push({ label: entry.name, ts: entry.ts, deltaSliders: delta, sized: entry.sized, metrics: entry.metrics });
+        archiveStore.touch(set);
+        renderAll();
+        return;
+      }
+      const arr = load(); arr.unshift(entry); save(arr); renderAll();
+    };
+    // Open/close a measurement set (used by the paper-plan runner; usable by any
+    // future batch feature). The baseline snapshot is taken at open time, AFTER
+    // the caller applied its clean baseline config.
+    this._archiveOpenSet = ({ planId = null, name }) => {
+      const set = { id: Date.now(), kind: "set", planId, name, ts: new Date().toISOString(), baseConfig: this._archiveSnapshotConfig(), items: [] };
+      const arr = load(); arr.unshift(set); save(arr); renderAll();
+      this._activeMeasureSet = set;
+      return set;
+    };
+    this._archiveCloseSet = () => {
+      if (!this._activeMeasureSet) return;
+      archiveStore.touch(this._activeMeasureSet);
+      this._activeMeasureSet = null;
+      renderAll();
+    };
 
     saveBtn.addEventListener("click", () => {
       const m = captureMetrics();
@@ -3528,7 +3749,9 @@ export class SimUi {
     copyBtn.textContent = "📋 Copy results JSON";
     copyBtn.title = "Copy every saved config and its results to the clipboard as a JSON array.";
     copyBtn.addEventListener("click", async () => {
-      const json = JSON.stringify(load(), null, 2);
+      // Export the FLATTENED view: measurement sets expand to classic full entries
+      // (base + delta merged), so downstream tools consume the same shape as ever.
+      const json = JSON.stringify(flattenArchive(load()), null, 2);
       const done = (ok) => { copyBtn.textContent = ok ? "✓ Copied" : "✕ Copy failed"; setTimeout(() => { copyBtn.textContent = "📋 Copy results JSON"; }, 1500); };
       try {
         await navigator.clipboard.writeText(json);
@@ -4668,7 +4891,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=5.09");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=5.11");
     let result = null;
     try {
       result = await solveBandDistribution({
