@@ -5,15 +5,15 @@ import {
   junctionDeficits,
   mapSliderValueToUserFacing as mapToUserFacing,
   mapUserFacingToSliderValue as mapToSliderInternal,
-} from "./slidersData.js?v=5.19";
-import { LukashianClock } from "./lukashianTime.js?v=5.19";
-import { wireAuthUi } from "./auth.js?v=5.19";
-import { SensitivityPool } from "./sensitivityPool.js?v=5.19";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.19";
-import { minOf } from "./simMath.js?v=5.19";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.19";
-import { archiveStore } from "./simArchiveStore.js?v=5.19";
-import { PAPER_PLAN, PLAN_VERSION } from "./paperPlan.js?v=5.19";
+} from "./slidersData.js?v=5.21";
+import { LukashianClock } from "./lukashianTime.js?v=5.21";
+import { wireAuthUi } from "./auth.js?v=5.21";
+import { SensitivityPool } from "./sensitivityPool.js?v=5.21";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.21";
+import { minOf } from "./simMath.js?v=5.21";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.21";
+import { archiveStore } from "./simArchiveStore.js?v=5.21";
+import { PAPER_PLAN, PLAN_VERSION } from "./paperPlan.js?v=5.21";
 
 export class SimUi {
   constructor(simMain) {
@@ -3110,6 +3110,23 @@ export class SimUi {
    * in the archive (baseline saved once, per-run deltas only). Lives at the
    * bottom of the Sensitivity pane, whose controls the runner drives.
    */
+  /** True in the dedicated measurement-runner window (opened with ?measure=run). */
+  _isMeasureRunner() {
+    try { return new URLSearchParams(location.search).get("measure") === "run"; } catch { return false; }
+  }
+
+  /** Cross-tab channel between the runner window and the observing tab(s). */
+  _measureChan() {
+    if (this._mchan === undefined) {
+      try { this._mchan = new BroadcastChannel("marslink-measure"); } catch { this._mchan = null; }
+    }
+    return this._mchan;
+  }
+
+  _broadcastMeasure(msg) {
+    try { this._measureChan()?.postMessage({ ...msg, at: Date.now() }); } catch {}
+  }
+
   _injectPaperPlanUI() {
     const body = document.querySelector("#sensitivity-pane .drawer-body");
     if (!body || document.getElementById("paper-plan-panel")) return;
@@ -3136,15 +3153,68 @@ export class SimUi {
       `<button type="button" id="paper-plan-stop" class="btn" style="display:none;">Stop after current</button>` +
       `<label class="muted" style="font-size:11px; display:flex; gap:4px; align-items:center;"><input type="checkbox" id="paper-plan-rerun"> re-measure items that already have a set</label>` +
       `</div>` +
-      `<div id="paper-plan-status" class="muted" style="font-size:12px; margin-top:6px;"></div>`;
+      `<div id="paper-plan-status" class="muted" style="font-size:12px; margin-top:6px;"></div>` +
+      `<div id="paper-plan-progress" style="display:none; margin-top:8px; border-top:1px solid var(--border-2,#333); padding-top:8px;"></div>`;
     body.appendChild(wrap);
-    document.getElementById("paper-plan-run").addEventListener("click", () => this._runPaperPlan());
-    document.getElementById("paper-plan-continue").addEventListener("click", () => this._runPaperPlan({ resume: true }));
+
+    const runnerMode = this._isMeasureRunner();
+    if (runnerMode) {
+      // This window IS the runner: it owns the measurement loop and reports out.
+      const banner = document.createElement("div");
+      banner.style.cssText = "margin-bottom:8px; padding:6px 8px; border-radius:6px; background:var(--accent-dim,rgba(255,180,84,0.12)); font-size:12px;";
+      banner.innerHTML = `<b>⚙ Measurement runner window.</b> <span class="muted">Leave this window open (visible if possible — a fully hidden tab is throttled). Progress is mirrored in your main window.</span>`;
+      wrap.insertBefore(banner, wrap.firstChild);
+      document.title = "Marslink — measuring…";
+    }
+
+    document.getElementById("paper-plan-run").addEventListener("click", () => this._startMeasureRun({}));
+    document.getElementById("paper-plan-continue").addEventListener("click", () => this._startMeasureRun({ resume: true }));
     document.getElementById("paper-plan-stop").addEventListener("click", () => {
-      this._paperPlanStop = true;
-      const st = document.getElementById("paper-plan-status");
-      if (st) st.textContent += " · stopping after the current sweep…";
+      if (runnerMode || this._paperPlanRunning) {
+        this._paperPlanStop = true;
+        const st = document.getElementById("paper-plan-status");
+        if (st) st.textContent += " · stopping after the current sweep…";
+      } else {
+        // Observer: ask the runner window to stop after its current sweep.
+        this._broadcastMeasure({ type: "stop" });
+        const st = document.getElementById("paper-plan-status");
+        if (st) st.textContent = "Stop requested — the runner will finish its current sweep and save.";
+      }
     });
+
+    // ── Cross-tab wiring ────────────────────────────────────────────────────
+    const chan = this._measureChan();
+    if (chan) {
+      chan.onmessage = (e) => {
+        const m = e.data || {};
+        if (runnerMode) {
+          if (m.type === "stop") {
+            this._paperPlanStop = true;
+            const st = document.getElementById("paper-plan-status");
+            if (st) st.textContent += " · stop requested from the main window…";
+          }
+          return;
+        }
+        // Observer side.
+        if (m.type === "progress" || m.type === "heartbeat" || m.type === "done") {
+          this._runnerMsg = m; this._runnerAt = Date.now();
+          if (m.type === "done") this._runnerDone = true;
+          else this._runnerDone = false;
+          this._renderMeasureProgress();
+        }
+        if (m.type === "archive") {
+          // The runner wrote results — re-read the shared store and redraw.
+          if (!this._paperPlanRunning) archiveStore.refresh().then(() => {
+            this._archiveRenderAll?.();
+            this._renderMeasureProgress();
+          });
+        }
+      };
+    }
+    if (!runnerMode) {
+      // Keep the "last update" age fresh even between runner messages.
+      setInterval(() => { if (this._runnerMsg) this._renderMeasureProgress(); }, 2000);
+    }
 
     // Show the Continue button whenever an interrupted set exists and nothing is
     // running. A set is interrupted if its status never reached "complete" — a
@@ -3164,11 +3234,99 @@ export class SimUi {
     };
     this._archiveReady?.then(() => {
       this._refreshPaperPlanResume?.();
+      if (runnerMode) {
+        // Pick up the request the main window left for us; if there is none
+        // (e.g. this window was reloaded), fall back to the resume prompt.
+        let req = null;
+        try { req = JSON.parse(localStorage.getItem("marslinkMeasureRequest") || "null"); } catch {}
+        try { localStorage.removeItem("marslinkMeasureRequest"); } catch {}
+        if (req && (req.resume || (Array.isArray(req.ids) && req.ids.length))) {
+          document.querySelectorAll(".paper-plan-item").forEach((c) => { if (!c.disabled) c.checked = (req.ids || []).includes(c.dataset.id); });
+          const rr = document.getElementById("paper-plan-rerun");
+          if (rr) rr.checked = !!req.rerun;
+          this._runPaperPlan({ resume: !!req.resume, ids: req.ids || null });
+          return;
+        }
+      }
       // A refresh mid-run lands here: offer to pick the run back up, and do it
       // automatically if nobody answers (the common case is an unattended
-      // overnight run whose tab reloaded).
+      // overnight run whose window reloaded).
       this._promptResumePlan?.();
+      if (!runnerMode) this._renderMeasureProgress?.();
     });
+  }
+
+  /**
+   * Start a measurement run. In the runner window this runs the plan locally;
+   * in a normal window it opens (or reuses) the runner window and switches this
+   * panel to a progress mirror, so the main window stays usable while measuring.
+   */
+  _startMeasureRun({ ids = null, resume = false } = {}) {
+    if (this._isMeasureRunner()) return this._runPaperPlan({ resume, ids });
+    const list = ids || [...document.querySelectorAll(".paper-plan-item:checked")].map((c) => c.dataset.id);
+    if (!resume && !list.length) {
+      const st = document.getElementById("paper-plan-status");
+      if (st) st.textContent = "Nothing checked.";
+      return null;
+    }
+    const req = { ids: list, resume: !!resume, rerun: !!document.getElementById("paper-plan-rerun")?.checked, ts: Date.now() };
+    try { localStorage.setItem("marslinkMeasureRequest", JSON.stringify(req)); } catch {}
+    const url = new URL(location.href);
+    url.searchParams.set("measure", "run");
+    url.hash = "";
+    const win = window.open(url.toString(), "marslink-measure", "width=1200,height=860");
+    const st = document.getElementById("paper-plan-status");
+    if (!win) {
+      if (st) st.textContent = "Could not open the runner window — allow pop-ups for this site, then try again.";
+      return null;
+    }
+    this._measureRunnerWin = win;
+    this._runnerDone = false;
+    this._runnerMsg = { type: "progress", text: "starting the runner window…" };
+    this._runnerAt = Date.now();
+    if (st) st.textContent = `Measuring in the runner window (${resume ? "continuing" : list.length + " item(s)"}) — progress below.`;
+    this._renderMeasureProgress();
+    return win;
+  }
+
+  /**
+   * Progress mirror for the main window: the runner's latest status line, how
+   * long ago it reported, and each plan item's state read from the shared
+   * archive (✓ complete · ⚠ incomplete · · not measured).
+   */
+  _renderMeasureProgress() {
+    const box = document.getElementById("paper-plan-progress");
+    if (!box || this._isMeasureRunner()) return;
+    const sets = archiveStore.all().filter((e) => e && e.kind === "set");
+    const byPlan = new Map(sets.map((s) => [s.planId, s]));
+    const auto = PAPER_PLAN.filter((p) => !p.manual);
+    const anyState = this._runnerMsg || sets.length;
+    if (!anyState) { box.style.display = "none"; return; }
+    box.style.display = "";
+    const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    const fmtDur = (ms) => (!(ms > 0) ? "" : ms < 60000 ? `${Math.round(ms / 1000)}s` : `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`);
+    const ageSec = this._runnerAt ? Math.round((Date.now() - this._runnerAt) / 1000) : null;
+    const stale = ageSec != null && ageSec > 30 && !this._runnerDone;
+    const rows = auto.map((p) => {
+      const s = byPlan.get(p.id);
+      const complete = s && (!s.progress || s.progress.status === "complete");
+      const mark = complete ? "✓" : s ? "⚠" : "·";
+      const col = complete ? "var(--ok,#35c75a)" : s ? "var(--warn,#ffb454)" : "var(--text-3,#888)";
+      const detail = s
+        ? `${(s.items || []).length} runs${s.progress?.segsTotal ? ` · ${s.progress.segsDone || 0}/${s.progress.segsTotal} segments` : ""}${s.timing?.measuredMs ? ` · ${fmtDur(s.timing.measuredMs)}` : ""}`
+        : "not measured";
+      return `<div style="display:flex; gap:6px; font-size:11px; line-height:1.5;"><span style="color:${col}; width:10px; flex:none;">${mark}</span>` +
+             `<span style="min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(p.title)}</span>` +
+             `<span class="muted" style="margin-left:auto; flex:none;">${esc(detail)}</span></div>`;
+    }).join("");
+    const line = this._runnerMsg?.text ? esc(this._runnerMsg.text) : "no runner report yet";
+    const state = this._runnerDone
+      ? `<span style="color:var(--ok,#35c75a);">runner finished</span>`
+      : stale ? `<span style="color:var(--warn,#ffb454);">no update for ${ageSec}s — runner window closed?</span>`
+      : ageSec != null ? `updated ${ageSec}s ago` : "";
+    box.innerHTML =
+      `<div style="font-size:12px; font-weight:600; margin-bottom:4px;">Runner progress <span class="muted" style="font-weight:400;">${state}</span></div>` +
+      `<div class="muted" style="font-size:11px; margin-bottom:6px;">${line}</div>` + rows;
   }
 
   /**
@@ -3202,7 +3360,9 @@ export class SimUi {
     let left = AUTO_SEC;
     const countEl = overlay.querySelector("#paper-plan-resume-count");
     const close = () => { clearInterval(tick); overlay.remove(); };
-    const go = () => { close(); this._runPaperPlan({ resume: true }); };
+    // In a normal window this opens the runner window; in the runner window it
+    // continues locally.
+    const go = () => { close(); this._startMeasureRun({ resume: true }); };
     const tick = setInterval(() => {
       left -= 1;
       if (left <= 0) { go(); return; }
@@ -3303,12 +3463,33 @@ export class SimUi {
    */
   async _runPaperPlan(opts = {}) {
     if (this._paperPlanRunning) return;
+    // Cross-window lock: two runner windows measuring the same plan would write
+    // interleaved items into the same archive set and corrupt it. The holder
+    // refreshes a heartbeat; a stale lock (crashed window) is taken over.
+    const LOCK_KEY = "marslinkMeasureLock";
+    const LOCK_STALE_MS = 8000;
+    const readLock = () => { try { return JSON.parse(localStorage.getItem(LOCK_KEY) || "null"); } catch { return null; } };
+    const held = readLock();
+    if (held && Date.now() - (held.at || 0) < LOCK_STALE_MS && held.id !== this._measureLockId) {
+      const st0 = document.getElementById("paper-plan-status");
+      if (st0) st0.textContent = "Another measurement window is already running — not starting a second one (results would interleave).";
+      return;
+    }
+    const lockId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    this._measureLockId = lockId;
+    const writeLock = () => { try { localStorage.setItem(LOCK_KEY, JSON.stringify({ id: lockId, at: Date.now() })); } catch {} };
+    writeLock();
+    const lockBeat = setInterval(writeLock, 2000);
     const runBtn = document.getElementById("paper-plan-run");
     const stopBtn = document.getElementById("paper-plan-stop");
     const statusEl = document.getElementById("paper-plan-status");
-    const status = (t) => { if (statusEl) statusEl.textContent = t; };
+    // Every status line is mirrored to the main window over the measure channel.
+    const status = (t) => { if (statusEl) statusEl.textContent = t; this._broadcastMeasure({ type: "progress", text: t }); };
     this._paperPlanRunning = true;
     this._paperPlanStop = false;
+    // Heartbeat so the observer can tell "still working" from "window closed"
+    // during the long silence of a single measurement.
+    const heartbeat = setInterval(() => this._broadcastMeasure({ type: "heartbeat", text: statusEl?.textContent || "" }), 3000);
     if (runBtn) runBtn.disabled = true;
     if (stopBtn) stopBtn.style.display = "";
     const fire = (el, ev) => el && el.dispatchEvent(new Event(ev, { bubbles: true }));
@@ -3335,7 +3516,9 @@ export class SimUi {
         const pending = this._incompletePlanSets();
         items = pending.map((s) => PAPER_PLAN.find((p) => p.id === s.planId)).filter(Boolean);
       } else {
-        const wanted = new Set([...document.querySelectorAll(".paper-plan-item:checked")].map((c) => c.dataset.id));
+        const wanted = new Set(opts.ids && opts.ids.length
+          ? opts.ids
+          : [...document.querySelectorAll(".paper-plan-item:checked")].map((c) => c.dataset.id));
         items = PAPER_PLAN.filter((p) => !p.manual && wanted.has(p.id));
       }
       let n = 0;
@@ -3435,10 +3618,20 @@ export class SimUi {
       if (preState) {
         try { this._archiveApplyConfig?.(preState); if (statusEl) statusEl.textContent += " · your pre-plan config was restored"; } catch (e2) { console.error("[PaperPlan] restore failed:", e2); }
       }
+      clearInterval(heartbeat);
+      clearInterval(lockBeat);
+      try { if (readLock()?.id === lockId) localStorage.removeItem(LOCK_KEY); } catch {}
+      this._measureLockId = null;
       this._paperPlanRunning = false;
       if (runBtn) runBtn.disabled = false;
       if (stopBtn) stopBtn.style.display = "none";
       this._refreshPaperPlanResume?.();
+      this._broadcastMeasure({ type: "done", text: statusEl?.textContent || "finished" });
+      this._broadcastMeasure({ type: "archive" });
+      if (this._isMeasureRunner()) {
+        document.title = "Marslink — measurements done";
+        if (statusEl) statusEl.textContent += " · you can close this runner window.";
+      }
     }
   }
 
@@ -3908,6 +4101,9 @@ export class SimUi {
       // Keep the paper-plan panel's "continue interrupted run" affordance in sync.
       try { this._refreshPaperPlanResume?.(); } catch {}
     };
+    // Lets the measure-channel observer redraw the archive after the runner
+    // window writes results into the shared store.
+    this._archiveRenderAll = renderAll;
 
     // Hooks so other features (the sensitivity sweeps, the paper-plan runner) can
     // capture the current config and append archive entries without the Save button.
@@ -3935,6 +4131,8 @@ export class SimUi {
         set.items.push({ label: entry.name, ts: entry.ts, ms: entry.ms ?? null, wallMs, deltaSliders: delta, sized: entry.sized, metrics: entry.metrics });
         archiveStore.touch(set);
         renderAll();
+        // Tell the main window a result landed (it re-reads the shared store).
+        if (this._isMeasureRunner()) this._broadcastMeasure({ type: "archive" });
         return;
       }
       const arr = load(); arr.unshift(entry); save(arr); renderAll();
@@ -5142,7 +5340,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=5.19");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=5.21");
     let result = null;
     try {
       result = await solveBandDistribution({

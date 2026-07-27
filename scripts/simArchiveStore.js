@@ -115,6 +115,22 @@ class ArchiveStore {
   all() { return this._mem; }
 
   /**
+   * Re-read the store from disk — for a tab that is OBSERVING writes made by
+   * another tab (the measurement runner window). Replaces the in-memory entry
+   * objects, so never call this in a tab that holds live references into the
+   * archive (i.e. while this tab is itself running a measurement).
+   */
+  async refresh() {
+    if (!this._db) return this._mem;
+    const rows = await this._idbAll();
+    rows.sort((a, b) => String(b.ts || "").localeCompare(String(a.ts || "")));
+    this._mem = rows;
+    this._persisted = new WeakSet();
+    for (const e of rows) this._persisted.add(e);
+    return this._mem;
+  }
+
+  /**
    * Replace the archive with `arr` (the load-mutate-save pattern of the call
    * sites). New entry objects are persisted; ids no longer present are deleted.
    */
