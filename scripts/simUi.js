@@ -5,15 +5,15 @@ import {
   junctionDeficits,
   mapSliderValueToUserFacing as mapToUserFacing,
   mapUserFacingToSliderValue as mapToSliderInternal,
-} from "./slidersData.js?v=5.18";
-import { LukashianClock } from "./lukashianTime.js?v=5.18";
-import { wireAuthUi } from "./auth.js?v=5.18";
-import { SensitivityPool } from "./sensitivityPool.js?v=5.18";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.18";
-import { minOf } from "./simMath.js?v=5.18";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.18";
-import { archiveStore } from "./simArchiveStore.js?v=5.18";
-import { PAPER_PLAN, PLAN_VERSION } from "./paperPlan.js?v=5.18";
+} from "./slidersData.js?v=5.19";
+import { LukashianClock } from "./lukashianTime.js?v=5.19";
+import { wireAuthUi } from "./auth.js?v=5.19";
+import { SensitivityPool } from "./sensitivityPool.js?v=5.19";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.19";
+import { minOf } from "./simMath.js?v=5.19";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.19";
+import { archiveStore } from "./simArchiveStore.js?v=5.19";
+import { PAPER_PLAN, PLAN_VERSION } from "./paperPlan.js?v=5.19";
 
 export class SimUi {
   constructor(simMain) {
@@ -3956,6 +3956,9 @@ export class SimUi {
         // "running" until the item finishes — anything still "running" when no
         // run is in progress was interrupted, and can be continued.
         progress: { segsDone: 0, itemCount: 0, segsTotal, status: "running" },
+        // Start the clock at set open, so the FIRST measurement's wallMs is its
+        // real duration rather than zero.
+        timing: { startedAt: Date.now(), lastAt: Date.now(), segments: [], totalMs: 0 },
         baseConfig: this._archiveSnapshotConfig(), items: [],
       };
       const arr = load(); arr.unshift(set); save(arr); renderAll();
@@ -5139,7 +5142,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=5.18");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=5.19");
     let result = null;
     try {
       result = await solveBandDistribution({
