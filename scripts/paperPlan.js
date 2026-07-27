@@ -24,26 +24,71 @@
 //   manual + note        — listed but not runnable by the runner (yet)
 //   estMin               — rough serial live-mode duration, for the panel
 
-// Shared clean baseline: ×128 laser tech, auto planet sizing, full planetary
-// rings, Date placement, push-relabel (the only solver that works for
-// contoured concentric; transfer accepts it too), auto route count.
+// Bump when the plan's items, baselines, or semantics change — recorded into
+// every measurement set's `run` block so a dataset names the plan that made it.
+export const PLAN_VERSION = 2;
+
+// REPRODUCIBILITY CONTRACT: before each item the runner pins EVERY
+// build-affecting input — all ~120 sliders to their slidersData defaults and
+// the five adapted-ring curves to their default profiles — then applies the
+// item's family and the overrides below. So each input a set records is either
+// (a) a slidersData default (the documented design choice), (b) a BASE/item
+// override listed here with its reason, or (c) a per-scenario value derived by
+// the sizing pipeline and recorded in the entry's `sized` block. Nothing is
+// inherited from whatever the live UI happened to hold.
+//
+// Shared overrides, each with its reason:
 const BASE = {
-  "laser_technology.improvement-factor": 7,          // 2^7 = ×128
+  // ×128 (2^7): the paper's reference laser-technology factor — every quoted
+  // capacity is at ×128 and rescales linearly (§7).
+  "laser_technology.improvement-factor": 7,
+  // Planet rings must be sized BY the measured relay capacity (§11's sizing
+  // rule), not left at manual rates.
   "relay_type.planet_sizing": "auto",
+  // Real ephemeris placement; the date-window items sweep dates explicitly.
   "simulation.planet-placement": "Date",
+  // Full 360° planetary rings: §11 requires full rings so every relay route
+  // can attach around the circumference.
   "ring_earth.side-extension-degrees-slider": 180,
   "ring_mars.side-extension-degrees-slider": 180,
+  // push-relabel is the only max-flow solver that works for contoured
+  // concentric (topology-aware is broken there); transfer accepts it too —
+  // one solver across the whole plan keeps flow numbers comparable.
   "adapted_rings.flow-solver": "push-relabel",
   "adapted_eccentric_rings.flow-solver": "push-relabel",
+  // The concentric scaling law is measured on the auto-route ridge (§8.4).
   "adapted_rings.auto_route_count": "yes",
+  // Junction rings grow empirically until each ring's demand is met (§10).
   "adapted_eccentric_rings.junction-ring-mode": "auto",
 };
 
 export const PAPER_PLAN = [
   {
+    id: "conc-sweetspot",
+    title: "Concentric sweet spot — route count vs theory optimum",
+    feeds: "Eqs (6)–(8) validation: T(N) peaks at N_opt ≈ 15.8·R and the peak matches the closed form — the justification for measuring the scaling law ON the auto-route ridge",
+    family: "Contoured concentric",
+    sliders: { ...BASE, "adapted_rings.auto_route_count": "no" },
+    sens: {
+      // Per-segment route sweeps bracket each ring count's predicted optimum
+      // (N_opt ≈ 15.8·R): the peak's LOCATION tests Eq (7), its VALUE Eq (8).
+      ringSegs: [
+        { start: 4, end: 4, step: 1, route: { start: 20, end: 120, step: 20 } },
+        { start: 10, end: 10, step: 1, route: { start: 60, end: 280, step: 40 } },
+        { start: 20, end: 20, step: 1, route: { start: 120, end: 560, step: 80 } },
+        { start: 30, end: 30, step: 1, route: { start: 180, end: 840, step: 120 } },
+        { start: 40, end: 40, step: 1, route: { start: 240, end: 1120, step: 160 } },
+      ],
+      rate: null,
+      placement: "current",
+      flow: false,
+    },
+    estMin: 35,
+  },
+  {
     id: "fig5-ridge",
-    title: "Concentric ridge scaling",
-    feeds: "Fig 5 (filled), §8.4 exponent, Table 2 G1",
+    title: "Concentric scaling law on the ridge",
+    feeds: "Fig 5 (filled), §8.4 exponent, Table 2 G1 — wide ring-count range at the auto-route sweet spot",
     family: "Contoured concentric",
     sliders: { ...BASE },
     sens: {
@@ -87,65 +132,39 @@ export const PAPER_PLAN = [
     estMin: 30,
   },
   {
-    id: "fig12-flow-conc",
-    title: "Concentric flow parity spots (flow ON)",
-    feeds: "Fig 12 breakevens, §13 delivered capacity",
+    id: "fig13-grid-conc",
+    title: "Concentric geometry grid ×16 (flow ON, worker)",
+    feeds: "Fig 13 + §13 G2: delivered capacity invariant across the synodic geometry, no conjunction blackout — the standing concentric flow-ON grid gap; also demonstrates flow ≈ routed parity",
     family: "Contoured concentric",
-    sliders: { ...BASE },
-    sens: {
-      ringSegs: [{ start: 10, end: 10, step: 1 }, { start: 28, end: 28, step: 1 }],
-      rate: null,
-      placement: "current",
-      flow: { budgetSec: 90 },
-    },
-    estMin: 12,
-  },
-  {
-    id: "fig12-flow-tran",
-    title: "Transfer flow parity spots at 1/10 Gbps (flow ON)",
-    feeds: "Fig 12 breakevens, Table 1 capacity column",
-    family: "Contoured transfer",
-    sliders: { ...BASE },
-    sens: {
-      ringSegs: [{ start: 2, end: 2, step: 1 }],
-      rate: { mode: "total", start: 1000, end: 10000, step: 9000 },
-      placement: "current",
-      flow: { budgetSec: 90 },
-    },
-    estMin: 10,
-  },
-  {
-    id: "fig13-datewindow-conc",
-    title: "Concentric date-window grid (flow ON, worker)",
-    feeds: "Fig 13 right + §13 G2 (no conjunction blackout), date-independent capacity export",
-    family: "Contoured concentric",
-    // Worker exec: the date-range placement axis is worker/main-only (live mode
-    // pins placement to the main Simulation section), and worker flow is
-    // trustworthy since the sizing fixed-point fix (commit 1ca356b).
+    // Worker exec: placement grids are worker/main-only (live mode pins placement
+    // to the main Simulation section), and worker flow is trustworthy since the
+    // sizing fixed-point fix (commit 1ca356b). Geometry ×16 places the planets by
+    // angle, decoupled from any calendar — the date-independence device the
+    // paper's Fig 13 is built on.
     exec: "worker",
     sliders: { ...BASE },
     sens: {
       ringSegs: [{ start: 28, end: 28, step: 1 }],
       rate: null,
-      placement: { dateRangeDays: 780, samples: 13 },
+      placement: "geometry-16",
       flow: { budgetSec: 90 },
     },
-    estMin: 25,
+    estMin: 30,
   },
   {
-    id: "fig13-datewindow-tran",
-    title: "Transfer date-window grid (flow ON, worker)",
-    feeds: "Fig 13 + §13 G2 transfer half",
+    id: "fig13-grid-tran",
+    title: "Transfer geometry grid ×16 (flow ON, worker)",
+    feeds: "Fig 13 transfer half + §13 G2; re-measures the rotated-geometry delivered-capacity question post ring-pinning/sizing fixes",
     family: "Contoured transfer",
     exec: "worker",
     sliders: { ...BASE },
     sens: {
       ringSegs: [{ start: 2, end: 2, step: 1 }],
       rate: { mode: "total", start: 10000, end: 10000, step: 1 },
-      placement: { dateRangeDays: 780, samples: 13 },
+      placement: "geometry-16",
       flow: { budgetSec: 90 },
     },
-    estMin: 15,
+    estMin: 20,
   },
   {
     id: "table1-transfer-10g",
@@ -182,6 +201,13 @@ export const PAPER_PLAN = [
       flow: false,
     },
     estMin: 12,
+  },
+  {
+    id: "eq13-planet-law",
+    title: "Planetary-ring law N ∝ r·√T (no runs needed)",
+    feeds: "Eq (13) / §11 validation",
+    manual: true,
+    note: "No dedicated sweep: every auto-sized entry in every set archives the sized rate (sized block) with earthSats/marsSats. Fitting N against √T across ALL sets validates Eq (13) over the full capacity range — an analysis step on data the other items already produce.",
   },
   {
     id: "fig14-coverage",

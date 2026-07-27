@@ -5,15 +5,15 @@ import {
   junctionDeficits,
   mapSliderValueToUserFacing as mapToUserFacing,
   mapUserFacingToSliderValue as mapToSliderInternal,
-} from "./slidersData.js?v=5.11";
-import { LukashianClock } from "./lukashianTime.js?v=5.11";
-import { wireAuthUi } from "./auth.js?v=5.11";
-import { SensitivityPool } from "./sensitivityPool.js?v=5.11";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.11";
-import { minOf } from "./simMath.js?v=5.11";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.11";
-import { archiveStore } from "./simArchiveStore.js?v=5.11";
-import { PAPER_PLAN } from "./paperPlan.js?v=5.11";
+} from "./slidersData.js?v=5.13";
+import { LukashianClock } from "./lukashianTime.js?v=5.13";
+import { wireAuthUi } from "./auth.js?v=5.13";
+import { SensitivityPool } from "./sensitivityPool.js?v=5.13";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.13";
+import { minOf } from "./simMath.js?v=5.13";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.13";
+import { archiveStore } from "./simArchiveStore.js?v=5.13";
+import { PAPER_PLAN, PLAN_VERSION } from "./paperPlan.js?v=5.13";
 
 export class SimUi {
   constructor(simMain) {
@@ -3146,10 +3146,46 @@ export class SimUi {
   }
 
   /**
-   * Sequential paper-plan runner. Per checked item: apply the clean baseline
-   * sliders, configure the sensitivity controls (family, exec, axes, placement,
-   * flow), open a measurement set, run each ring segment as one sweep, close the
-   * set. Items whose set already exists are skipped unless re-measure is checked.
+   * Reproducibility baseline: EVERY build-affecting input is pinned before a plan
+   * item runs — all sliders to their slidersData defaults (each default is the
+   * documented design choice), all adapted-ring curves to their default profiles
+   * (the §8.3/§9.3 element logic), then the item's family and its own overrides
+   * on top. Nothing inherits from whatever the live UI happened to hold, so two
+   * runs of the same plan item measure the same configuration, and every one of
+   * the ~120 captured inputs is either a documented default or a deliberate
+   * per-item override. (The time-acceleration slider is visualization-only and
+   * left alone; per-scenario sizing outputs are derived, and recorded as such.)
+   */
+  _applyPlanBaseline(item) {
+    const CATS = ["economics", "simulation", "laser_technology", "ring_mars", "relay_type", "circular_rings", "eccentric_rings", "ring_earth", "adapted_rings", "adapted_eccentric_rings", "launch_schedule", "launch_vehicle", "satellite"];
+    const SKIP = new Set(["simulation.time-acceleration-slider"]);
+    const defaults = {};
+    for (const section of CATS) {
+      const group = this.slidersData[section];
+      if (!group) continue;
+      for (const sliderId in group) {
+        const fullId = `${section}.${sliderId}`;
+        if (SKIP.has(fullId)) continue;
+        if (!this.sliders[section]?.[sliderId]) continue; // real controls only
+        const def = group[sliderId];
+        if (def && def.value !== undefined) defaults[fullId] = def.value;
+      }
+    }
+    this.applySliderValues({ ...defaults, "relay_type.selected": item.family, ...(item.sliders || {}) });
+    for (const [k, dflt] of SimUi.ADAPTED_CURVES) {
+      const anchors = Array.isArray(dflt) ? dflt.map((a) => ({ ...a })) : [{ x: 0, y: dflt }, { x: 1, y: dflt }];
+      this._setCurve(k, anchors);
+      this._curveRefresh?.[k]?.();
+    }
+  }
+
+  /**
+   * Sequential paper-plan runner. Per checked item: pin the full reproducibility
+   * baseline (_applyPlanBaseline), configure the sensitivity controls (family,
+   * exec, axes, placement, flow), open a measurement set carrying the run
+   * parameters, run each ring segment as one sweep, close the set. Items whose
+   * set already exists are skipped unless re-measure is checked. The user's
+   * pre-plan configuration is restored when the plan ends.
    */
   async _runPaperPlan() {
     if (this._paperPlanRunning) return;
@@ -3170,10 +3206,14 @@ export class SimUi {
       const btn = [...document.querySelectorAll("#sensitivity-pane button")].find((b) => /Run Sensitivity/i.test(b.textContent));
       if (btn) btn.click(); else { this._onSweepComplete = null; resolve(); }
     });
+    let preState = null;
     try {
       await this._archiveReady; // archive store + set hooks ready
       // The sensitivity pane's controls wire on first open — make sure it is.
       document.querySelector('.mode-tab[data-mode="sensitivity"]')?.click();
+      // Snapshot the user's configuration; restored after the plan (finally).
+      preState = this._archiveSnapshotConfig();
+      const appPin = new URL(import.meta.url).searchParams.get("v");
       const wanted = new Set([...document.querySelectorAll(".paper-plan-item:checked")].map((c) => c.dataset.id));
       const rerun = document.getElementById("paper-plan-rerun")?.checked;
       const items = PAPER_PLAN.filter((p) => !p.manual && wanted.has(p.id));
@@ -3184,11 +3224,11 @@ export class SimUi {
         const existing = archiveStore.all().find((e) => e.kind === "set" && e.planId === item.id);
         if (existing && !rerun) { status(`${n}/${items.length} · ${item.title}: already measured — skipped`); continue; }
         status(`${n}/${items.length} · preparing ${item.title}…`);
-        // Simple mode + family + clean baseline. The pane's family radio mirrors
-        // the main relay-type radio through its own change handler.
+        // Simple mode + the FULL reproducibility baseline (all defaults + the
+        // item's family and overrides), then the pane's family mirror.
         document.getElementById("sens-mode-simple")?.click();
+        this._applyPlanBaseline(item);
         setCheck(item.family === "Contoured transfer" ? "sens-family-tran" : "sens-family-conc", true);
-        this.applySliderValues(item.sliders || {});
         // Exec: live (sliders) unless the item needs a worker-only axis.
         document.getElementById(item.exec === "worker" ? "sens-exec-worker" : "sens-exec-live")?.click();
         // Placement, flow, archive.
@@ -3197,6 +3237,8 @@ export class SimUi {
           setSel("sens-geom-mode", "date-range");
           setNum("sens-date-range-days", pl.dateRangeDays);
           setNum("sens-date-range-samples", pl.samples);
+        } else if (pl === "geometry-16" || pl === "geometry-4") {
+          setSel("sens-geom-mode", pl);
         } else setSel("sens-geom-mode", "current");
         setCheck("sens-calc-flow", !!item.sens.flow);
         if (item.sens.flow) setNum("sens-flow-budget", item.sens.flow.budgetSec);
@@ -3210,7 +3252,12 @@ export class SimUi {
           setNum("sens-route-step", item.sens.rate.step);
         } else setCheck("sens-route-enable", false);
         // One measurement set for the whole item; each ring segment is one sweep.
-        this._archiveOpenSet({ planId: item.id, name: item.title });
+        // `run` records the non-slider execution parameters for reproducibility.
+        this._archiveOpenSet({
+          planId: item.id,
+          name: item.title,
+          run: { exec: item.exec || "live", sens: item.sens, planVersion: PLAN_VERSION, app: appPin },
+        });
         try {
           const segs = item.sens.ringSegs || [];
           for (let si = 0; si < segs.length; si++) {
@@ -3220,6 +3267,14 @@ export class SimUi {
             setNum("sens-ring-start", sg.start);
             setNum("sens-ring-end", sg.end);
             setNum("sens-ring-step", sg.step || 1);
+            // Per-segment second-axis override (e.g. the sweet-spot item brackets
+            // each ring count's own route-count optimum).
+            if (sg.route) {
+              setCheck("sens-route-enable", true);
+              setNum("sens-route-start", sg.route.start);
+              setNum("sens-route-end", sg.route.end);
+              setNum("sens-route-step", sg.route.step);
+            }
             status(`${n}/${items.length} · ${item.title} — segment ${si + 1}/${segs.length} running…`);
             await runOnce();
           }
@@ -3233,6 +3288,10 @@ export class SimUi {
       status("Failed: " + (e?.message || e));
     } finally {
       this._archiveCloseSet();
+      // Put the user's pre-plan configuration back (sliders + curves + rebuild).
+      if (preState) {
+        try { this._archiveApplyConfig?.(preState); if (statusEl) statusEl.textContent += " · your pre-plan config was restored"; } catch (e2) { console.error("[PaperPlan] restore failed:", e2); }
+      }
       this._paperPlanRunning = false;
       if (runBtn) runBtn.disabled = false;
       if (stopBtn) stopBtn.style.display = "none";
@@ -3715,11 +3774,17 @@ export class SimUi {
       }
       const arr = load(); arr.unshift(entry); save(arr); renderAll();
     };
+    // Apply a saved config (sliders + curves + rebuild) programmatically — the
+    // paper-plan runner uses this to restore the user's pre-plan state.
+    this._archiveApplyConfig = (cfg) => loadEntry({ config: cfg || {} });
     // Open/close a measurement set (used by the paper-plan runner; usable by any
     // future batch feature). The baseline snapshot is taken at open time, AFTER
-    // the caller applied its clean baseline config.
-    this._archiveOpenSet = ({ planId = null, name }) => {
-      const set = { id: Date.now(), kind: "set", planId, name, ts: new Date().toISOString(), baseConfig: this._archiveSnapshotConfig(), items: [] };
+    // the caller applied its clean baseline config. `run` records the execution
+    // parameters that are NOT sliders (exec mode, flow budget, placement axis,
+    // rate axis, plan version, app pin) so the measurement — not just the
+    // configuration — is reproducible from the set alone.
+    this._archiveOpenSet = ({ planId = null, name, run = null }) => {
+      const set = { id: Date.now(), kind: "set", planId, name, ts: new Date().toISOString(), run, baseConfig: this._archiveSnapshotConfig(), items: [] };
       const arr = load(); arr.unshift(set); save(arr); renderAll();
       this._activeMeasureSet = set;
       return set;
@@ -4891,7 +4956,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=5.11");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=5.13");
     let result = null;
     try {
       result = await solveBandDistribution({
