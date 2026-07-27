@@ -1,23 +1,23 @@
 // simMain.js
 
-import { SimUi } from "./simUi.js?v=5.07";
-import { SimTime } from "./simTime.js?v=5.07";
-import { SimSolarSystem } from "./simSolarSystem.js?v=5.07";
-import { SimSatellites } from "./simSatellites.js?v=5.07";
-import { SimDeployment } from "./simDeployment.js?v=5.07";
-import { SimMissionValidator } from "./simMissionValidator.js?v=5.07";
-import { SimLinkBudget } from "./simLinkBudget.js?v=5.07";
-import { SimNetwork } from "./simNetwork.js?v=5.07";
+import { SimUi } from "./simUi.js?v=5.24";
+import { SimTime } from "./simTime.js?v=5.24";
+import { SimSolarSystem } from "./simSolarSystem.js?v=5.24";
+import { SimSatellites } from "./simSatellites.js?v=5.24";
+import { SimDeployment } from "./simDeployment.js?v=5.24";
+import { SimMissionValidator } from "./simMissionValidator.js?v=5.24";
+import { SimLinkBudget } from "./simLinkBudget.js?v=5.24";
+import { SimNetwork } from "./simNetwork.js?v=5.24";
 // Import both SimDisplay implementations with unique names
-import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=5.07";
-import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=5.07";
-import { generateReport } from "./reportGenerator.js?v=5.07";
-import { SIM_CONSTANTS } from "./simConstants.js?v=5.07";
-import { minOf, maxOf } from "./simMath.js?v=5.07";
-import { SimFlightController } from "./simFlightController.js?v=5.07";
-import { SimProbeController } from "./simProbeController.js?v=5.07";
-import { findDepartureWindows } from "./simTransfer.js?v=5.07";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.07";
+import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=5.24";
+import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=5.24";
+import { generateReport } from "./reportGenerator.js?v=5.24";
+import { SIM_CONSTANTS } from "./simConstants.js?v=5.24";
+import { minOf, maxOf } from "./simMath.js?v=5.24";
+import { SimFlightController } from "./simFlightController.js?v=5.24";
+import { SimProbeController } from "./simProbeController.js?v=5.24";
+import { findDepartureWindows } from "./simTransfer.js?v=5.24";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.24";
 
 export class SimMain {
   // Clamp argument to [-1, 1] to prevent NaN from Math.asin domain errors
@@ -70,7 +70,7 @@ export class SimMain {
     if (typeof window !== "undefined") window.simMain = this;
 
     // --- Worker + triple-buffered window cache (-1/0/+1) ---
-    this.simWorker = new Worker(new URL("./simWorker.js?v=5.07", import.meta.url), { type: "module" });
+    this.simWorker = new Worker(new URL("./simWorker.js?v=5.24", import.meta.url), { type: "module" });
     this.simWorker.onmessage = (event) => this.handleWorkerMessage(event);
     this.simWorker.onerror = (event) => console.error("[Marslink] Worker error:", event.message);
     this.simWorker.postMessage({ type: "init" });

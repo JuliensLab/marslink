@@ -5,15 +5,15 @@ import {
   junctionDeficits,
   mapSliderValueToUserFacing as mapToUserFacing,
   mapUserFacingToSliderValue as mapToSliderInternal,
-} from "./slidersData.js?v=5.23";
-import { LukashianClock } from "./lukashianTime.js?v=5.23";
-import { wireAuthUi } from "./auth.js?v=5.23";
-import { SensitivityPool } from "./sensitivityPool.js?v=5.23";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.23";
-import { minOf } from "./simMath.js?v=5.23";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.23";
-import { archiveStore } from "./simArchiveStore.js?v=5.23";
-import { PAPER_PLAN, PLAN_VERSION } from "./paperPlan.js?v=5.23";
+} from "./slidersData.js?v=5.24";
+import { LukashianClock } from "./lukashianTime.js?v=5.24";
+import { wireAuthUi } from "./auth.js?v=5.24";
+import { SensitivityPool } from "./sensitivityPool.js?v=5.24";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.24";
+import { minOf } from "./simMath.js?v=5.24";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.24";
+import { archiveStore } from "./simArchiveStore.js?v=5.24";
+import { PAPER_PLAN, PLAN_VERSION } from "./paperPlan.js?v=5.24";
 
 export class SimUi {
   constructor(simMain) {
@@ -2688,7 +2688,13 @@ export class SimUi {
 
   // Map each relay_type.selected option to its config section key.
   /** Old stored radio values (localStorage/presets/archives) -> current ones. */
-  static LEGACY_RADIO_VALUES = { "Contoured eccentric": "Contoured transfer" };
+  static LEGACY_RADIO_VALUES = {
+    "Contoured eccentric": "Contoured transfer",
+    // Demoted EXPERIMENTAL solver (see topologyAware.js): never restore it from
+    // storage/presets/archives — boot to push-relabel, the default for every
+    // family. It stays selectable live for comparison; the choice is session-only.
+    "concentric-topology-aware": "push-relabel",
+  };
 
   static RELAY_TYPE_SECTIONS = {
     "Contoured concentric": "adapted_rings",
@@ -2830,7 +2836,14 @@ export class SimUi {
           step = 1;
         }
 
-        const savedValue = localStorage.getItem(fullSliderId);
+        let savedValue = localStorage.getItem(fullSliderId);
+        // Heal renamed/demoted stored radio values through the same map the
+        // preset/snapshot/applySliderValues restore paths use — this boot path
+        // otherwise only checks option membership, so a still-listed legacy
+        // value (e.g. the demoted experimental flow solver) would slip through.
+        if (savedValue !== null && SimUi.LEGACY_RADIO_VALUES[savedValue] !== undefined) {
+          savedValue = SimUi.LEGACY_RADIO_VALUES[savedValue];
+        }
         let validSavedValue = savedValue;
         if (savedValue !== null) {
           if (slider.type === "select" || slider.type === "dropdown" || slider.type === "radio" || slider.type === "checkbox") {
@@ -5476,7 +5489,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=5.23");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=5.24");
     let result = null;
     try {
       result = await solveBandDistribution({
