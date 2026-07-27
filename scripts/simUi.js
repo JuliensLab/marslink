@@ -5,15 +5,15 @@ import {
   junctionDeficits,
   mapSliderValueToUserFacing as mapToUserFacing,
   mapUserFacingToSliderValue as mapToSliderInternal,
-} from "./slidersData.js?v=5.22";
-import { LukashianClock } from "./lukashianTime.js?v=5.22";
-import { wireAuthUi } from "./auth.js?v=5.22";
-import { SensitivityPool } from "./sensitivityPool.js?v=5.22";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.22";
-import { minOf } from "./simMath.js?v=5.22";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.22";
-import { archiveStore } from "./simArchiveStore.js?v=5.22";
-import { PAPER_PLAN, PLAN_VERSION } from "./paperPlan.js?v=5.22";
+} from "./slidersData.js?v=5.23";
+import { LukashianClock } from "./lukashianTime.js?v=5.23";
+import { wireAuthUi } from "./auth.js?v=5.23";
+import { SensitivityPool } from "./sensitivityPool.js?v=5.23";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.23";
+import { minOf } from "./simMath.js?v=5.23";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.23";
+import { archiveStore } from "./simArchiveStore.js?v=5.23";
+import { PAPER_PLAN, PLAN_VERSION } from "./paperPlan.js?v=5.23";
 
 export class SimUi {
   constructor(simMain) {
@@ -3145,18 +3145,24 @@ export class SimUi {
     wrap.style.cssText = "border:1px solid var(--border-2,#333); border-radius:8px; padding:10px; margin-top:12px;";
     const totalMin = PAPER_PLAN.filter((p) => !p.manual).reduce((s, p) => s + (p.estMin || 0), 0);
     const rows = PAPER_PLAN.map((p) =>
-      `<label style="display:flex; gap:6px; align-items:flex-start; font-size:12px;${p.manual ? " opacity:0.55;" : ""}">` +
-      `<input type="checkbox" class="paper-plan-item" data-id="${esc(p.id)}"${p.manual ? " disabled" : " checked"} style="margin-top:2px; flex:none;">` +
+      `<div style="display:flex; gap:6px; align-items:flex-start; font-size:12px;${p.manual ? " opacity:0.55;" : ""}">` +
+      `<label style="display:flex; gap:6px; align-items:flex-start; min-width:0; flex:1; cursor:pointer;">` +
+      `<input type="checkbox" class="paper-plan-item" data-id="${esc(p.id)}"${p.manual ? " disabled" : " checked"} style="margin-top:2px; flex:none;" title="Include this item in the next run">` +
       `<span><b>${esc(p.title)}</b> <span class="muted">— ${esc(p.feeds)}${p.manual ? " · manual" : ` · ~${p.estMin} min`}</span>` +
       (p.manual ? `<br><span class="muted" style="font-size:11px;">${esc(p.note)}</span>` : "") +
-      `</span></label>`).join("");
+      `</span></label>` +
+      (p.manual ? "" :
+        `<span class="paper-plan-state muted" data-id="${esc(p.id)}" style="flex:none; font-size:11px; margin-top:2px;">·</span>` +
+        `<button type="button" class="paper-plan-clear btn" data-id="${esc(p.id)}" hidden title="Delete this item's measurement set from the archive" style="flex:none; font-size:10px; padding:0 6px; line-height:1.6;">✕</button>`) +
+      `</div>`).join("");
     wrap.innerHTML =
       `<div style="display:flex; align-items:baseline; gap:8px; margin-bottom:6px; flex-wrap:wrap;">` +
       `<span style="font-weight:600;">📐 Paper measurements</span>` +
-      `<span class="muted" style="font-size:11px;">every simulation the paper's figures/tables need — each item runs as its own sweep into one measurement set (~${totalMin} min total, sequential)</span></div>` +
+      `<span class="muted" style="font-size:11px;">every simulation the paper's figures/tables need (~${totalMin} min total, sequential)</span></div>` +
+      `<div class="muted" style="font-size:11px; margin-bottom:6px;">Checkboxes choose what the next run includes — the chip on the right is each item's measured state (✓ measured · ⚠ incomplete · “·” not measured). Results are saved to the <b>Archive</b> tab as measurement sets: the baseline config once, plus each run's swept deltas, sized values, metrics, and timing.</div>` +
       `<div style="display:flex; flex-direction:column; gap:5px; margin-bottom:8px;">${rows}</div>` +
       `<div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">` +
-      `<button type="button" id="paper-plan-run" class="btn btn-primary">▶ Measure all checked</button>` +
+      `<button type="button" id="paper-plan-run" class="btn btn-primary" title="Run the checked items in a separate runner window">▶ Measure selected</button>` +
       `<button type="button" id="paper-plan-continue" class="btn" style="display:none;" title="Resume the measurement sets that were interrupted — completed segments are kept, the partial one is re-run.">⟳ Continue interrupted run</button>` +
       `<button type="button" id="paper-plan-stop" class="btn" style="display:none;">Stop after current</button>` +
       `<label class="muted" style="font-size:11px; display:flex; gap:4px; align-items:center;"><input type="checkbox" id="paper-plan-rerun"> re-measure items that already have a set</label>` +
@@ -3177,6 +3183,17 @@ export class SimUi {
 
     document.getElementById("paper-plan-run").addEventListener("click", () => this._startMeasureRun({}));
     document.getElementById("paper-plan-continue").addEventListener("click", () => this._startMeasureRun({ resume: true }));
+    // Per-item delete: removes that item's measurement set from the archive.
+    wrap.addEventListener("click", (ev) => {
+      const btn = ev.target.closest?.(".paper-plan-clear");
+      if (!btn) return;
+      const planId = btn.dataset.id;
+      const set = archiveStore.all().find((e) => e.kind === "set" && e.planId === planId);
+      if (!set) return;
+      if (!confirm(`Delete the measurement set for "${set.name}" (${(set.items || []).length} runs)? The archive keeps no copy.`)) return;
+      this._archiveDeleteSet?.(set);
+      this._refreshPlanChecklist();
+    });
     document.getElementById("paper-plan-stop").addEventListener("click", () => {
       if (runnerMode || this._paperPlanRunning) {
         this._paperPlanStop = true;
@@ -3229,6 +3246,7 @@ export class SimUi {
     // page refresh mid-run leaves exactly that, since progress is committed at
     // every segment boundary. Re-evaluated on every archive render.
     this._refreshPaperPlanResume = () => {
+      this._refreshPlanChecklist();
       const btn = document.getElementById("paper-plan-continue");
       if (!btn) return;
       const pending = this._incompletePlanSets();
@@ -3305,36 +3323,20 @@ export class SimUi {
   _renderMeasureProgress() {
     const box = document.getElementById("paper-plan-progress");
     if (!box || this._isMeasureRunner()) return;
-    const sets = archiveStore.all().filter((e) => e && e.kind === "set");
-    const byPlan = new Map(sets.map((s) => [s.planId, s]));
-    const auto = PAPER_PLAN.filter((p) => !p.manual);
-    const anyState = this._runnerMsg || sets.length;
-    if (!anyState) { box.style.display = "none"; return; }
+    // Per-item state lives on the checklist chips; this box is the RUNNER's live
+    // line: what it is doing right now and how fresh that report is.
+    if (!this._runnerMsg) { box.style.display = "none"; return; }
     box.style.display = "";
     const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-    const fmtDur = (ms) => (!(ms > 0) ? "" : ms < 60000 ? `${Math.round(ms / 1000)}s` : `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`);
     const ageSec = this._runnerAt ? Math.round((Date.now() - this._runnerAt) / 1000) : null;
     const stale = ageSec != null && ageSec > 30 && !this._runnerDone;
-    const rows = auto.map((p) => {
-      const s = byPlan.get(p.id);
-      const complete = s && (!s.progress || s.progress.status === "complete");
-      const mark = complete ? "✓" : s ? "⚠" : "·";
-      const col = complete ? "var(--ok,#35c75a)" : s ? "var(--warn,#ffb454)" : "var(--text-3,#888)";
-      const detail = s
-        ? `${(s.items || []).length} runs${s.progress?.segsTotal ? ` · ${s.progress.segsDone || 0}/${s.progress.segsTotal} segments` : ""}${s.timing?.measuredMs ? ` · ${fmtDur(s.timing.measuredMs)}` : ""}`
-        : "not measured";
-      return `<div style="display:flex; gap:6px; font-size:11px; line-height:1.5;"><span style="color:${col}; width:10px; flex:none;">${mark}</span>` +
-             `<span style="min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(p.title)}</span>` +
-             `<span class="muted" style="margin-left:auto; flex:none;">${esc(detail)}</span></div>`;
-    }).join("");
-    const line = this._runnerMsg?.text ? esc(this._runnerMsg.text) : "no runner report yet";
     const state = this._runnerDone
       ? `<span style="color:var(--ok,#35c75a);">runner finished</span>`
       : stale ? `<span style="color:var(--warn,#ffb454);">no update for ${ageSec}s — runner window closed?</span>`
       : ageSec != null ? `updated ${ageSec}s ago` : "";
     box.innerHTML =
       `<div style="font-size:12px; font-weight:600; margin-bottom:4px;">Runner progress <span class="muted" style="font-weight:400;">${state}</span></div>` +
-      `<div class="muted" style="font-size:11px; margin-bottom:6px;">${line}</div>` + rows;
+      `<div class="muted" style="font-size:11px;">${esc(this._runnerMsg?.text || "")}</div>`;
   }
 
   /**
@@ -3381,6 +3383,78 @@ export class SimUi {
       close();
       const st = document.getElementById("paper-plan-status");
       if (st) st.textContent = "Interrupted run left as-is — use ⟳ Continue interrupted run when ready.";
+    });
+  }
+
+  /**
+   * The visual outcome of ONE archived measurement: its capacity and flow cards
+   * re-rendered as the compact Earth→relay→Mars diagrams, from the structured
+   * capacityCard/flowCard aggregates every entry records. Better than a pixel
+   * screenshot: nothing extra is stored, it renders identically for worker-mode
+   * runs that never painted a screen, and the numbers stay selectable text.
+   */
+  _cardDiagramsHtml(metrics) {
+    const m = metrics || {};
+    const cc = m.capacityCard, fc = m.flowCard;
+    if (!cc && !fc) return `<div class="muted" style="font-size:11px;">no card data recorded for this run</div>`;
+    const fmtM = (v) => (v == null || !isFinite(v) ? "—" : v >= 1000 ? `${(v / 1000).toFixed(1)} Gbps` : `${Math.round(v)} Mbps`);
+    const fmtN = (v) => (v == null || !isFinite(v) ? "—" : v >= 1000 ? (v / 1000).toFixed(1) : String(Math.round(v)));
+    const r3 = (o) => (o ? `${fmtN(o.min)}|${fmtN(o.avg ?? (o.min + o.max) / 2)}|${fmtN(o.max)}` : "—");
+    const W = 17;
+    const planet = (g, sym) => {
+      const core = `${fmtN(g?.side1)}←${sym}→${fmtN(g?.side2)}`;
+      const pad = Math.max(0, W - core.length), l = Math.floor(pad / 2);
+      return `${"-".repeat(l)}${core}${"-".repeat(pad - l)}`;
+    };
+    const bar = (ch) => ch.repeat(W);
+    const pre = (title, lines) =>
+      `<div style="font-size:11px; font-weight:600; margin:6px 0 2px;">${title}</div>` +
+      `<pre class="capacity-diagram" style="margin:0; font-size:11px; line-height:1.45;">${lines.filter(Boolean).join("\n")}</pre>`;
+    let html = "";
+    if (cc) {
+      html += pre("Capacity", [
+        `${planet(cc.earthGround, "●")}  Earth ${fmtM((cc.earthGround?.side1 || 0) + (cc.earthGround?.side2 || 0))} · ring ${r3(cc.earthRingInring)} Mbps`,
+        cc.earthJunction ? `${bar(":")}  ${fmtM(cc.earthJunction.sumMbps)} · ${cc.earthJunction.links} links` : null,
+        `${bar("│")}  ${fmtM(cc.relayIntrinsicMbps)} intrinsic${cc.relayTotalMbps != null ? ` · ${fmtM(cc.relayTotalMbps)} total` : ""}${cc.routes != null ? ` · ${cc.routes} routes` : ""}${cc.routeMbps ? ` · ${r3(cc.routeMbps)} Mbps/route` : ""}`,
+        cc.marsJunction ? `${bar(":")}  ${fmtM(cc.marsJunction.sumMbps)} · ${cc.marsJunction.links} links` : null,
+        `${planet(cc.marsGround, "•")}  Mars ${fmtM((cc.marsGround?.side1 || 0) + (cc.marsGround?.side2 || 0))} · ring ${r3(cc.marsRingInring)} Mbps`,
+        cc.bottleneck ? `Bottleneck: ${cc.bottleneck.name}${cc.bottleneck.mbps != null ? ` (${fmtM(cc.bottleneck.mbps)})` : ""}` : null,
+      ]);
+    }
+    if (fc) {
+      html += pre("Flow", [
+        `${planet(fc.earthGround, "●")}  Earth ${fmtM((fc.earthGround?.side1 || 0) + (fc.earthGround?.side2 || 0))}`,
+        fc.earthJunction ? `${bar(":")}  ${fmtM(fc.earthJunction.sumMbps)} · ${fc.earthJunction.links} links · ${r3(fc.earthJunction)} per link` : null,
+        `${bar("│")}  max-flow ${fc.maxFlowGbps != null ? (fc.maxFlowGbps >= 1 ? fc.maxFlowGbps.toFixed(2) + " Gbps" : Math.round(fc.maxFlowGbps * 1000) + " Mbps") : "—"}`,
+        fc.marsJunction ? `${bar(":")}  ${fmtM(fc.marsJunction.sumMbps)} · ${fc.marsJunction.links} links · ${r3(fc.marsJunction)} per link` : null,
+        `${planet(fc.marsGround, "•")}  Mars ${fmtM((fc.marsGround?.side1 || 0) + (fc.marsGround?.side2 || 0))}`,
+      ]);
+    } else {
+      html += `<div class="muted" style="font-size:11px; margin-top:4px;">flow: not computed for this run</div>`;
+    }
+    return html;
+  }
+
+  /** Per-item measured-state chips (✓ measured · ⚠ incomplete · "·" none) and the
+   *  visibility of each row's delete button, from the shared archive. */
+  _refreshPlanChecklist() {
+    const fmtDur = (ms) => (!(ms > 0) ? "" : ms < 60000 ? `${Math.round(ms / 1000)}s` : `${Math.floor(ms / 60000)}m`);
+    document.querySelectorAll(".paper-plan-state").forEach((el) => {
+      const set = archiveStore.all().find((e) => e && e.kind === "set" && e.planId === el.dataset.id);
+      const clearBtn = document.querySelector(`.paper-plan-clear[data-id="${CSS.escape(el.dataset.id)}"]`);
+      if (clearBtn) clearBtn.hidden = !set;
+      if (!set) { el.textContent = "·"; el.style.color = ""; el.title = "not measured yet"; return; }
+      const complete = !set.progress || set.progress.status === "complete";
+      const dur = set.timing?.measuredMs ? ` · ${fmtDur(set.timing.measuredMs)}` : "";
+      if (complete) {
+        el.textContent = `✓ ${(set.items || []).length} runs${dur}`;
+        el.style.color = "var(--ok,#35c75a)";
+        el.title = "measured — the set is in the Archive tab";
+      } else {
+        el.textContent = `⚠ ${set.progress.segsDone || 0}/${set.progress.segsTotal ?? "?"}${dur}`;
+        el.style.color = "var(--warn,#ffb454)";
+        el.title = "incomplete — use ⟳ Continue to finish it";
+      }
     });
   }
 
@@ -3685,6 +3759,8 @@ export class SimUi {
             id: `${e.id}:${i}`,
             name: `${e.name} · ${it.label}`,
             ts: it.ts || e.ts,
+            ms: it.ms ?? null,
+            wallMs: it.wallMs ?? null,
             config: { sliders: { ...(base.sliders || {}), ...(it.deltaSliders || {}) }, curves: base.curves || {} },
             sized: it.sized,
             metrics: it.metrics || {},
@@ -4046,6 +4122,45 @@ export class SimUi {
 
     const listEl = document.createElement("div");
     listEl.style.cssText = "display:flex; flex-direction:column; gap:6px;";
+    // Delegated toggles for the per-run visual outcome (▦): set rows expand to
+    // their run list; each run (and each flat entry) toggles its capacity/flow
+    // diagrams rendered from the archived card aggregates.
+    listEl.addEventListener("click", (ev) => {
+      const t = ev.target;
+      if (t.classList?.contains("set-runs-toggle")) {
+        const box = listEl.querySelector(`.set-runs[data-id="${CSS.escape(t.dataset.id)}"]`);
+        const set = load().find((x) => String(x.id) === t.dataset.id);
+        if (!box || !set) return;
+        if (box.hidden) {
+          box.innerHTML = (set.items || []).map((it, i) =>
+            `<div style="border-top:1px dashed var(--border-2,#333); padding-top:4px;">` +
+            `<div style="display:flex; gap:6px; align-items:center; font-size:11px;">` +
+            `<button type="button" class="btn run-cards-toggle" data-set="${esc(set.id)}" data-i="${i}" style="font-size:10px; padding:0 6px;">▦</button>` +
+            `<span style="min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(it.label)}</span>` +
+            `<span class="muted" style="margin-left:auto; flex:none;">${it.metrics?.gbps != null ? it.metrics.gbps + " Gbps" : ""}${it.wallMs ? ` · ${Math.round(it.wallMs / 1000)}s` : ""}</span>` +
+            `</div><div class="run-cards" data-set="${esc(set.id)}" data-i="${i}" hidden style="margin:4px 0 2px 26px;"></div></div>`).join("") ||
+            `<div class="muted" style="font-size:11px;">no runs</div>`;
+          box.hidden = false; t.textContent = "▦ hide runs";
+        } else { box.hidden = true; t.textContent = `▦ ${((set.items || []).length)} runs`; }
+        return;
+      }
+      if (t.classList?.contains("run-cards-toggle")) {
+        const box = listEl.querySelector(`.run-cards[data-set="${CSS.escape(t.dataset.set)}"][data-i="${CSS.escape(t.dataset.i)}"]`);
+        const set = load().find((x) => String(x.id) === t.dataset.set);
+        const it = set?.items?.[+t.dataset.i];
+        if (!box || !it) return;
+        if (box.hidden) { box.innerHTML = this._cardDiagramsHtml(it.metrics); box.hidden = false; }
+        else box.hidden = true;
+        return;
+      }
+      if (t.classList?.contains("entry-cards-toggle")) {
+        const box = listEl.querySelector(`.entry-cards[data-id="${CSS.escape(t.dataset.id)}"]`);
+        const e = load().find((x) => String(x.id) === t.dataset.id);
+        if (!box || !e) return;
+        if (box.hidden) { box.innerHTML = this._cardDiagramsHtml(e.metrics); box.hidden = false; }
+        else box.hidden = true;
+      }
+    });
     const renderList = () => {
       const arr = load();
       const flatCount = flattenArchive(arr).length;
@@ -4077,7 +4192,9 @@ export class SimUi {
             `<div style="display:flex; flex-direction:column; gap:4px; flex:none;">` +
             `<button class="btn archive-load" data-id="${esc(e.id)}" title="Apply the set's baseline config" style="font-size:11px; padding:2px 8px;">Load</button>` +
             `<button class="btn archive-del" data-id="${esc(e.id)}" title="Delete the whole set" style="font-size:11px; padding:2px 8px;">✕</button>` +
-            `</div></div>`;
+            `</div></div>` +
+            `<div style="margin-top:4px;"><button type="button" class="btn set-runs-toggle" data-id="${esc(e.id)}" title="Browse each run's capacity/flow diagrams" style="font-size:10px; padding:1px 8px;">▦ ${(e.items || []).length} runs</button></div>` +
+            `<div class="set-runs" data-id="${esc(e.id)}" hidden style="margin-top:4px; display:flex; flex-direction:column; gap:4px;"></div>`;
           listEl.appendChild(row);
           continue;
         }
@@ -4100,7 +4217,9 @@ export class SimUi {
           `<div style="display:flex; flex-direction:column; gap:4px; flex:none;">` +
           `<button class="btn archive-load" data-id="${esc(e.id)}" style="font-size:11px; padding:2px 8px;">Load</button>` +
           `<button class="btn archive-del" data-id="${esc(e.id)}" title="Delete" style="font-size:11px; padding:2px 8px;">✕</button>` +
-          `</div></div>`;
+          (e.metrics?.capacityCard ? `<button type="button" class="btn entry-cards-toggle" data-id="${esc(e.id)}" title="Show this result's capacity/flow diagrams" style="font-size:11px; padding:2px 8px;">▦</button>` : "") +
+          `</div></div>` +
+          (e.metrics?.capacityCard ? `<div class="entry-cards" data-id="${esc(e.id)}" hidden style="margin-top:4px;"></div>` : "");
         listEl.appendChild(row);
       }
       listEl.querySelectorAll(".archive-load").forEach((b) => b.addEventListener("click", () => {
@@ -5357,7 +5476,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=5.22");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=5.23");
     let result = null;
     try {
       result = await solveBandDistribution({
