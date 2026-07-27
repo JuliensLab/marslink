@@ -5,15 +5,15 @@ import {
   junctionDeficits,
   mapSliderValueToUserFacing as mapToUserFacing,
   mapUserFacingToSliderValue as mapToSliderInternal,
-} from "./slidersData.js?v=5.21";
-import { LukashianClock } from "./lukashianTime.js?v=5.21";
-import { wireAuthUi } from "./auth.js?v=5.21";
-import { SensitivityPool } from "./sensitivityPool.js?v=5.21";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.21";
-import { minOf } from "./simMath.js?v=5.21";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.21";
-import { archiveStore } from "./simArchiveStore.js?v=5.21";
-import { PAPER_PLAN, PLAN_VERSION } from "./paperPlan.js?v=5.21";
+} from "./slidersData.js?v=5.22";
+import { LukashianClock } from "./lukashianTime.js?v=5.22";
+import { wireAuthUi } from "./auth.js?v=5.22";
+import { SensitivityPool } from "./sensitivityPool.js?v=5.22";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.22";
+import { minOf } from "./simMath.js?v=5.22";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.22";
+import { archiveStore } from "./simArchiveStore.js?v=5.22";
+import { PAPER_PLAN, PLAN_VERSION } from "./paperPlan.js?v=5.22";
 
 export class SimUi {
   constructor(simMain) {
@@ -289,6 +289,7 @@ export class SimUi {
     const configurePane = document.getElementById("configure-pane");
     const sensitivityPane = document.getElementById("sensitivity-pane");
     const archivePane = document.getElementById("archive-pane");
+    const measurePane = document.getElementById("measure-pane");
     const reportPanel = document.getElementById("report-panel");
 
     const setActiveButtons = (mode) => {
@@ -306,6 +307,7 @@ export class SimUi {
       configurePane.hidden = true;
       sensitivityPane.hidden = true;
       if (archivePane) archivePane.hidden = true;
+      if (measurePane) measurePane.hidden = true;
     };
 
     const closeReportPanel = () => {
@@ -325,7 +327,7 @@ export class SimUi {
       this.activeMode = mode;
       setActiveButtons(mode);
 
-      if (mode === "simple" || mode === "configure" || mode === "sensitivity" || mode === "archive") {
+      if (mode === "simple" || mode === "configure" || mode === "sensitivity" || mode === "archive" || mode === "measure") {
         closeReportPanel();
         modeDrawer.hidden = false;
         modeDrawer.setAttribute("aria-hidden", "false");
@@ -334,6 +336,9 @@ export class SimUi {
         sensitivityPane.hidden = mode !== "sensitivity";
         if (mode === "sensitivity") this._updateSensRouteGrey();
         if (archivePane) archivePane.hidden = mode !== "archive";
+        if (measurePane) measurePane.hidden = mode !== "measure";
+        // The plan panel mirrors runner progress — refresh it when opened.
+        if (mode === "measure") { this._refreshPaperPlanResume?.(); this._renderMeasureProgress?.(); }
         // The expand mode is sensitivity-only; collapse the drawer for other panes.
         if (mode !== "sensitivity") {
           modeDrawer.classList.remove("sens-expanded");
@@ -3128,7 +3133,10 @@ export class SimUi {
   }
 
   _injectPaperPlanUI() {
-    const body = document.querySelector("#sensitivity-pane .drawer-body");
+    // Own top-level tab (after Archive) rather than a section of the Sensitivity
+    // pane: a plan run is its own activity, and the panel doubles as the progress
+    // mirror while the runner window measures.
+    const body = document.getElementById("measure-pane-body");
     if (!body || document.getElementById("paper-plan-panel")) return;
     const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
     const wrap = document.createElement("div");
@@ -3489,7 +3497,13 @@ export class SimUi {
     this._paperPlanStop = false;
     // Heartbeat so the observer can tell "still working" from "window closed"
     // during the long silence of a single measurement.
-    const heartbeat = setInterval(() => this._broadcastMeasure({ type: "heartbeat", text: statusEl?.textContent || "" }), 3000);
+    // The plan status only changes per segment; fold in the sweep's own
+    // scenario counter so the mirror shows movement within a segment too.
+    const beatText = () => {
+      const sweep = document.getElementById("sens-progress-text")?.textContent?.trim();
+      return [statusEl?.textContent || "", sweep].filter(Boolean).join("  ·  ");
+    };
+    const heartbeat = setInterval(() => this._broadcastMeasure({ type: "heartbeat", text: beatText() }), 3000);
     if (runBtn) runBtn.disabled = true;
     if (stopBtn) stopBtn.style.display = "";
     const fire = (el, ev) => el && el.dispatchEvent(new Event(ev, { bubbles: true }));
@@ -3503,8 +3517,11 @@ export class SimUi {
     let preState = null;
     try {
       await this._archiveReady; // archive store + set hooks ready
-      // The sensitivity pane's controls wire on first open — make sure it is.
+      // The sensitivity pane's controls wire on first open — make sure it is,
+      // then (in the runner window) come back to the plan pane so its status and
+      // item list are what the operator sees.
       document.querySelector('.mode-tab[data-mode="sensitivity"]')?.click();
+      if (this._isMeasureRunner()) document.querySelector('.mode-tab[data-mode="measure"]')?.click();
       // Snapshot the user's configuration; restored after the plan (finally).
       preState = this._archiveSnapshotConfig();
       const appPin = new URL(import.meta.url).searchParams.get("v");
@@ -5340,7 +5357,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=5.21");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=5.22");
     let result = null;
     try {
       result = await solveBandDistribution({
