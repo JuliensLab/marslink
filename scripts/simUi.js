@@ -5,15 +5,15 @@ import {
   junctionDeficits,
   mapSliderValueToUserFacing as mapToUserFacing,
   mapUserFacingToSliderValue as mapToSliderInternal,
-} from "./slidersData.js?v=5.13";
-import { LukashianClock } from "./lukashianTime.js?v=5.13";
-import { wireAuthUi } from "./auth.js?v=5.13";
-import { SensitivityPool } from "./sensitivityPool.js?v=5.13";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.13";
-import { minOf } from "./simMath.js?v=5.13";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.13";
-import { archiveStore } from "./simArchiveStore.js?v=5.13";
-import { PAPER_PLAN, PLAN_VERSION } from "./paperPlan.js?v=5.13";
+} from "./slidersData.js?v=5.18";
+import { LukashianClock } from "./lukashianTime.js?v=5.18";
+import { wireAuthUi } from "./auth.js?v=5.18";
+import { SensitivityPool } from "./sensitivityPool.js?v=5.18";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.18";
+import { minOf } from "./simMath.js?v=5.18";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.18";
+import { archiveStore } from "./simArchiveStore.js?v=5.18";
+import { PAPER_PLAN, PLAN_VERSION } from "./paperPlan.js?v=5.18";
 
 export class SimUi {
   constructor(simMain) {
@@ -2081,7 +2081,7 @@ export class SimUi {
                 junctionAngles: res.capacityInfo?.junctionAngles || null,
               };
               const tag = `sweep: ${s.ringCount ?? "cur"} rings${s.techUserVal != null ? " · " + s.techUserVal + "x" : ""}${s.routeCount != null ? " · " + s.routeCount + " " + secondAxisMeta.unit : ""} · ${s.placement.label}`;
-              this._archiveAppend({ id: Date.now() + s.scenarioId, name: tag, ts: new Date().toISOString(), config: s.archiveConfig || {}, sized: sizedOf(res), metrics: m });
+              this._archiveAppend({ id: Date.now() + s.scenarioId, name: tag, ts: new Date().toISOString(), ms: res?.totalMs ?? null, config: s.archiveConfig || {}, sized: sizedOf(res), metrics: m });
             }
           };
 
@@ -2425,7 +2425,7 @@ export class SimUi {
                       junctionAngles: res.capacityInfo?.junctionAngles || null,
                     };
                     const tag = `opt: ${ringCount ?? "cur"} rings${techUserVal != null ? " · " + techUserVal + "x" : ""}${routeCount != null ? " · " + routeCount + " " + secondAxisMeta.unit : ""} · ${placement.label}`;
-                    this._archiveAppend({ id: Date.now() + scenarioId, name: tag, ts: new Date().toISOString(), config: this._archiveSnapshotConfig?.() || {}, sized: sizedOf(res), metrics: m });
+                    this._archiveAppend({ id: Date.now() + scenarioId, name: tag, ts: new Date().toISOString(), ms: res?.totalMs ?? null, config: this._archiveSnapshotConfig?.() || {}, sized: sizedOf(res), metrics: m });
                   }
                   completed++;
                   renderProgress();
@@ -3132,17 +3132,131 @@ export class SimUi {
       `<div style="display:flex; flex-direction:column; gap:5px; margin-bottom:8px;">${rows}</div>` +
       `<div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">` +
       `<button type="button" id="paper-plan-run" class="btn btn-primary">▶ Measure all checked</button>` +
+      `<button type="button" id="paper-plan-continue" class="btn" style="display:none;" title="Resume the measurement sets that were interrupted — completed segments are kept, the partial one is re-run.">⟳ Continue interrupted run</button>` +
       `<button type="button" id="paper-plan-stop" class="btn" style="display:none;">Stop after current</button>` +
       `<label class="muted" style="font-size:11px; display:flex; gap:4px; align-items:center;"><input type="checkbox" id="paper-plan-rerun"> re-measure items that already have a set</label>` +
       `</div>` +
       `<div id="paper-plan-status" class="muted" style="font-size:12px; margin-top:6px;"></div>`;
     body.appendChild(wrap);
     document.getElementById("paper-plan-run").addEventListener("click", () => this._runPaperPlan());
+    document.getElementById("paper-plan-continue").addEventListener("click", () => this._runPaperPlan({ resume: true }));
     document.getElementById("paper-plan-stop").addEventListener("click", () => {
       this._paperPlanStop = true;
       const st = document.getElementById("paper-plan-status");
       if (st) st.textContent += " · stopping after the current sweep…";
     });
+
+    // Show the Continue button whenever an interrupted set exists and nothing is
+    // running. A set is interrupted if its status never reached "complete" — a
+    // page refresh mid-run leaves exactly that, since progress is committed at
+    // every segment boundary. Re-evaluated on every archive render.
+    this._refreshPaperPlanResume = () => {
+      const btn = document.getElementById("paper-plan-continue");
+      if (!btn) return;
+      const pending = this._incompletePlanSets();
+      const show = pending.length > 0 && !this._paperPlanRunning;
+      btn.style.display = show ? "" : "none";
+      if (show) {
+        const names = pending.map((s) => s.name).join(", ");
+        btn.textContent = `⟳ Continue interrupted run (${pending.length})`;
+        btn.title = `Resume: ${names}. Completed segments are kept; the partially-run segment is re-measured.`;
+      }
+    };
+    this._archiveReady?.then(() => {
+      this._refreshPaperPlanResume?.();
+      // A refresh mid-run lands here: offer to pick the run back up, and do it
+      // automatically if nobody answers (the common case is an unattended
+      // overnight run whose tab reloaded).
+      this._promptResumePlan?.();
+    });
+  }
+
+  /**
+   * Post-refresh resume prompt: if a measurement set was left mid-run, ask
+   * whether to continue and auto-continue after 15 s of no answer. Shown once
+   * per page load; "Not now" leaves the ⟳ button in the panel.
+   */
+  _promptResumePlan() {
+    const AUTO_SEC = 15;
+    const pending = this._incompletePlanSets();
+    if (!pending.length || this._paperPlanRunning || document.getElementById("paper-plan-resume-modal")) return;
+    const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    const rows = pending.map((s) => {
+      const p = s.progress || {};
+      return `<li style="margin:2px 0;">${esc(s.name)} <span class="muted">— ${p.segsDone || 0}/${p.segsTotal ?? "?"} segments done, ${(s.items || []).length} runs saved</span></li>`;
+    }).join("");
+    const overlay = document.createElement("div");
+    overlay.id = "paper-plan-resume-modal";
+    overlay.style.cssText = "position:fixed; inset:0; z-index:99999; background:rgba(0,0,0,0.55); display:flex; align-items:center; justify-content:center; padding:16px;";
+    overlay.innerHTML =
+      `<div role="dialog" aria-modal="true" style="max-width:520px; width:100%; background:var(--bg-1,#12161f); color:var(--text-0,#eee); border:1px solid var(--border-2,#333); border-radius:10px; padding:16px 18px; box-shadow:0 8px 40px rgba(0,0,0,0.6);">` +
+      `<div style="font-weight:600; font-size:14px; margin-bottom:6px;">📐 Continue the interrupted measurement run?</div>` +
+      `<div class="muted" style="font-size:12px;">This page reloaded while a paper-measurement run was in progress. Everything measured so far is saved; continuing re-runs only the segment that was cut off.</div>` +
+      `<ul class="muted" style="font-size:12px; margin:8px 0 10px 18px; padding:0;">${rows}</ul>` +
+      `<div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">` +
+      `<button type="button" id="paper-plan-resume-yes" class="btn btn-primary">⟳ Continue</button>` +
+      `<button type="button" id="paper-plan-resume-no" class="btn">Not now</button>` +
+      `<span class="muted" id="paper-plan-resume-count" style="font-size:11px;">continuing automatically in ${AUTO_SEC} s…</span>` +
+      `</div></div>`;
+    document.body.appendChild(overlay);
+    let left = AUTO_SEC;
+    const countEl = overlay.querySelector("#paper-plan-resume-count");
+    const close = () => { clearInterval(tick); overlay.remove(); };
+    const go = () => { close(); this._runPaperPlan({ resume: true }); };
+    const tick = setInterval(() => {
+      left -= 1;
+      if (left <= 0) { go(); return; }
+      if (countEl) countEl.textContent = `continuing automatically in ${left} s…`;
+    }, 1000);
+    overlay.querySelector("#paper-plan-resume-yes").addEventListener("click", go);
+    overlay.querySelector("#paper-plan-resume-no").addEventListener("click", () => {
+      close();
+      const st = document.getElementById("paper-plan-status");
+      if (st) st.textContent = "Interrupted run left as-is — use ⟳ Continue interrupted run when ready.";
+    });
+  }
+
+  /** Measurement sets that were left mid-run (progress never reached "complete")
+   *  and whose plan item still exists, newest first. */
+  _incompletePlanSets() {
+    return archiveStore.all().filter((e) =>
+      e && e.kind === "set" && e.progress && e.progress.status !== "complete" &&
+      PAPER_PLAN.some((p) => p.id === e.planId && !p.manual));
+  }
+
+  /**
+   * Put the UI into the state a plan item needs: full reproducibility baseline,
+   * then the sensitivity controls (family, exec mode, placement axis, flow, rate
+   * axis). Shared by fresh runs and resumes so a continued run is configured
+   * identically to the interrupted one.
+   */
+  _configurePlanItem(item) {
+    const fire = (el, ev) => el && el.dispatchEvent(new Event(ev, { bubbles: true }));
+    const setNum = (id, v) => { const e = document.getElementById(id); if (e) { e.value = String(v); fire(e, "input"); fire(e, "change"); } };
+    const setCheck = (id, on) => { const e = document.getElementById(id); if (e && e.checked !== !!on) { e.checked = !!on; fire(e, "change"); } };
+    const setSel = (id, v) => { const e = document.getElementById(id); if (e) { e.value = v; fire(e, "change"); } };
+    document.getElementById("sens-mode-simple")?.click();
+    this._applyPlanBaseline(item);
+    setCheck(item.family === "Contoured transfer" ? "sens-family-tran" : "sens-family-conc", true);
+    document.getElementById(item.exec === "worker" ? "sens-exec-worker" : "sens-exec-live")?.click();
+    const pl = item.sens.placement;
+    if (pl && typeof pl === "object" && pl.dateRangeDays) {
+      setSel("sens-geom-mode", "date-range");
+      setNum("sens-date-range-days", pl.dateRangeDays);
+      setNum("sens-date-range-samples", pl.samples);
+    } else if (pl === "geometry-16" || pl === "geometry-4") {
+      setSel("sens-geom-mode", pl);
+    } else setSel("sens-geom-mode", "current");
+    setCheck("sens-calc-flow", !!item.sens.flow);
+    if (item.sens.flow) setNum("sens-flow-budget", item.sens.flow.budgetSec);
+    setCheck("opt-archive", true);
+    if (item.sens.rate) {
+      setCheck("sens-route-enable", true);
+      setSel("sens-rate-mode", item.sens.rate.mode);
+      setNum("sens-route-start", item.sens.rate.start);
+      setNum("sens-route-end", item.sens.rate.end);
+      setNum("sens-route-step", item.sens.rate.step);
+    } else setCheck("sens-route-enable", false);
   }
 
   /**
@@ -3187,7 +3301,7 @@ export class SimUi {
    * set already exists are skipped unless re-measure is checked. The user's
    * pre-plan configuration is restored when the plan ends.
    */
-  async _runPaperPlan() {
+  async _runPaperPlan(opts = {}) {
     if (this._paperPlanRunning) return;
     const runBtn = document.getElementById("paper-plan-run");
     const stopBtn = document.getElementById("paper-plan-stop");
@@ -3200,7 +3314,6 @@ export class SimUi {
     const fire = (el, ev) => el && el.dispatchEvent(new Event(ev, { bubbles: true }));
     const setNum = (id, v) => { const e = document.getElementById(id); if (e) { e.value = String(v); fire(e, "input"); fire(e, "change"); } };
     const setCheck = (id, on) => { const e = document.getElementById(id); if (e && e.checked !== !!on) { e.checked = !!on; fire(e, "change"); } };
-    const setSel = (id, v) => { const e = document.getElementById(id); if (e) { e.value = v; fire(e, "change"); } };
     const runOnce = () => new Promise((resolve) => {
       this._onSweepComplete = () => { this._onSweepComplete = null; resolve(); };
       const btn = [...document.querySelectorAll("#sensitivity-pane button")].find((b) => /Run Sensitivity/i.test(b.textContent));
@@ -3214,53 +3327,66 @@ export class SimUi {
       // Snapshot the user's configuration; restored after the plan (finally).
       preState = this._archiveSnapshotConfig();
       const appPin = new URL(import.meta.url).searchParams.get("v");
-      const wanted = new Set([...document.querySelectorAll(".paper-plan-item:checked")].map((c) => c.dataset.id));
-      const rerun = document.getElementById("paper-plan-rerun")?.checked;
-      const items = PAPER_PLAN.filter((p) => !p.manual && wanted.has(p.id));
+      const rerun = !opts.resume && document.getElementById("paper-plan-rerun")?.checked;
+      // Resume mode: the work list is the interrupted sets, in archive order.
+      // Normal mode: the checked plan items.
+      let items;
+      if (opts.resume) {
+        const pending = this._incompletePlanSets();
+        items = pending.map((s) => PAPER_PLAN.find((p) => p.id === s.planId)).filter(Boolean);
+      } else {
+        const wanted = new Set([...document.querySelectorAll(".paper-plan-item:checked")].map((c) => c.dataset.id));
+        items = PAPER_PLAN.filter((p) => !p.manual && wanted.has(p.id));
+      }
       let n = 0;
       for (const item of items) {
         if (this._paperPlanStop) break;
         n++;
         const existing = archiveStore.all().find((e) => e.kind === "set" && e.planId === item.id);
-        if (existing && !rerun) { status(`${n}/${items.length} · ${item.title}: already measured — skipped`); continue; }
-        status(`${n}/${items.length} · preparing ${item.title}…`);
-        // Simple mode + the FULL reproducibility baseline (all defaults + the
-        // item's family and overrides), then the pane's family mirror.
-        document.getElementById("sens-mode-simple")?.click();
-        this._applyPlanBaseline(item);
-        setCheck(item.family === "Contoured transfer" ? "sens-family-tran" : "sens-family-conc", true);
-        // Exec: live (sliders) unless the item needs a worker-only axis.
-        document.getElementById(item.exec === "worker" ? "sens-exec-worker" : "sens-exec-live")?.click();
-        // Placement, flow, archive.
-        const pl = item.sens.placement;
-        if (pl && typeof pl === "object" && pl.dateRangeDays) {
-          setSel("sens-geom-mode", "date-range");
-          setNum("sens-date-range-days", pl.dateRangeDays);
-          setNum("sens-date-range-samples", pl.samples);
-        } else if (pl === "geometry-16" || pl === "geometry-4") {
-          setSel("sens-geom-mode", pl);
-        } else setSel("sens-geom-mode", "current");
-        setCheck("sens-calc-flow", !!item.sens.flow);
-        if (item.sens.flow) setNum("sens-flow-budget", item.sens.flow.budgetSec);
-        setCheck("opt-archive", true);
-        // Second axis (in-ring / total rate) or off.
-        if (item.sens.rate) {
-          setCheck("sens-route-enable", true);
-          setSel("sens-rate-mode", item.sens.rate.mode);
-          setNum("sens-route-start", item.sens.rate.start);
-          setNum("sens-route-end", item.sens.rate.end);
-          setNum("sens-route-step", item.sens.rate.step);
-        } else setCheck("sens-route-enable", false);
-        // One measurement set for the whole item; each ring segment is one sweep.
-        // `run` records the non-slider execution parameters for reproducibility.
-        this._archiveOpenSet({
-          planId: item.id,
-          name: item.title,
-          run: { exec: item.exec || "live", sens: item.sens, planVersion: PLAN_VERSION, app: appPin },
-        });
+        // A set counts as measured only if it finished. Legacy sets (written
+        // before progress tracking) have no progress block — treat as complete.
+        const done = existing && (!existing.progress || existing.progress.status === "complete");
+        if (existing && done && !opts.resume && !rerun) { status(`${n}/${items.length} · ${item.title}: already measured — skipped`); continue; }
+        const segs = item.sens.ringSegs || [];
+        // Plan drift: if paperPlan.js changed since the interrupted run (different
+        // plan version, or a different segment count), the stored segsDone no
+        // longer indexes the same work — resuming would silently mark the set
+        // complete with missing or mismatched segments. Restart the item instead.
+        const drift = !!existing && !done && (
+          (existing.run?.planVersion != null && existing.run.planVersion !== PLAN_VERSION) ||
+          (existing.progress?.segsTotal != null && existing.progress.segsTotal !== segs.length));
+        let set, startSeg = 0;
+        if (existing && !done && !rerun && !drift) {
+          // RESUME: keep the segments that completed, discard the partial one's
+          // scenarios (progress.itemCount is the last committed boundary), and
+          // re-run from there. Re-running the partial segment whole is what makes
+          // the result identical to an uninterrupted run.
+          set = this._archiveResumeSet(existing);
+          startSeg = Math.min(set.progress?.segsDone || 0, segs.length);
+          const keep = set.progress?.itemCount || 0;
+          if (set.items.length > keep) set.items.length = keep;
+          this._archiveMarkProgress(set, { status: "running", segsTotal: segs.length });
+          status(`${n}/${items.length} · resuming ${item.title} from segment ${startSeg + 1}/${segs.length}…`);
+        } else {
+          if (existing && (rerun || drift)) this._archiveDeleteSet(existing); // fresh start, no duplicate set
+          status(drift
+            ? `${n}/${items.length} · ${item.title}: the plan changed since the interrupted run — measuring it again from the start…`
+            : `${n}/${items.length} · preparing ${item.title}…`);
+        }
+        // Configure the UI identically whether starting fresh or resuming.
+        this._configurePlanItem(item);
+        if (!set) {
+          // One measurement set for the whole item; each ring segment is one sweep.
+          // `run` records the non-slider execution parameters for reproducibility.
+          set = this._archiveOpenSet({
+            planId: item.id,
+            name: item.title,
+            run: { exec: item.exec || "live", sens: item.sens, planVersion: PLAN_VERSION, app: appPin },
+            segsTotal: segs.length,
+          });
+        }
         try {
-          const segs = item.sens.ringSegs || [];
-          for (let si = 0; si < segs.length; si++) {
+          for (let si = startSeg; si < segs.length; si++) {
             if (this._paperPlanStop) break;
             const sg = segs[si];
             setCheck("sens-ring-enable", true);
@@ -3276,13 +3402,30 @@ export class SimUi {
               setNum("sens-route-step", sg.route.step);
             }
             status(`${n}/${items.length} · ${item.title} — segment ${si + 1}/${segs.length} running…`);
+            const segT0 = Date.now();
+            const itemsBefore = set.items.length;
             await runOnce();
+            // Segment timing rides with the progress commit (per-scenario times
+            // are recorded on each item by _archiveAppend).
+            const t = (set.timing ||= { startedAt: segT0, lastAt: segT0, segments: [], totalMs: 0 });
+            t.segments = t.segments.filter((sg2) => sg2.seg !== si).concat([{
+              seg: si, ms: Date.now() - segT0, scenarios: set.items.length - itemsBefore,
+            }]).sort((a, b) => a.seg - b.seg);
+            t.measuredMs = t.segments.reduce((s2, sg2) => s2 + (sg2.ms || 0), 0);
+            // Commit the boundary before the next segment: a refresh from here on
+            // resumes at si+1 with everything measured so far kept.
+            this._archiveMarkProgress(set, { segsDone: si + 1, itemCount: set.items.length });
           }
+          if (!this._paperPlanStop) this._archiveMarkProgress(set, { status: "complete" });
         } finally {
           this._archiveCloseSet();
         }
       }
-      status(this._paperPlanStop ? "Stopped — completed sets are archived." : `Done — ${items.length} item(s) processed. Sets are in the Archive tab; 📋 Copy results JSON exports the flat shape.`);
+      const left = this._incompletePlanSets().length;
+      status(this._paperPlanStop
+        ? `Stopped — measured segments are saved${left ? ` · ${left} item(s) can be continued` : ""}.`
+        : items.length === 0 ? "Nothing to do."
+        : `Done — ${items.length} item(s) processed${left ? ` · ${left} still incomplete` : ""}. Sets are in the Archive tab; 📋 Copy results JSON exports the flat shape.`);
     } catch (e) {
       console.error("[PaperPlan] failed:", e);
       status("Failed: " + (e?.message || e));
@@ -3295,6 +3438,7 @@ export class SimUi {
       this._paperPlanRunning = false;
       if (runBtn) runBtn.disabled = false;
       if (stopBtn) stopBtn.style.display = "none";
+      this._refreshPaperPlanResume?.();
     }
   }
 
@@ -3704,13 +3848,20 @@ export class SimUi {
           // Measurement set: one row for the whole set — baseline config stored
           // once, each run only its swept deltas + metrics.
           let sdate = ""; try { sdate = new Date(e.ts).toLocaleString(); } catch {}
+          const pr = e.progress;
+          const incomplete = pr && pr.status !== "complete";
+          const fmtDur = (ms) => (!(ms > 0) ? "" : ms < 60000 ? `${Math.round(ms / 1000)}s` : `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`);
+          const durTxt = e.timing?.measuredMs ? ` · ${fmtDur(e.timing.measuredMs)}` : "";
+          const progTxt = incomplete
+            ? ` · <span style="color:var(--warn,#ffb454);">⚠ incomplete (${pr.segsDone || 0}/${pr.segsTotal ?? "?"} segments)</span>`
+            : "";
           const row = document.createElement("div");
           row.style.cssText = "border:1px solid var(--border-2,#333); border-radius:6px; padding:6px 8px;";
           row.innerHTML =
             `<div style="display:flex; justify-content:space-between; gap:8px; align-items:flex-start;">` +
             `<div style="min-width:0;">` +
             `<div style="font-weight:600; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">📐 ${esc(e.name)}</div>` +
-            `<div class="muted" style="font-size:11px;">measurement set · ${(e.items || []).length} runs${e.planId ? ` · ${esc(e.planId)}` : ""}</div>` +
+            `<div class="muted" style="font-size:11px;">measurement set · ${(e.items || []).length} runs${durTxt}${e.planId ? ` · ${esc(e.planId)}` : ""}${progTxt}</div>` +
             `<div class="muted" style="font-size:10px; opacity:0.65;">${esc(sdate)}</div>` +
             `</div>` +
             `<div style="display:flex; flex-direction:column; gap:4px; flex:none;">` +
@@ -3752,7 +3903,11 @@ export class SimUi {
         renderAll();
       }));
     };
-    const renderAll = () => { renderCharts(); renderCostVsMbps(); renderList(); };
+    const renderAll = () => {
+      renderCharts(); renderCostVsMbps(); renderList();
+      // Keep the paper-plan panel's "continue interrupted run" affordance in sync.
+      try { this._refreshPaperPlanResume?.(); } catch {}
+    };
 
     // Hooks so other features (the sensitivity sweeps, the paper-plan runner) can
     // capture the current config and append archive entries without the Save button.
@@ -3767,7 +3922,17 @@ export class SimUi {
         const es = entry.config?.sliders || {};
         const delta = {};
         for (const [k, v] of Object.entries(es)) if (String(v) !== String(base[k])) delta[k] = v;
-        set.items.push({ label: entry.name, ts: entry.ts, deltaSliders: delta, sized: entry.sized, metrics: entry.metrics });
+        // Per-measurement timing. `ms` is the scenario's own compute time as
+        // reported by the pipeline (meaningful in every exec mode, including the
+        // parallel worker pool); `wallMs` is the wall-clock gap since the previous
+        // measurement in this set, which is the real elapsed cost in the serial
+        // live mode. Both are recorded because neither alone tells the story.
+        const now = Date.now();
+        const t = (set.timing ||= { startedAt: now, lastAt: now, segments: [], totalMs: 0 });
+        const wallMs = Math.max(0, now - (t.lastAt || now));
+        t.lastAt = now;
+        t.totalMs = now - (t.startedAt || now);
+        set.items.push({ label: entry.name, ts: entry.ts, ms: entry.ms ?? null, wallMs, deltaSliders: delta, sized: entry.sized, metrics: entry.metrics });
         archiveStore.touch(set);
         renderAll();
         return;
@@ -3783,12 +3948,30 @@ export class SimUi {
     // parameters that are NOT sliders (exec mode, flow budget, placement axis,
     // rate axis, plan version, app pin) so the measurement — not just the
     // configuration — is reproducible from the set alone.
-    this._archiveOpenSet = ({ planId = null, name, run = null }) => {
-      const set = { id: Date.now(), kind: "set", planId, name, ts: new Date().toISOString(), run, baseConfig: this._archiveSnapshotConfig(), items: [] };
+    this._archiveOpenSet = ({ planId = null, name, run = null, segsTotal = null }) => {
+      const set = {
+        id: Date.now(), kind: "set", planId, name, ts: new Date().toISOString(), run,
+        // Resumability: every segment boundary is committed here, so a page refresh
+        // mid-run leaves a set that still knows how far it got. status stays
+        // "running" until the item finishes — anything still "running" when no
+        // run is in progress was interrupted, and can be continued.
+        progress: { segsDone: 0, itemCount: 0, segsTotal, status: "running" },
+        baseConfig: this._archiveSnapshotConfig(), items: [],
+      };
       const arr = load(); arr.unshift(set); save(arr); renderAll();
       this._activeMeasureSet = set;
       return set;
     };
+    // Re-attach to an existing (interrupted) set so further appends fold into it.
+    this._archiveResumeSet = (set) => { this._activeMeasureSet = set; return set; };
+    // Commit a progress patch (segment boundary / completion) to disk immediately.
+    this._archiveMarkProgress = (set, patch) => {
+      if (!set) return;
+      set.progress = { ...(set.progress || {}), ...patch };
+      archiveStore.touch(set);
+      renderAll();
+    };
+    this._archiveDeleteSet = (set) => { save(load().filter((e) => e !== set)); renderAll(); };
     this._archiveCloseSet = () => {
       if (!this._activeMeasureSet) return;
       archiveStore.touch(this._activeMeasureSet);
@@ -4956,7 +5139,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=5.13");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=5.18");
     let result = null;
     try {
       result = await solveBandDistribution({

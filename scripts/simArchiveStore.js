@@ -120,9 +120,11 @@ class ArchiveStore {
    */
   replaceAll(arr) {
     this._restampDupes(arr);
-    const oldIds = new Set(this._mem.map((e) => String(e.id)));
     const newIds = new Set(arr.map((e) => String(e.id)));
-    const removed = [...oldIds].filter((id) => !newIds.has(id));
+    // Delete with the ORIGINAL key type: IndexedDB keys are typed, so deleting
+    // the numeric id 1769… with the string "1769…" silently matches nothing and
+    // the entry reappears on the next load.
+    const removed = this._mem.filter((e) => !newIds.has(String(e.id))).map((e) => e.id);
     const added = arr.filter((e) => !this._persisted.has(e));
     this._mem = arr;
     for (const e of added) this._persisted.add(e);
