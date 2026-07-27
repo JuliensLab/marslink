@@ -9,15 +9,15 @@
 // Loaded as an ES module worker:
 //   new Worker(new URL("./simWorker.js", import.meta.url), { type: "module" })
 
-import { SimSolarSystem } from "./simSolarSystem.js?v=5.07";
-import { SimSatellites } from "./simSatellites.js?v=5.07";
-import { SimLinkBudget } from "./simLinkBudget.js?v=5.07";
-import { SimNetwork } from "./simNetwork.js?v=5.07";
-import { SimDeployment } from "./simDeployment.js?v=5.07";
-import { SimMissionValidator } from "./simMissionValidator.js?v=5.07";
-import { minOf } from "./simMath.js?v=5.07";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.07";
-import { planetRingRequiredMbps, junctionDeficits } from "./slidersData.js?v=5.07";
+import { SimSolarSystem } from "./simSolarSystem.js?v=5.10";
+import { SimSatellites } from "./simSatellites.js?v=5.10";
+import { SimLinkBudget } from "./simLinkBudget.js?v=5.10";
+import { SimNetwork } from "./simNetwork.js?v=5.10";
+import { SimDeployment } from "./simDeployment.js?v=5.10";
+import { SimMissionValidator } from "./simMissionValidator.js?v=5.10";
+import { minOf } from "./simMath.js?v=5.10";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.10";
+import { planetRingRequiredMbps, junctionDeficits } from "./slidersData.js?v=5.10";
 
 // --- State (initialized lazily on the first compute) ---
 let simLinkBudget = null;
@@ -398,30 +398,43 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
     uiConfig["ring_mars.requiredmbpsbetweensats"] = 1;
   }
 
-  // 2. Planetary sizing — THE canonical one-shot (design decision 2026-07-21), the SAME
-  //    code the live auto-sizer calls (slidersData.planetRingRequiredMbps). Canonical
-  //    order: (a) assign the relay network and measure its AGGREGATE capacity on a first
-  //    build (ring-intrinsic relayOnlyThroughput — junctions excluded); (b) size both
-  //    planetary rings one-shot from it — no feedback loop, because the sizing is
-  //    closed-form: the ring builder guarantees the worst-case (periapsis) in-ring link
-  //    meets the required rate everywhere on the orbit; (c) junction links are assigned
-  //    against the sized rings on the rebuild (auto junction-ring counts grow
-  //    empirically in step 2b, on the junction stage only).
+  // 2. Planetary sizing — the canonical measure→size step, ITERATED TO ITS FIXED
+  //    POINT (2026-07-27; supersedes the 2026-07-21 single-shot). The single-shot
+  //    premise — "relayOnlyThroughput is relay-intrinsic, planet-ring size plays no
+  //    part in it" — is false at MEASUREMENT time: routes anchor on planet-ring
+  //    satellites, so the minimal 1 Mbps measurement fleet starves the junction
+  //    pairing and under-measures the aggregate (concentric R=10: 88 Mbps measured
+  //    on minimal rings vs 150 Mbps on sized rings → rate 45 instead of ~75 → the
+  //    under-built planet rings' ground links become the max-flow min-cut at ~55%
+  //    of routed — THE sweep flow-collapse bug). Fix: after sizing + rebuild,
+  //    re-measure and re-size until the rate stops moving (≤1 Mbps or 1%) — the
+  //    same fixed point the live auto-sizer converges to over its sizing rounds.
+  //    The 1 Mbps first pass stays: it is guaranteed buildable (the analytic seed
+  //    can overshoot the sat cap and blank the build) and the loop recovers from
+  //    it. The first 3 passes run regardless of sizingBudgetMs (2 are needed for
+  //    correctness, 3 to confirm convergence); beyond that the budget applies.
+  //    planet_sizing === "off" now really means off — manual rates are honored,
+  //    matching the live selector's semantics (the old code re-sized them anyway).
   buildAndApply();
   let iterations = 1;
-  {
-    const planets = Object.values(simSolarSystem.updatePlanetsPositions(sizeDate));
-    const satellites = simSatellites.updateSatellitesPositions(sizeDate);
-    simNetwork.getPossibleLinks(planets, satellites);
-    const rs = simNetwork.routeSummary;
-    const relayAggregate = rs ? (rs.relayOnlyThroughput ?? rs.totalThroughput) : 0;
-    if (relayAggregate > 0) {
+  if (uiConfig["relay_type.planet_sizing"] !== "off") {
+    let prevRate = null;
+    while (iterations < Math.max(3, maxIterations) && (iterations < 3 || performance.now() - t0 < sizingBudgetMs)) {
+      const planets = Object.values(simSolarSystem.updatePlanetsPositions(sizeDate));
+      const satellites = simSatellites.updateSatellitesPositions(sizeDate);
+      simNetwork.getPossibleLinks(planets, satellites);
+      const rs = simNetwork.routeSummary;
+      const relayAggregate = rs ? (rs.relayOnlyThroughput ?? rs.totalThroughput) : 0;
+      if (!(relayAggregate > 0)) break;
       const rate = planetRingRequiredMbps(relayAggregate);
-      console.log(`[ScenarioSizing] #${scenarioId} one-shot: relayAggregate=${Math.round(relayAggregate)} -> planet rate ${Math.round(rate)} Mbps, elapsed=${Math.round(performance.now() - t0)}ms`);
+      console.log(`[ScenarioSizing] #${scenarioId} pass ${iterations}: relayAggregate=${Math.round(relayAggregate)} -> planet rate ${Math.round(rate)} Mbps, elapsed=${Math.round(performance.now() - t0)}ms`);
+      const converged = prevRate != null && Math.abs(rate - prevRate) <= Math.max(1, 0.01 * prevRate);
       uiConfig["ring_earth.requiredmbpsbetweensats"] = rate;
       uiConfig["ring_mars.requiredmbpsbetweensats"] = rate;
-      buildAndApply(); // the rebuild the junction links attach against
-      iterations = 2;
+      buildAndApply(); // rebuild at the new rate (also what the junction links attach against)
+      iterations++;
+      prevRate = rate;
+      if (converged) break;
     }
   }
 
