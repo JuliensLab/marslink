@@ -5,15 +5,15 @@ import {
   junctionDeficits,
   mapSliderValueToUserFacing as mapToUserFacing,
   mapUserFacingToSliderValue as mapToSliderInternal,
-} from "./slidersData.js?v=5.24";
-import { LukashianClock } from "./lukashianTime.js?v=5.24";
-import { wireAuthUi } from "./auth.js?v=5.24";
-import { SensitivityPool } from "./sensitivityPool.js?v=5.24";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.24";
-import { minOf } from "./simMath.js?v=5.24";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.24";
-import { archiveStore } from "./simArchiveStore.js?v=5.24";
-import { PAPER_PLAN, PLAN_VERSION } from "./paperPlan.js?v=5.24";
+} from "./slidersData.js?v=5.25";
+import { LukashianClock } from "./lukashianTime.js?v=5.25";
+import { wireAuthUi } from "./auth.js?v=5.25";
+import { SensitivityPool } from "./sensitivityPool.js?v=5.25";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.25";
+import { minOf } from "./simMath.js?v=5.25";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.25";
+import { archiveStore } from "./simArchiveStore.js?v=5.25";
+import { PAPER_PLAN, PLAN_VERSION, BASE_DOC } from "./paperPlan.js?v=5.25";
 
 export class SimUi {
   constructor(simMain) {
@@ -3171,7 +3171,8 @@ export class SimUi {
     wrap.innerHTML =
       `<div style="display:flex; align-items:baseline; gap:8px; margin-bottom:6px; flex-wrap:wrap;">` +
       `<span style="font-weight:600;">📐 Paper measurements</span>` +
-      `<span class="muted" style="font-size:11px;">every simulation the paper's figures/tables need (~${totalMin} min total, sequential)</span></div>` +
+      `<span class="muted" style="font-size:11px;">every simulation the paper's figures/tables need (~${totalMin} min total, sequential)</span>` +
+      `<button type="button" id="paper-plan-view" class="btn" style="margin-left:auto; font-size:11px; padding:2px 10px;" title="Full-screen readable view of the whole measurement plan">🗎 View plan</button></div>` +
       `<div class="muted" style="font-size:11px; margin-bottom:6px;">Checkboxes choose what the next run includes — the chip on the right is each item's measured state (✓ measured · ⚠ incomplete · “·” not measured). Results are saved to the <b>Archive</b> tab as measurement sets: the baseline config once, plus each run's swept deltas, sized values, metrics, and timing.</div>` +
       `<div style="display:flex; flex-direction:column; gap:5px; margin-bottom:8px;">${rows}</div>` +
       `<div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">` +
@@ -3195,6 +3196,7 @@ export class SimUi {
     }
 
     document.getElementById("paper-plan-run").addEventListener("click", () => this._startMeasureRun({}));
+    document.getElementById("paper-plan-view").addEventListener("click", () => this._showPlanOverview());
     document.getElementById("paper-plan-continue").addEventListener("click", () => this._startMeasureRun({ resume: true }));
     // Per-item delete: removes that item's measurement set from the archive.
     wrap.addEventListener("click", (ev) => {
@@ -3446,6 +3448,105 @@ export class SimUi {
       html += `<div class="muted" style="font-size:11px; margin-top:4px;">flow: not computed for this run</div>`;
     }
     return html;
+  }
+
+  /**
+   * Full-screen, human-readable view of the measurement plan (like the
+   * Deployment report): the reproducibility contract, the shared baseline with
+   * each override's reason, and one card per item — what it measures, why, the
+   * exact sweep (segments × axes × placement = cells), execution parameters,
+   * and its current measured state from the archive.
+   */
+  _showPlanOverview() {
+    if (document.getElementById("paper-plan-overview")) return;
+    const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    const segN = (sg) => Math.floor(((sg.end - sg.start) / (sg.step || 1))) + 1;
+    const axisN = (ax) => (ax ? Math.floor(((ax.end - ax.start) / (ax.step || 1))) + 1 : 1);
+    const placeN = (pl) => (pl === "geometry-16" ? 16 : pl === "geometry-4" ? 4 : pl && pl.samples ? pl.samples : 1);
+    const placeTxt = (pl) => (pl === "geometry-16" || pl === "geometry-4"
+      ? `${pl} (planets by angle grid, date-decoupled)`
+      : pl && pl.dateRangeDays ? `date range: ${pl.samples} dates over ${pl.dateRangeDays} d from the current sim date`
+      : "current sim date (real ephemeris)");
+    const ringTxt = (sg) => (sg.start === sg.end ? `R = ${sg.start}` : `R = ${sg.start}…${sg.end} step ${sg.step || 1}`);
+    const axisTxt = (ax, unit) => (ax ? `${ax.start}…${ax.end} step ${ax.step} ${unit}` : null);
+    const setOf = (id) => archiveStore.all().find((e) => e && e.kind === "set" && e.planId === id);
+    const fmtDur = (ms) => (!(ms > 0) ? "" : ms < 60000 ? `${Math.round(ms / 1000)}s` : `${Math.floor(ms / 60000)}m`);
+    const stateChip = (p) => {
+      if (p.manual) return `<span class="muted">manual / analysis item</span>`;
+      const s = setOf(p.id);
+      if (!s) return `<span class="muted">not measured yet</span>`;
+      const complete = !s.progress || s.progress.status === "complete";
+      return complete
+        ? `<span style="color:var(--ok,#35c75a);">✓ measured — ${(s.items || []).length} runs${s.timing?.measuredMs ? ` in ${fmtDur(s.timing.measuredMs)}` : ""}</span>`
+        : `<span style="color:var(--warn,#ffb454);">⚠ incomplete — ${s.progress.segsDone || 0}/${s.progress.segsTotal ?? "?"} segments</span>`;
+    };
+
+    let grandCells = 0;
+    const itemCard = (p, idx) => {
+      if (p.manual) {
+        return `<div style="border:1px solid var(--border-2,#333); border-radius:8px; padding:10px 12px;">` +
+          `<div style="font-weight:600;">${idx}. ${esc(p.title)}</div>` +
+          `<div class="muted" style="font-size:12px; margin:2px 0 6px;">feeds: ${esc(p.feeds)}</div>` +
+          `<div style="font-size:12px;">${esc(p.note)}</div>` +
+          `<div style="font-size:12px; margin-top:6px;">${stateChip(p)}</div></div>`;
+      }
+      const extra = Object.entries(p.sliders || {}).filter(([k, v]) => {
+        const b = BASE_DOC.find((d) => d.key === k);
+        return !b || String(b.value) !== String(v);
+      });
+      const rows = (p.sens.ringSegs || []).map((sg) => {
+        const routes = sg.route ? axisN(sg.route) : axisN(p.sens.rate);
+        const cells = segN(sg) * routes * placeN(p.sens.placement);
+        grandCells += cells;
+        const second = sg.route
+          ? axisTxt(sg.route, "routes")
+          : axisTxt(p.sens.rate, p.sens.rate?.mode === "total" ? "Mbps total" : "Mbps/ring");
+        return `<tr><td style="padding:1px 10px 1px 0;">${ringTxt(sg)}</td>` +
+          `<td style="padding:1px 10px 1px 0;">${second ? esc(second) : "—"}</td>` +
+          `<td style="text-align:right;">${cells} cell${cells !== 1 ? "s" : ""}</td></tr>`;
+      }).join("");
+      return `<div style="border:1px solid var(--border-2,#333); border-radius:8px; padding:10px 12px;">` +
+        `<div style="display:flex; gap:8px; align-items:baseline; flex-wrap:wrap;">` +
+        `<span style="font-weight:600;">${idx}. ${esc(p.title)}</span>` +
+        `<span class="muted" style="font-size:11px;">~${p.estMin} min${p.heavy ? " · heavy" : ""}</span></div>` +
+        `<div class="muted" style="font-size:12px; margin:2px 0 6px;">feeds: ${esc(p.feeds)}</div>` +
+        `<div style="font-size:12px; display:flex; gap:14px; flex-wrap:wrap;">` +
+        `<span><b>family</b> ${esc(p.family)}</span>` +
+        `<span><b>exec</b> ${p.exec === "worker" ? "worker pool" : "live (sliders)"}</span>` +
+        `<span><b>placement</b> ${esc(placeTxt(p.sens.placement))}</span>` +
+        `<span><b>flow</b> ${p.sens.flow ? `ON · ${p.sens.flow.budgetSec}s budget` : "off (routed only)"}</span></div>` +
+        (extra.length ? `<div style="font-size:12px; margin-top:4px;"><b>overrides beyond baseline:</b> ${extra.map(([k, v]) => `${esc(k)} = ${esc(v)}`).join(" · ")}</div>` : "") +
+        `<table style="font-size:12px; margin-top:6px; border-collapse:collapse;"><thead><tr class="muted"><td style="padding-right:10px;">ring axis</td><td style="padding-right:10px;">second axis</td><td style="text-align:right;">count</td></tr></thead><tbody>${rows}</tbody></table>` +
+        `<div style="font-size:12px; margin-top:6px;">${stateChip(p)}</div></div>`;
+    };
+    const cards = PAPER_PLAN.map((p, i) => itemCard(p, i + 1)).join("");
+    const totalMin = PAPER_PLAN.filter((p) => !p.manual).reduce((s, p) => s + (p.estMin || 0), 0);
+    const baseRows = BASE_DOC.map((d) =>
+      `<tr><td style="padding:2px 12px 2px 0; white-space:nowrap; font-family:ui-monospace,monospace; font-size:11px;">${esc(d.key)}</td>` +
+      `<td style="padding:2px 12px 2px 0; white-space:nowrap;">${esc(d.shown)}</td>` +
+      `<td class="muted">${esc(d.why)}</td></tr>`).join("");
+
+    const overlay = document.createElement("div");
+    overlay.id = "paper-plan-overview";
+    overlay.style.cssText = "position:fixed; inset:0; z-index:99998; background:var(--bg-0,#0b0f1a); color:var(--text-0,#eee); overflow:auto;";
+    overlay.innerHTML =
+      `<div style="max-width:980px; margin:0 auto; padding:20px 24px 60px;">` +
+      `<div style="display:flex; align-items:center; gap:10px; margin-bottom:4px;">` +
+      `<h2 style="margin:0; font-size:18px;">📐 The measurement plan</h2>` +
+      `<span class="muted" style="font-size:12px;">version ${PLAN_VERSION} · ${PAPER_PLAN.filter((p) => !p.manual).length} automated + ${PAPER_PLAN.filter((p) => p.manual).length} manual items · ~${totalMin} min sequential</span>` +
+      `<button type="button" id="paper-plan-overview-close" class="icon-btn" aria-label="Close" style="margin-left:auto; font-size:18px;">×</button></div>` +
+      `<p class="muted" style="font-size:12px; line-height:1.5; margin:6px 0 14px;">Every simulation the paper's figures and tables need. Before each item the runner pins <b>every</b> build-affecting input — all sliders to their documented defaults and the adapted-ring curves to their default profiles — then applies the item's family and the overrides below. Each measurement set records the full 121-input baseline once, per-run deltas, sized outputs, metrics, timings, and the run parameters, so any dataset is reproducible from the archive alone. Results land in the <b>Archive</b> tab.</p>` +
+      `<h3 style="font-size:14px; margin:14px 0 6px;">Shared baseline overrides</h3>` +
+      `<table style="font-size:12px; border-collapse:collapse;">${baseRows}</table>` +
+      `<h3 style="font-size:14px; margin:18px 0 8px;">Items</h3>` +
+      `<div style="display:flex; flex-direction:column; gap:10px;">${cards}</div>` +
+      `<div style="font-size:12px; margin-top:12px;" class="muted">Total: <b>${grandCells}</b> automated measurement cells.</div>` +
+      `</div>`;
+    document.body.appendChild(overlay);
+    const close = () => { overlay.remove(); document.removeEventListener("keydown", onKey); };
+    const onKey = (e) => { if (e.key === "Escape") close(); };
+    overlay.querySelector("#paper-plan-overview-close").addEventListener("click", close);
+    document.addEventListener("keydown", onKey);
   }
 
   /** Per-item measured-state chips (✓ measured · ⚠ incomplete · "·" none) and the
@@ -5489,7 +5590,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=5.24");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=5.25");
     let result = null;
     try {
       result = await solveBandDistribution({

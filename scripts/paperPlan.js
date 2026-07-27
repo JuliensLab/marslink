@@ -37,30 +37,32 @@ export const PLAN_VERSION = 2;
 // the sizing pipeline and recorded in the entry's `sized` block. Nothing is
 // inherited from whatever the live UI happened to hold.
 //
-// Shared overrides, each with its reason:
-const BASE = {
-  // ×128 (2^7): the paper's reference laser-technology factor — every quoted
-  // capacity is at ×128 and rescales linearly (§7).
-  "laser_technology.improvement-factor": 7,
-  // Planet rings must be sized BY the measured relay capacity (§11's sizing
-  // rule), not left at manual rates.
-  "relay_type.planet_sizing": "auto",
-  // Real ephemeris placement; the date-window items sweep dates explicitly.
-  "simulation.planet-placement": "Date",
-  // Full 360° planetary rings: §11 requires full rings so every relay route
-  // can attach around the circumference.
-  "ring_earth.side-extension-degrees-slider": 180,
-  "ring_mars.side-extension-degrees-slider": 180,
-  // push-relabel is the only max-flow solver that works for contoured
-  // concentric (topology-aware is broken there); transfer accepts it too —
-  // one solver across the whole plan keeps flow numbers comparable.
-  "adapted_rings.flow-solver": "push-relabel",
-  "adapted_eccentric_rings.flow-solver": "push-relabel",
-  // The concentric scaling law is measured on the auto-route ridge (§8.4).
-  "adapted_rings.auto_route_count": "yes",
-  // Junction rings grow empirically until each ring's demand is met (§10).
-  "adapted_eccentric_rings.junction-ring-mode": "auto",
-};
+// Shared overrides, each with its reason — DATA, not comments, so the plan
+// overview in the UI can show the why next to the what.
+export const BASE_DOC = [
+  { key: "laser_technology.improvement-factor", value: 7, shown: "×128 (2^7)",
+    why: "The paper's reference laser-technology factor — every quoted capacity is at ×128 and rescales linearly (§7)." },
+  { key: "relay_type.planet_sizing", value: "auto", shown: "auto",
+    why: "Planet rings must be sized BY the measured relay capacity (§11's sizing rule), not left at manual rates." },
+  { key: "simulation.planet-placement", value: "Date", shown: "Date",
+    why: "Real ephemeris placement; the grid/date items sweep placement explicitly." },
+  { key: "ring_earth.side-extension-degrees-slider", value: 180, shown: "180°",
+    why: "Full 360° planetary rings: §11 requires full rings so every relay route can attach around the circumference." },
+  { key: "ring_mars.side-extension-degrees-slider", value: 180, shown: "180°",
+    why: "Same as the Earth ring — full circumference." },
+  { key: "adapted_rings.flow-solver", value: "push-relabel", shown: "push-relabel",
+    why: "The only max-flow solver that works for contoured concentric (topology-aware is broken there); one solver across the whole plan keeps flow numbers comparable." },
+  { key: "adapted_eccentric_rings.flow-solver", value: "push-relabel", shown: "push-relabel",
+    why: "Same solver for the transfer family — comparability." },
+  { key: "adapted_rings.auto_route_count", value: "yes", shown: "auto",
+    why: "The concentric scaling law is measured on the auto-route ridge (§8.4); the sweet-spot item overrides this to sweep route count manually." },
+  { key: "adapted_eccentric_rings.junction-ring-mode", value: "auto", shown: "auto",
+    why: "Junction rings grow empirically until each ring's two-route demand is met (§10)." },
+];
+const BASE = Object.fromEntries(BASE_DOC.map((d) => [d.key, d.value]));
+
+// Everything NOT listed in BASE_DOC or an item's own overrides is pinned to its
+// slidersData default by the runner — the documented design choice.
 
 export const PAPER_PLAN = [
   {
