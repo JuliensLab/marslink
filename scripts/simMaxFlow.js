@@ -9,12 +9,12 @@
 // Swap algorithms by changing DEFAULT_ALGORITHM in interface.js or by
 // passing { algorithm: "push-relabel" | "edmonds-karp" } to computeMaxFlow().
 
-import { simplifyNetwork, desimplifyNetwork } from "./simFlowAlgorithms/networkSimplification.js?v=5.27";
-import { calculateLatencies } from "./simFlowAlgorithms/latencies.js?v=5.27";
-import { FLOW_ALGORITHMS, DEFAULT_ALGORITHM } from "./simFlowAlgorithms/interface.js?v=5.27";
-import { edmondsKarp } from "./simFlowAlgorithms/edmondsKarp.js?v=5.27";
-import { pushRelabel } from "./simFlowAlgorithms/pushRelabel.js?v=5.27";
-import { topologyAware } from "./simFlowAlgorithms/topologyAware.js?v=5.27";
+import { simplifyNetwork, desimplifyNetwork } from "./simFlowAlgorithms/networkSimplification.js?v=5.28";
+import { calculateLatencies } from "./simFlowAlgorithms/latencies.js?v=5.28";
+import { FLOW_ALGORITHMS, DEFAULT_ALGORITHM } from "./simFlowAlgorithms/interface.js?v=5.28";
+import { edmondsKarp } from "./simFlowAlgorithms/edmondsKarp.js?v=5.28";
+import { pushRelabel } from "./simFlowAlgorithms/pushRelabel.js?v=5.28";
+import { topologyAware } from "./simFlowAlgorithms/topologyAware.js?v=5.28";
 
 // Re-exports for existing callers
 export { simplifyNetwork, desimplifyNetwork, calculateLatencies };
@@ -29,13 +29,15 @@ export { edmondsKarp, pushRelabel, topologyAware };
  * found lattice paths the route walker didn't quote.
  *
  * Flow is link-level while capacity is quoted per route, so each route's
- * carried flow is read as the MEDIAN flow over its hops. Median, not the
- * bottleneck-capacity hop: a transfer route's path crosses the junction as a
- * single representative link whose individual capacity is tiny (the quote
- * counts the junction as a BUNDLE), and lattice links can add/remove flow
- * mid-chain on concentric routes — the median over the many in-corridor hops
- * is what the route actually carries. A route counts as "used" when that
- * median exceeds max(0.5 Mbps, 1% of the route's capacity).
+ * carried flow is read as the MEDIAN flow over its RELAY hops only — hops
+ * whose BOTH endpoints are relay-ring satellites. Junction crossings,
+ * planetary-ring chain hops, and intermediate junction rings (ring_jct) are
+ * excluded: a route's path crosses the junction as a single representative
+ * link whose individual capacity is tiny (the quote counts the junction as a
+ * BUNDLE), and the planet chains belong to the distribution stage, not the
+ * relay route. Median, not the bottleneck hop, because lattice links can
+ * add/remove flow mid-chain on concentric routes. A route counts as "used"
+ * when that median exceeds max(0.5 Mbps, 1% of the route's capacity).
  *
  * @param {Array<{path: string[], throughputMbps: number}>} routes  routeSummary.routes
  * @param {Array<{fromId, toId, gbpsCapacity, gbpsFlow}>}   links   solved link set
@@ -49,20 +51,29 @@ export function routeFlowUtilization(routes, links) {
     flowByPair.set(l.fromId + "|" + l.toId, f);
     flowByPair.set(l.toId + "|" + l.fromId, f);
   }
+  const isRelayNode = (id) => id && id.startsWith("ring_") &&
+    !id.startsWith("ring_earth") && !id.startsWith("ring_mars") && !id.startsWith("ring_jct");
   let used = 0, flowSum = 0, capSum = 0;
   const utils = [];
   for (const r of routes) {
     const cap = r.throughputMbps;
     if (!(cap > 0) || !Array.isArray(r.path) || r.path.length < 2) continue;
     const hopFlows = [];
+    const allFlows = [];
     for (let i = 0; i < r.path.length - 1; i++) {
-      const f = flowByPair.get(r.path[i] + "|" + r.path[i + 1]);
-      if (f != null) hopFlows.push(f); // hop without a formed link — skip, don't zero the route
+      const a = r.path[i], b = r.path[i + 1];
+      const f = flowByPair.get(a + "|" + b);
+      if (f == null) continue; // hop without a formed link — skip, don't zero the route
+      allFlows.push(f);
+      if (isRelayNode(a) && isRelayNode(b)) hopFlows.push(f);
     }
-    if (!hopFlows.length) continue;
-    hopFlows.sort((a, b) => a - b);
-    const mid = hopFlows.length >> 1;
-    const carried = hopFlows.length % 2 ? hopFlows[mid] : (hopFlows[mid - 1] + hopFlows[mid]) / 2;
+    // Fall back to the full hop set only if the path had no relay-relay hops
+    // at all (degenerate single-hop routes).
+    const flows = hopFlows.length ? hopFlows : allFlows;
+    if (!flows.length) continue;
+    flows.sort((a, b) => a - b);
+    const mid = flows.length >> 1;
+    const carried = flows.length % 2 ? flows[mid] : (flows[mid - 1] + flows[mid]) / 2;
     utils.push(carried / cap);
     if (carried > Math.max(0.5, 0.01 * cap)) used++;
     flowSum += carried;
