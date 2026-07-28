@@ -5,17 +5,17 @@ import {
   junctionDeficits,
   mapSliderValueToUserFacing as mapToUserFacing,
   mapUserFacingToSliderValue as mapToSliderInternal,
-} from "./slidersData.js?v=5.32";
-import { LukashianClock } from "./lukashianTime.js?v=5.32";
-import { wireAuthUi } from "./auth.js?v=5.32";
-import { SensitivityPool } from "./sensitivityPool.js?v=5.32";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.32";
-import { minOf } from "./simMath.js?v=5.32";
-import { buildFlowSummary } from "./simMaxFlow.js?v=5.32";
-import { linksToThumbData, renderThumbDataURL } from "./simThumbs.js?v=5.32";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.32";
-import { archiveStore } from "./simArchiveStore.js?v=5.32";
-import { PAPER_PLAN, PLAN_VERSION, BASE_DOC } from "./paperPlan.js?v=5.32";
+} from "./slidersData.js?v=5.33";
+import { LukashianClock } from "./lukashianTime.js?v=5.33";
+import { wireAuthUi } from "./auth.js?v=5.33";
+import { SensitivityPool } from "./sensitivityPool.js?v=5.33";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.33";
+import { minOf } from "./simMath.js?v=5.33";
+import { buildFlowSummary } from "./simMaxFlow.js?v=5.33";
+import { linksToThumbData, renderThumbDataURL } from "./simThumbs.js?v=5.33";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.33";
+import { archiveStore } from "./simArchiveStore.js?v=5.33";
+import { PAPER_PLAN, PLAN_VERSION, BASE_DOC } from "./paperPlan.js?v=5.33";
 
 export class SimUi {
   constructor(simMain) {
@@ -2299,8 +2299,17 @@ export class SimUi {
                 // the same shape the worker path returns — rendered at the shared
                 // archive site into the two per-measurement images.
                 thumbData: (() => {
-                  const links = sm.lastPossibleLinks;
+                  let links = sm.lastPossibleLinks;
                   if (!Array.isArray(links) || !links.length) return undefined;
+                  // possibleLinks carry no gbpsFlow — the solved flow lives on
+                  // lastNetworkData.links. Merge it onto copies, else the flow
+                  // thumbnail renders empty for every live-mode measurement.
+                  const fl = new Map();
+                  for (const l of sm.lastNetworkData?.links || []) if (l.gbpsFlow > 0) fl.set(l.fromId + "|" + l.toId, l.gbpsFlow);
+                  if (fl.size) links = links.map((l) => {
+                    const f = fl.get(l.fromId + "|" + l.toId) ?? fl.get(l.toId + "|" + l.fromId);
+                    return f ? { ...l, gbpsFlow: f } : l;
+                  });
                   const pos = new Map();
                   for (const st of sm.simSatellites?.satellites || []) if (st && st.name && st.position) pos.set(st.name, st.position);
                   const planets = sm.simSolarSystem?.getSolarSystemData?.().planets || [];
@@ -5756,7 +5765,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=5.32");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=5.33");
     let result = null;
     try {
       result = await solveBandDistribution({

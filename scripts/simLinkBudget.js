@@ -1,6 +1,6 @@
 // simLinkBudget.js
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=5.24";
+import { SIM_CONSTANTS } from "./simConstants.js?v=5.33";
 
 export class SimLinkBudget {
   constructor() {
