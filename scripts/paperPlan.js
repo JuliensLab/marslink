@@ -26,7 +26,11 @@
 
 // Bump when the plan's items, baselines, or semantics change — recorded into
 // every measurement set's `run` block so a dataset names the plan that made it.
-export const PLAN_VERSION = 2;
+// v3: execution mode is chosen in the panel (LIVE sliders by default — the
+// correctness guarantee: every measurement drives the real sliders and the
+// live sim, monitorable in the 3D view); geometry grids run live by stepping
+// the main-UI placement sliders per cell.
+export const PLAN_VERSION = 3;
 
 // REPRODUCIBILITY CONTRACT: before each item the runner pins EVERY
 // build-affecting input — all ~120 sliders to their slidersData defaults and
@@ -135,15 +139,14 @@ export const PAPER_PLAN = [
   },
   {
     id: "fig13-grid-conc",
-    title: "Concentric geometry grid ×16 (flow ON, worker)",
+    title: "Concentric geometry grid ×16 (flow ON)",
     feeds: "Fig 13 + §13 G2: delivered capacity invariant across the synodic geometry, no conjunction blackout — the standing concentric flow-ON grid gap; also demonstrates flow ≈ routed parity",
     family: "Contoured concentric",
-    // Worker exec: placement grids are worker/main-only (live mode pins placement
-    // to the main Simulation section), and worker flow is trustworthy since the
-    // sizing fixed-point fix (commit 1ca356b). Geometry ×16 places the planets by
-    // angle, decoupled from any calendar — the date-independence device the
-    // paper's Fig 13 is built on.
-    exec: "worker",
+    // Geometry ×16 places the planets by angle, decoupled from any calendar —
+    // the date-independence device the paper's Fig 13 is built on. In live
+    // exec (the default) the runner steps the MAIN-UI placement sliders
+    // (Geometry + Earth/Mars angle offsets) per cell — real sliders, real sim;
+    // in worker exec the sens placement axis sweeps the grid in one run.
     sliders: { ...BASE },
     sens: {
       ringSegs: [{ start: 28, end: 28, step: 1 }],
@@ -151,14 +154,13 @@ export const PAPER_PLAN = [
       placement: "geometry-16",
       flow: { budgetSec: 90 },
     },
-    estMin: 30,
+    estMin: 60,
   },
   {
     id: "fig13-grid-tran",
-    title: "Transfer geometry grid ×16 (flow ON, worker)",
+    title: "Transfer geometry grid ×16 (flow ON)",
     feeds: "Fig 13 transfer half + §13 G2; re-measures the rotated-geometry delivered-capacity question post ring-pinning/sizing fixes",
     family: "Contoured transfer",
-    exec: "worker",
     sliders: { ...BASE },
     sens: {
       ringSegs: [{ start: 2, end: 2, step: 1 }],
@@ -166,7 +168,7 @@ export const PAPER_PLAN = [
       placement: "geometry-16",
       flow: { budgetSec: 90 },
     },
-    estMin: 20,
+    estMin: 25,
   },
   {
     id: "table1-transfer-10g",
@@ -188,13 +190,9 @@ export const PAPER_PLAN = [
   },
   {
     id: "b2-junction-recal",
-    title: "Junction window-law recalibration (single ring × rate, worker)",
-    feeds: "§10 J(n) + w(x) recalibration (junctionAngles ride worker entries)",
+    title: "Junction window-law recalibration (single ring × rate)",
+    feeds: "§10 J(n) + w(x) recalibration — the raw junction-pair angle arrays (junctionAngles) ride every entry, live and worker alike (runPipeline attaches them too)",
     family: "Contoured transfer",
-    // Worker exec: the raw junction-pair angle arrays (capacityInfo.junctionAngles)
-    // are collected on the worker pipeline; no flow is needed, and worker routed
-    // capacity is trustworthy since the sizing fixed-point fix.
-    exec: "worker",
     sliders: { ...BASE },
     sens: {
       ringSegs: [{ start: 1, end: 1, step: 1 }],

@@ -5,16 +5,16 @@ import {
   junctionDeficits,
   mapSliderValueToUserFacing as mapToUserFacing,
   mapUserFacingToSliderValue as mapToSliderInternal,
-} from "./slidersData.js?v=5.27";
-import { LukashianClock } from "./lukashianTime.js?v=5.27";
-import { wireAuthUi } from "./auth.js?v=5.27";
-import { SensitivityPool } from "./sensitivityPool.js?v=5.27";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.27";
-import { minOf } from "./simMath.js?v=5.27";
-import { buildFlowSummary } from "./simMaxFlow.js?v=5.27";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.27";
-import { archiveStore } from "./simArchiveStore.js?v=5.27";
-import { PAPER_PLAN, PLAN_VERSION, BASE_DOC } from "./paperPlan.js?v=5.27";
+} from "./slidersData.js?v=5.29";
+import { LukashianClock } from "./lukashianTime.js?v=5.29";
+import { wireAuthUi } from "./auth.js?v=5.29";
+import { SensitivityPool } from "./sensitivityPool.js?v=5.29";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.29";
+import { minOf } from "./simMath.js?v=5.29";
+import { buildFlowSummary } from "./simMaxFlow.js?v=5.29";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.29";
+import { archiveStore } from "./simArchiveStore.js?v=5.29";
+import { PAPER_PLAN, PLAN_VERSION, BASE_DOC } from "./paperPlan.js?v=5.29";
 
 export class SimUi {
   constructor(simMain) {
@@ -3181,6 +3181,13 @@ export class SimUi {
       `<button type="button" id="paper-plan-view" class="btn" style="margin-left:auto; font-size:11px; padding:2px 10px;" title="Full-screen readable view of the whole measurement plan">🗎 View plan</button></div>` +
       `<div class="muted" style="font-size:11px; margin-bottom:6px;">Checkboxes choose what the next run includes — the chip on the right is each item's measured state (✓ measured · ⚠ incomplete · “·” not measured). Results are saved to the <b>Archive</b> tab as measurement sets: the baseline config once, plus each run's swept deltas, sized values, metrics, and timing.</div>` +
       `<div style="display:flex; flex-direction:column; gap:5px; margin-bottom:8px;">${rows}</div>` +
+      `<div class="muted" style="font-size:11px; margin-bottom:6px; display:flex; gap:12px; align-items:center; flex-wrap:wrap;">` +
+      `<span style="font-weight:600; color:var(--text-0,#eee);">Execution</span>` +
+      `<label style="display:flex; gap:4px; align-items:center;" title="Every measurement drives the REAL sliders and the live simulation — geometry grids step the main-UI placement sliders per cell. Serial and slower, but the 3D view shows exactly what is being measured: the correctness guarantee.">` +
+      `<input type="radio" name="paper-plan-exec" id="paper-plan-exec-live" value="live" checked> live sim (sliders) — default</label>` +
+      `<label style="display:flex; gap:4px; align-items:center;" title="Parallel background worker pool: much faster, nothing to watch. Same pipeline code; flow parity with live is verified, but there is no visual confirmation.">` +
+      `<input type="radio" name="paper-plan-exec" id="paper-plan-exec-worker" value="worker"> worker pool (fast, no visual)</label>` +
+      `</div>` +
       `<div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">` +
       `<button type="button" id="paper-plan-run" class="btn btn-primary" title="Run the checked items in a separate runner window">▶ Measure selected</button>` +
       `<button type="button" id="paper-plan-continue" class="btn" style="display:none;" title="Resume the measurement sets that were interrupted — completed segments are kept, the partial one is re-run.">⟳ Continue interrupted run</button>` +
@@ -3588,29 +3595,56 @@ export class SimUi {
       PAPER_PLAN.some((p) => p.id === e.planId && !p.manual));
   }
 
+  /** Panel execution mode: "live" (default — real sliders + live sim, the
+   *  correctness guarantee) or "worker" (parallel pool, fast, no visual). */
+  _planExecMode() {
+    return document.getElementById("paper-plan-exec-worker")?.checked ? "worker" : "live";
+  }
+
+  /**
+   * The geometry cells a LIVE run steps through the MAIN-UI placement sliders,
+   * one live sweep per cell (live mode never sweeps placement itself — the
+   * placement IS the main Simulation section, which is exactly the guarantee).
+   * Worker runs sweep the same grid through the sens placement axis instead.
+   * null = single-cell item (real-ephemeris Date placement from the baseline).
+   */
+  _planLiveCells(placement) {
+    const ANG = [0, 90, 180, 270];
+    if (placement === "geometry-16") return ANG.flatMap((e) => ANG.map((m) => ({ e, m })));
+    if (placement === "geometry-4") return ANG.map((m) => ({ e: 90, m }));
+    return null;
+  }
+
   /**
    * Put the UI into the state a plan item needs: full reproducibility baseline,
    * then the sensitivity controls (family, exec mode, placement axis, flow, rate
    * axis). Shared by fresh runs and resumes so a continued run is configured
    * identically to the interrupted one.
    */
-  _configurePlanItem(item) {
+  _configurePlanItem(item, execMode) {
     const fire = (el, ev) => el && el.dispatchEvent(new Event(ev, { bubbles: true }));
     const setNum = (id, v) => { const e = document.getElementById(id); if (e) { e.value = String(v); fire(e, "input"); fire(e, "change"); } };
     const setCheck = (id, on) => { const e = document.getElementById(id); if (e && e.checked !== !!on) { e.checked = !!on; fire(e, "change"); } };
     const setSel = (id, v) => { const e = document.getElementById(id); if (e) { e.value = v; fire(e, "change"); } };
+    const mode = execMode || this._planExecMode();
     document.getElementById("sens-mode-simple")?.click();
     this._applyPlanBaseline(item);
     setCheck(item.family === "Contoured transfer" ? "sens-family-tran" : "sens-family-conc", true);
-    document.getElementById(item.exec === "worker" ? "sens-exec-worker" : "sens-exec-live")?.click();
+    // LIVE is the default and the guarantee: every scenario writes the real
+    // sliders and waits for the live sim to converge, visible in the 3D view.
+    document.getElementById(mode === "worker" ? "sens-exec-worker" : "sens-exec-live")?.click();
     const pl = item.sens.placement;
-    if (pl && typeof pl === "object" && pl.dateRangeDays) {
+    if (mode === "worker" && pl && typeof pl === "object" && pl.dateRangeDays) {
       setSel("sens-geom-mode", "date-range");
       setNum("sens-date-range-days", pl.dateRangeDays);
       setNum("sens-date-range-samples", pl.samples);
-    } else if (pl === "geometry-16" || pl === "geometry-4") {
+    } else if (mode === "worker" && (pl === "geometry-16" || pl === "geometry-4")) {
       setSel("sens-geom-mode", pl);
-    } else setSel("sens-geom-mode", "current");
+    } else {
+      // Live mode: the sens placement axis is not swept — grids are stepped
+      // through the main-UI placement sliders per cell by the runner.
+      setSel("sens-geom-mode", "current");
+    }
     setCheck("sens-calc-flow", !!item.sens.flow);
     if (item.sens.flow) setNum("sens-flow-budget", item.sens.flow.budgetSec);
     setCheck("opt-archive", true);
@@ -3744,46 +3778,72 @@ export class SimUi {
         const done = existing && (!existing.progress || existing.progress.status === "complete");
         if (existing && done && !opts.resume && !rerun) { status(`${n}/${items.length} · ${item.title}: already measured — skipped`); continue; }
         const segs = item.sens.ringSegs || [];
-        // Plan drift: if paperPlan.js changed since the interrupted run (different
-        // plan version, or a different segment count), the stored segsDone no
-        // longer indexes the same work — resuming would silently mark the set
-        // complete with missing or mismatched segments. Restart the item instead.
+        // Execution mode: LIVE (default — real sliders + live sim, monitorable
+        // in the 3D view) or worker. Live GRID items step the main-UI placement
+        // sliders per cell; the work list is then cells × segments, each unit
+        // one live sweep. Non-grid items have a single implicit cell.
+        const execMode = this._planExecMode();
+        const liveCells = execMode === "live" ? this._planLiveCells(item.sens.placement) : null;
+        const cells = liveCells || [null];
+        const unitsTotal = cells.length * segs.length;
+        const unitLabel = (u) => {
+          const ci = Math.floor(u / segs.length), si = u % segs.length;
+          return liveCells
+            ? `cell E${cells[ci].e}/M${cells[ci].m} (${ci + 1}/${cells.length}) segment ${si + 1}/${segs.length}`
+            : `segment ${si + 1}/${segs.length}`;
+        };
+        // Plan drift: if the plan or the execution mode changed since the
+        // interrupted run (plan version, unit count, exec), the stored progress
+        // no longer indexes the same work — resuming would silently mark the
+        // set complete with missing or mismatched units. Restart the item.
         const drift = !!existing && !done && (
           (existing.run?.planVersion != null && existing.run.planVersion !== PLAN_VERSION) ||
-          (existing.progress?.segsTotal != null && existing.progress.segsTotal !== segs.length));
-        let set, startSeg = 0;
+          (existing.run?.exec != null && existing.run.exec !== execMode) ||
+          (existing.progress?.segsTotal != null && existing.progress.segsTotal !== unitsTotal));
+        let set, startUnit = 0;
         if (existing && !done && !rerun && !drift) {
-          // RESUME: keep the segments that completed, discard the partial one's
+          // RESUME: keep the units that completed, discard the partial one's
           // scenarios (progress.itemCount is the last committed boundary), and
-          // re-run from there. Re-running the partial segment whole is what makes
+          // re-run from there. Re-running the partial unit whole is what makes
           // the result identical to an uninterrupted run.
           set = this._archiveResumeSet(existing);
-          startSeg = Math.min(set.progress?.segsDone || 0, segs.length);
+          startUnit = Math.min(set.progress?.segsDone || 0, unitsTotal);
           const keep = set.progress?.itemCount || 0;
           if (set.items.length > keep) set.items.length = keep;
-          this._archiveMarkProgress(set, { status: "running", segsTotal: segs.length });
-          status(`${n}/${items.length} · resuming ${item.title} from segment ${startSeg + 1}/${segs.length}…`);
+          this._archiveMarkProgress(set, { status: "running", segsTotal: unitsTotal });
+          status(`${n}/${items.length} · resuming ${item.title} at ${unitLabel(startUnit)}…`);
         } else {
           if (existing && (rerun || drift)) this._archiveDeleteSet(existing); // fresh start, no duplicate set
           status(drift
-            ? `${n}/${items.length} · ${item.title}: the plan changed since the interrupted run — measuring it again from the start…`
+            ? `${n}/${items.length} · ${item.title}: the plan or exec mode changed since the interrupted run — measuring it again from the start…`
             : `${n}/${items.length} · preparing ${item.title}…`);
         }
         // Configure the UI identically whether starting fresh or resuming.
-        this._configurePlanItem(item);
+        this._configurePlanItem(item, execMode);
         if (!set) {
-          // One measurement set for the whole item; each ring segment is one sweep.
-          // `run` records the non-slider execution parameters for reproducibility.
+          // One measurement set for the whole item; each (cell × segment) unit is
+          // one sweep. `run` records the execution parameters for reproducibility.
           set = this._archiveOpenSet({
             planId: item.id,
             name: item.title,
-            run: { exec: item.exec || "live", sens: item.sens, planVersion: PLAN_VERSION, app: appPin },
-            segsTotal: segs.length,
+            run: { exec: execMode, sens: item.sens, planVersion: PLAN_VERSION, app: appPin },
+            segsTotal: unitsTotal,
           });
         }
         try {
-          for (let si = startSeg; si < segs.length; si++) {
+          for (let u = startUnit; u < unitsTotal; u++) {
             if (this._paperPlanStop) break;
+            const ci = Math.floor(u / segs.length), si = u % segs.length;
+            if (liveCells) {
+              // Step the MAIN-UI placement sliders to this grid cell — the live
+              // sim rebuilds to it, visibly, before the sweep runs. Real sliders:
+              // exactly what a hand-driven measurement would do.
+              this.applySliderValues({
+                "simulation.planet-placement": "Geometry",
+                "simulation.earth-angle-offset-deg": cells[ci].e,
+                "simulation.mars-angle-offset-deg": cells[ci].m,
+              });
+            }
             const sg = segs[si];
             setCheck("sens-ring-enable", true);
             setNum("sens-ring-start", sg.start);
@@ -3797,20 +3857,20 @@ export class SimUi {
               setNum("sens-route-end", sg.route.end);
               setNum("sens-route-step", sg.route.step);
             }
-            status(`${n}/${items.length} · ${item.title} — segment ${si + 1}/${segs.length} running…`);
+            status(`${n}/${items.length} · ${item.title} — ${unitLabel(u)} running…`);
             const segT0 = Date.now();
             const itemsBefore = set.items.length;
             await runOnce();
-            // Segment timing rides with the progress commit (per-scenario times
+            // Unit timing rides with the progress commit (per-scenario times
             // are recorded on each item by _archiveAppend).
             const t = (set.timing ||= { startedAt: segT0, lastAt: segT0, segments: [], totalMs: 0 });
-            t.segments = t.segments.filter((sg2) => sg2.seg !== si).concat([{
-              seg: si, ms: Date.now() - segT0, scenarios: set.items.length - itemsBefore,
+            t.segments = t.segments.filter((sg2) => sg2.seg !== u).concat([{
+              seg: u, ms: Date.now() - segT0, scenarios: set.items.length - itemsBefore,
             }]).sort((a, b) => a.seg - b.seg);
             t.measuredMs = t.segments.reduce((s2, sg2) => s2 + (sg2.ms || 0), 0);
-            // Commit the boundary before the next segment: a refresh from here on
-            // resumes at si+1 with everything measured so far kept.
-            this._archiveMarkProgress(set, { segsDone: si + 1, itemCount: set.items.length });
+            // Commit the boundary before the next unit: a refresh from here on
+            // resumes at u+1 with everything measured so far kept.
+            this._archiveMarkProgress(set, { segsDone: u + 1, itemCount: set.items.length });
           }
           if (!this._paperPlanStop) this._archiveMarkProgress(set, { status: "complete" });
         } finally {
@@ -5598,7 +5658,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=5.27");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=5.29");
     let result = null;
     try {
       result = await solveBandDistribution({
