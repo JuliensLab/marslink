@@ -9,16 +9,17 @@
 // Loaded as an ES module worker:
 //   new Worker(new URL("./simWorker.js", import.meta.url), { type: "module" })
 
-import { SimSolarSystem } from "./simSolarSystem.js?v=5.27";
-import { SimSatellites } from "./simSatellites.js?v=5.27";
-import { SimLinkBudget } from "./simLinkBudget.js?v=5.27";
-import { SimNetwork } from "./simNetwork.js?v=5.27";
-import { SimDeployment } from "./simDeployment.js?v=5.27";
-import { SimMissionValidator } from "./simMissionValidator.js?v=5.27";
-import { minOf } from "./simMath.js?v=5.27";
-import { buildFlowSummary } from "./simMaxFlow.js?v=5.27";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.27";
-import { planetRingRequiredMbps, junctionDeficits } from "./slidersData.js?v=5.27";
+import { SimSolarSystem } from "./simSolarSystem.js?v=5.30";
+import { SimSatellites } from "./simSatellites.js?v=5.30";
+import { SimLinkBudget } from "./simLinkBudget.js?v=5.30";
+import { SimNetwork } from "./simNetwork.js?v=5.30";
+import { SimDeployment } from "./simDeployment.js?v=5.30";
+import { SimMissionValidator } from "./simMissionValidator.js?v=5.30";
+import { minOf } from "./simMath.js?v=5.30";
+import { buildFlowSummary } from "./simMaxFlow.js?v=5.30";
+import { linksToThumbData } from "./simThumbs.js?v=5.30";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.30";
+import { planetRingRequiredMbps, junctionDeficits } from "./slidersData.js?v=5.30";
 
 // --- State (initialized lazily on the first compute) ---
 let simLinkBudget = null;
@@ -349,7 +350,7 @@ function applyGeometryOffsets(earthAngleOffset, marsAngleOffset) {
  * @param {number} msg.flowCalctimeMs    max-flow time budget (longTermRun uses 20000)
  * @param {number} msg.maxIterations     feedback-loop cap (100, matching the serial path)
  */
-function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flowCalctimeMs = 20000, maxIterations = 15, sizingBudgetMs = 6000, objectiveOnly = false, earthAngleOffset = null, marsAngleOffset = null, includeLinks = false, computeFlow = true }) {
+function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flowCalctimeMs = 20000, maxIterations = 15, sizingBudgetMs = 6000, objectiveOnly = false, earthAngleOffset = null, marsAngleOffset = null, includeLinks = false, computeFlow = true, captureThumbs = false }) {
   ensureState();
   // Scenarios place planets explicitly (applyGeometryOffsets after each position
   // update) — clear any persistent main-UI override a prior runPipeline left on
@@ -597,12 +598,26 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
     };
   }
 
+  // Thumbnail geometry (opt-in): compact [x1,y1,x2,y2,capMbps,flowMbps] segments
+  // + planet positions, extracted HERE because link-endpoint positions only
+  // exist in this scope. The main thread renders the two images (canvas is
+  // DOM-only) and stores them on the archive entry.
+  let thumbData;
+  if (captureThumbs) {
+    const pos = new Map();
+    for (const s of satellites) if (s && s.name && s.position) pos.set(s.name, s.position);
+    for (const p of planets) if (p && p.name && p.position) pos.set(p.name, p.position);
+    const thumbLinks = (fullNetworkData && fullNetworkData.links && fullNetworkData.links.length) ? fullNetworkData.links : possibleLinks;
+    thumbData = linksToThumbData(thumbLinks, (id) => pos.get(id), planets) || undefined;
+  }
+
   return {
     type: "scenario-result",
     requestId,
     scenarioId,
     satellitesCount,
     maxFlowGbps,
+    thumbData,
     // Solved links (flow-annotated when the flow finished) — opt-in ONLY: the in-process
     // main-thread sensitivity path uses them to display each scenario's routes during the
     // dwell. The worker/pool path never sets includeLinks (postMessage clone weight).

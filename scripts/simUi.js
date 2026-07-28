@@ -5,16 +5,17 @@ import {
   junctionDeficits,
   mapSliderValueToUserFacing as mapToUserFacing,
   mapUserFacingToSliderValue as mapToSliderInternal,
-} from "./slidersData.js?v=5.29";
-import { LukashianClock } from "./lukashianTime.js?v=5.29";
-import { wireAuthUi } from "./auth.js?v=5.29";
-import { SensitivityPool } from "./sensitivityPool.js?v=5.29";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.29";
-import { minOf } from "./simMath.js?v=5.29";
-import { buildFlowSummary } from "./simMaxFlow.js?v=5.29";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.29";
-import { archiveStore } from "./simArchiveStore.js?v=5.29";
-import { PAPER_PLAN, PLAN_VERSION, BASE_DOC } from "./paperPlan.js?v=5.29";
+} from "./slidersData.js?v=5.30";
+import { LukashianClock } from "./lukashianTime.js?v=5.30";
+import { wireAuthUi } from "./auth.js?v=5.30";
+import { SensitivityPool } from "./sensitivityPool.js?v=5.30";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.30";
+import { minOf } from "./simMath.js?v=5.30";
+import { buildFlowSummary } from "./simMaxFlow.js?v=5.30";
+import { linksToThumbData, renderThumbDataURL } from "./simThumbs.js?v=5.30";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.30";
+import { archiveStore } from "./simArchiveStore.js?v=5.30";
+import { PAPER_PLAN, PLAN_VERSION, BASE_DOC } from "./paperPlan.js?v=5.30";
 
 export class SimUi {
   constructor(simMain) {
@@ -2087,7 +2088,19 @@ export class SimUi {
                 junctionAngles: res.capacityInfo?.junctionAngles || null,
               };
               const tag = `sweep: ${s.ringCount ?? "cur"} rings${s.techUserVal != null ? " · " + s.techUserVal + "x" : ""}${s.routeCount != null ? " · " + s.routeCount + " " + secondAxisMeta.unit : ""} · ${s.placement.label}`;
-              this._archiveAppend({ id: Date.now() + s.scenarioId, name: tag, ts: new Date().toISOString(), ms: res?.totalMs ?? null, config: s.archiveConfig || {}, sized: sizedOf(res), metrics: m });
+              // Per-measurement thumbnails: capacity always, flow only when a flow
+              // solve actually ran (flowSummary exists iff it did). ~15–40 KB each,
+              // IndexedDB-only — the JSON export strips them.
+              let thumbs = null;
+              if (res?.thumbData) {
+                try {
+                  thumbs = {
+                    cap: renderThumbDataURL(res.thumbData, "capacity"),
+                    flow: res.flowSummary ? renderThumbDataURL(res.thumbData, "flow") : null,
+                  };
+                } catch (e) { console.warn("[Sensitivity] thumbnail render failed:", e?.message); }
+              }
+              this._archiveAppend({ id: Date.now() + s.scenarioId, name: tag, ts: new Date().toISOString(), ms: res?.totalMs ?? null, config: s.archiveConfig || {}, sized: sizedOf(res), metrics: m, thumbs });
             }
           };
 
@@ -2127,6 +2140,7 @@ export class SimUi {
                   flowCalctimeMs: flowMs,
                   computeFlow: calcFlow,
                   includeLinks: renderMT,
+                  captureThumbs: true, // top-down capacity/flow thumbnails per measurement
                 });
               } catch (err) {
                 console.error(`[Sensitivity] main-thread scenario ${s.scenarioId} failed:`, err);
@@ -2278,9 +2292,21 @@ export class SimUi {
                 // Same flow-card shape the worker scenarios record (ground/junction
                 // flows + route-use accounting) — live flow entries used to archive
                 // no flow card at all.
-                flowSummary: flowFresh && Array.isArray(sm.networkData?.links)
-                  ? buildFlowSummary(sm.networkData.links, sm.maxFlowGbps || 0, sm.routeSummary?.routes)
+                flowSummary: flowFresh && Array.isArray(sm.lastNetworkData?.links)
+                  ? buildFlowSummary(sm.lastNetworkData.links, sm.maxFlowGbps || 0, sm.routeSummary?.routes)
                   : null,
+                // Thumbnail geometry from the LIVE state (links + current positions),
+                // the same shape the worker path returns — rendered at the shared
+                // archive site into the two per-measurement images.
+                thumbData: (() => {
+                  const links = sm.lastPossibleLinks;
+                  if (!Array.isArray(links) || !links.length) return undefined;
+                  const pos = new Map();
+                  for (const st of sm.simSatellites?.satellites || []) if (st && st.name && st.position) pos.set(st.name, st.position);
+                  const planets = sm.simSolarSystem?.getSolarSystemData?.().planets || [];
+                  for (const p of planets) if (p && p.name && p.position) pos.set(p.name, p.position);
+                  return linksToThumbData(links, (id) => pos.get(id), planets) || undefined;
+                })(),
                 resultTreesData: sm.resultTrees || [],
                 sizedConfig,
               };
@@ -2327,6 +2353,7 @@ export class SimUi {
                 marsAngleOffset: s.placement.marsAngleOffset,
                 flowCalctimeMs: flowMs,
                 computeFlow: calcFlow,
+                captureThumbs: true, // top-down capacity/flow thumbnails per measurement
               }, s.estMB).then((res) => {
                 if (stopRequested || !res) return;
                 recordScenarioResult(res, s);
@@ -3415,15 +3442,25 @@ export class SimUi {
   }
 
   /**
-   * The visual outcome of ONE archived measurement: its capacity and flow cards
-   * re-rendered as the compact Earth→relay→Mars diagrams, from the structured
-   * capacityCard/flowCard aggregates every entry records. Better than a pixel
-   * screenshot: nothing extra is stored, it renders identically for worker-mode
-   * runs that never painted a screen, and the numbers stay selectable text.
+   * The visual outcome of ONE archived measurement: the two top-down thumbnails
+   * captured at measurement time (links colored by capacity, and by flow when a
+   * flow solve ran — no satellites), followed by the capacity and flow cards
+   * re-rendered as the compact Earth→relay→Mars diagrams from the structured
+   * capacityCard/flowCard aggregates every entry records.
    */
-  _cardDiagramsHtml(metrics) {
+  _cardDiagramsHtml(metrics, thumbs) {
     const m = metrics || {};
     const cc = m.capacityCard, fc = m.flowCard;
+    let thumbHtml = "";
+    if (thumbs && (thumbs.cap || thumbs.flow)) {
+      const img = (src, label) => src
+        ? `<figure style="margin:0;"><img src="${src}" alt="${label}" style="width:230px; max-width:45vw; border-radius:6px; border:1px solid var(--border-2,#333); display:block;"><figcaption class="muted" style="font-size:10px; margin-top:2px;">${label}</figcaption></figure>`
+        : "";
+      thumbHtml = `<div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px;">` +
+        img(thumbs.cap, "links by capacity (top-down)") +
+        img(thumbs.flow, "links by flow — unused links hidden") +
+        `</div>`;
+    }
     if (!cc && !fc) return `<div class="muted" style="font-size:11px;">no card data recorded for this run</div>`;
     const fmtM = (v) => (v == null || !isFinite(v) ? "—" : v >= 1000 ? `${(v / 1000).toFixed(1)} Gbps` : `${Math.round(v)} Mbps`);
     const fmtN = (v) => (v == null || !isFinite(v) ? "—" : v >= 1000 ? (v / 1000).toFixed(1) : String(Math.round(v)));
@@ -3462,7 +3499,7 @@ export class SimUi {
     } else {
       html += `<div class="muted" style="font-size:11px; margin-top:4px;">flow: not computed for this run</div>`;
     }
-    return html;
+    return thumbHtml + html;
   }
 
   /**
@@ -4331,7 +4368,7 @@ export class SimUi {
         const set = load().find((x) => String(x.id) === t.dataset.set);
         const it = set?.items?.[+t.dataset.i];
         if (!box || !it) return;
-        if (box.hidden) { box.innerHTML = this._cardDiagramsHtml(it.metrics); box.hidden = false; }
+        if (box.hidden) { box.innerHTML = this._cardDiagramsHtml(it.metrics, it.thumbs); box.hidden = false; }
         else box.hidden = true;
         return;
       }
@@ -4339,7 +4376,7 @@ export class SimUi {
         const box = listEl.querySelector(`.entry-cards[data-id="${CSS.escape(t.dataset.id)}"]`);
         const e = load().find((x) => String(x.id) === t.dataset.id);
         if (!box || !e) return;
-        if (box.hidden) { box.innerHTML = this._cardDiagramsHtml(e.metrics); box.hidden = false; }
+        if (box.hidden) { box.innerHTML = this._cardDiagramsHtml(e.metrics, e.thumbs); box.hidden = false; }
         else box.hidden = true;
       }
     });
@@ -4446,7 +4483,7 @@ export class SimUi {
         const wallMs = Math.max(0, now - (t.lastAt || now));
         t.lastAt = now;
         t.totalMs = now - (t.startedAt || now);
-        set.items.push({ label: entry.name, ts: entry.ts, ms: entry.ms ?? null, wallMs, deltaSliders: delta, sized: entry.sized, metrics: entry.metrics });
+        set.items.push({ label: entry.name, ts: entry.ts, ms: entry.ms ?? null, wallMs, deltaSliders: delta, sized: entry.sized, metrics: entry.metrics, thumbs: entry.thumbs || null });
         archiveStore.touch(set);
         renderAll();
         // Tell the main window a result landed (it re-reads the shared store).
@@ -4518,7 +4555,9 @@ export class SimUi {
     copyBtn.addEventListener("click", async () => {
       // Export the FLATTENED view: measurement sets expand to classic full entries
       // (base + delta merged), so downstream tools consume the same shape as ever.
-      const json = JSON.stringify(flattenArchive(load()), null, 2);
+      // Thumbnails are STRIPPED — images are for the archive UI, not the clipboard
+      // (a 100-run campaign of base64 images would swamp the paste).
+      const json = JSON.stringify(flattenArchive(load()).map(({ thumbs, ...rest }) => rest), null, 2);
       const done = (ok) => { copyBtn.textContent = ok ? "✓ Copied" : "✕ Copy failed"; setTimeout(() => { copyBtn.textContent = "📋 Copy results JSON"; }, 1500); };
       try {
         await navigator.clipboard.writeText(json);
@@ -5658,7 +5697,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=5.29");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=5.30");
     let result = null;
     try {
       result = await solveBandDistribution({
