@@ -9,15 +9,16 @@
 // Loaded as an ES module worker:
 //   new Worker(new URL("./simWorker.js", import.meta.url), { type: "module" })
 
-import { SimSolarSystem } from "./simSolarSystem.js?v=5.24";
-import { SimSatellites } from "./simSatellites.js?v=5.24";
-import { SimLinkBudget } from "./simLinkBudget.js?v=5.24";
-import { SimNetwork } from "./simNetwork.js?v=5.24";
-import { SimDeployment } from "./simDeployment.js?v=5.24";
-import { SimMissionValidator } from "./simMissionValidator.js?v=5.24";
-import { minOf } from "./simMath.js?v=5.24";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.24";
-import { planetRingRequiredMbps, junctionDeficits } from "./slidersData.js?v=5.24";
+import { SimSolarSystem } from "./simSolarSystem.js?v=5.27";
+import { SimSatellites } from "./simSatellites.js?v=5.27";
+import { SimLinkBudget } from "./simLinkBudget.js?v=5.27";
+import { SimNetwork } from "./simNetwork.js?v=5.27";
+import { SimDeployment } from "./simDeployment.js?v=5.27";
+import { SimMissionValidator } from "./simMissionValidator.js?v=5.27";
+import { minOf } from "./simMath.js?v=5.27";
+import { buildFlowSummary } from "./simMaxFlow.js?v=5.27";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.27";
+import { planetRingRequiredMbps, junctionDeficits } from "./slidersData.js?v=5.27";
 
 // --- State (initialized lazily on the first compute) ---
 let simLinkBudget = null;
@@ -564,32 +565,13 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
     flowError = fullNetworkData.error || null;
     maxFlowGbps = flowError ? 0 : (fullNetworkData.maxFlowGbps || 0);
     if (!fullNetworkData.error) latencyData = simNetwork.calculateLatencies(fullNetworkData);
-    // Flow-card aggregates (ground-link flows + junction flow bundles per side): the
-    // links they derive from never cross postMessage in sweeps, so summarize here.
+    // Flow-card aggregates (ground/junction flows + ROUTE-USE accounting): the links
+    // they derive from never cross postMessage in sweeps, so summarize here. Shared
+    // with the live capture via buildFlowSummary so every archived flow result —
+    // sweep, paper plan, or live — records the same shape, including how many of
+    // the capacity step's routes carried flow and at what fraction of capacity.
     if (!flowError && Array.isArray(fullNetworkData.links)) {
-      const links = fullNetworkData.links;
-      const isRelay = (id) => id && id.startsWith("ring_") && !id.startsWith("ring_earth") && !id.startsWith("ring_mars");
-      const ground = (planet) => {
-        const flows = links.filter((l) => l.fromId === planet || l.toId === planet)
-          .map((l) => (l.gbpsFlow || 0) * 1000).sort((a, b) => b - a);
-        return { side1: Math.round(flows[0] || 0), side2: Math.round(flows[1] || 0), links: flows.length };
-      };
-      const jct = (prefix) => {
-        let sum = 0, n = 0, min = Infinity, max = 0;
-        for (const l of links) {
-          const isJ = (l.fromId.startsWith(prefix) && isRelay(l.toId)) || (l.toId.startsWith(prefix) && isRelay(l.fromId));
-          if (!isJ) continue;
-          const f = (l.gbpsFlow || 0) * 1000;
-          if (f <= 0) continue;
-          sum += f; n++;
-          if (f < min) min = f;
-          if (f > max) max = f;
-        }
-        return { sumMbps: Math.round(sum), links: n, min: n ? Math.round(min) : 0,
-                 avg: n ? Math.round(sum / n) : 0, max: Math.round(max) };
-      };
-      flowSummary = { maxFlowGbps, earthGround: ground("Earth"), marsGround: ground("Mars"),
-                      earthJunction: jct("ring_earth"), marsJunction: jct("ring_mars") };
+      flowSummary = buildFlowSummary(fullNetworkData.links, maxFlowGbps, routeSummary?.routes);
     }
   }
 

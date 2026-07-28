@@ -1,23 +1,24 @@
 // simMain.js
 
-import { SimUi } from "./simUi.js?v=5.24";
-import { SimTime } from "./simTime.js?v=5.24";
-import { SimSolarSystem } from "./simSolarSystem.js?v=5.24";
-import { SimSatellites } from "./simSatellites.js?v=5.24";
-import { SimDeployment } from "./simDeployment.js?v=5.24";
-import { SimMissionValidator } from "./simMissionValidator.js?v=5.24";
-import { SimLinkBudget } from "./simLinkBudget.js?v=5.24";
-import { SimNetwork } from "./simNetwork.js?v=5.24";
+import { SimUi } from "./simUi.js?v=5.27";
+import { SimTime } from "./simTime.js?v=5.27";
+import { SimSolarSystem } from "./simSolarSystem.js?v=5.27";
+import { SimSatellites } from "./simSatellites.js?v=5.27";
+import { SimDeployment } from "./simDeployment.js?v=5.27";
+import { SimMissionValidator } from "./simMissionValidator.js?v=5.27";
+import { SimLinkBudget } from "./simLinkBudget.js?v=5.27";
+import { SimNetwork } from "./simNetwork.js?v=5.27";
 // Import both SimDisplay implementations with unique names
-import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=5.24";
-import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=5.24";
-import { generateReport } from "./reportGenerator.js?v=5.24";
-import { SIM_CONSTANTS } from "./simConstants.js?v=5.24";
-import { minOf, maxOf } from "./simMath.js?v=5.24";
-import { SimFlightController } from "./simFlightController.js?v=5.24";
-import { SimProbeController } from "./simProbeController.js?v=5.24";
-import { findDepartureWindows } from "./simTransfer.js?v=5.24";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.24";
+import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=5.27";
+import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=5.27";
+import { generateReport } from "./reportGenerator.js?v=5.27";
+import { SIM_CONSTANTS } from "./simConstants.js?v=5.27";
+import { minOf, maxOf } from "./simMath.js?v=5.27";
+import { routeFlowUtilization } from "./simMaxFlow.js?v=5.27";
+import { SimFlightController } from "./simFlightController.js?v=5.27";
+import { SimProbeController } from "./simProbeController.js?v=5.27";
+import { findDepartureWindows } from "./simTransfer.js?v=5.27";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.27";
 
 export class SimMain {
   // Clamp argument to [-1, 1] to prevent NaN from Math.asin domain errors
@@ -70,7 +71,7 @@ export class SimMain {
     if (typeof window !== "undefined") window.simMain = this;
 
     // --- Worker + triple-buffered window cache (-1/0/+1) ---
-    this.simWorker = new Worker(new URL("./simWorker.js?v=5.24", import.meta.url), { type: "module" });
+    this.simWorker = new Worker(new URL("./simWorker.js?v=5.27", import.meta.url), { type: "module" });
     this.simWorker.onmessage = (event) => this.handleWorkerMessage(event);
     this.simWorker.onerror = (event) => console.error("[Marslink] Worker error:", event.message);
     this.simWorker.postMessage({ type: "init" });
@@ -815,7 +816,7 @@ export class SimMain {
   _flowPathSvg(d) {
     const { rs, earthInring, marsInring, earthFlow, marsFlow, earthFlowTotal, marsFlowTotal,
             earthCapTotal, marsCapTotal, actualFlowMbps, earthActive, marsActive,
-            relayRingCount, bottleneckLine, eJct, mJct, eJctFlowStat, mJctFlowStat,
+            relayRingCount, bottleneckLine, eJct, mJct, eJctFlowStat, mJctFlowStat, routeUse,
             fmtMbps, fmtRange, fmtNum, pct } = d;
     // Junction label: active links, total flow, utilization vs junction capacity,
     // and min|avg|max flow per active link.
@@ -837,7 +838,11 @@ export class SimMain {
         earthJunction: jctFlowLabel(eJctFlowStat, eJct) || (earthActive != null ? `${earthActive} routes active` : `ring \u2192 relay`),
         earthJunction2: jctFlowLabel2(eJctFlowStat),
         relayMain: rs ? fmtMbps(actualFlowMbps) : null,
-        relayL1: rs ? `${relayRingCount} rings, ${rs.routeCount} routes` : null,
+        relayL1: rs
+          ? (routeUse
+              ? `${relayRingCount} rings · ${routeUse.routesUsed}/${routeUse.routeCount} routes used · ${routeUse.utilizationPct}% of route cap`
+              : `${relayRingCount} rings, ${rs.routeCount} routes`)
+          : null,
         relayL2: rs ? fmtRange(rs.minThroughput, rs.avgThroughput, rs.maxThroughput) : null,
         relayL3: rs ? `${(rs.minLatency / 60).toFixed(1)}|${(rs.avgLatency / 60).toFixed(1)}|${(rs.maxLatency / 60).toFixed(1)} min` : null,
         marsJunction: jctFlowLabel(mJctFlowStat, mJct) || (marsActive != null ? `${marsActive} routes active` : `relay \u2192 ring`),
@@ -1963,7 +1968,15 @@ export class SimMain {
         }
         const adaptedFlowPct = rs && rs.totalThroughput > 0 ? pct(actualFlowMbps, rs.totalThroughput) : "";
 
-        html += `<div class="metric-sub">${pct(actualFlowMbps, rs ? rs.totalThroughput : earthCapTotal)} of capacity</div>`;
+        // Route-use accounting (the balance metric): how many of the capacity
+        // step's routes carry flow, and how loaded they are against their quoted
+        // capacities. A balanced system (relay = bottleneck) reads 100% on both;
+        // unused routes localize upstream starvation, >100% means max-flow found
+        // lattice paths the route walker didn't quote.
+        const routeUse = networkData?.links ? routeFlowUtilization(rs?.routes, networkData.links) : null;
+        this._lastRouteUse = routeUse;
+
+        html += `<div class="metric-sub">${pct(actualFlowMbps, rs ? rs.totalThroughput : earthCapTotal)} of capacity${routeUse ? ` · routes ${routeUse.routesUsed}/${routeUse.routeCount} used · ${routeUse.utilizationPct}% of route capacity` : ""}</div>`;
 
         // Toggle for flow diagram (closed \u2192 compact ASCII \u2192 expanded SVG)
         html += `<div class="metric-toggle" id="flow-toggle">`;
@@ -1997,6 +2010,7 @@ export class SimMain {
         if (rs) html += `${pipes}  ${fmtMbps(actualFlowMbps)}, ${relayFlowPct}\n`;
         html += jctLine(mJct, `${fmtMbps(mJctFlow)}, ${pct(mJctFlow, mJct.sum)}`);
         html += planetLine(marsFlow.side1, "\u2022", marsFlow.side2, `${fmtMbps(marsFlowTotal)}, ${pct(marsFlowTotal, marsCapTotal)}`, 2);
+        if (routeUse) html += `routes ${routeUse.routesUsed}/${routeUse.routeCount} used \u00b7 ${routeUse.utilizationPct}% of route capacity (${routeUse.minUtilPct}|${routeUse.avgUtilPct}|${routeUse.maxUtilPct}%)\n`;
         html += `</pre>`;
 
         // Expanded flow diagram \u2014 vertical Earth\u2192relay\u2192Mars data path as SVG, the same
@@ -2006,7 +2020,7 @@ export class SimMain {
         html += this._flowPathSvg({
           rs, earthInring, marsInring, earthFlow, marsFlow, earthFlowTotal, marsFlowTotal,
           earthCapTotal, marsCapTotal, actualFlowMbps, earthActive, marsActive,
-          relayRingCount, bottleneckLine, eJct, mJct, eJctFlowStat, mJctFlowStat,
+          relayRingCount, bottleneckLine, eJct, mJct, eJctFlowStat, mJctFlowStat, routeUse,
           fmtMbps, fmtRange, fmtNum, pct,
         });
         html += `</div>`;

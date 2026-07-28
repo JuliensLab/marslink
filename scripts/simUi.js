@@ -5,15 +5,16 @@ import {
   junctionDeficits,
   mapSliderValueToUserFacing as mapToUserFacing,
   mapUserFacingToSliderValue as mapToSliderInternal,
-} from "./slidersData.js?v=5.25";
-import { LukashianClock } from "./lukashianTime.js?v=5.25";
-import { wireAuthUi } from "./auth.js?v=5.25";
-import { SensitivityPool } from "./sensitivityPool.js?v=5.25";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.25";
-import { minOf } from "./simMath.js?v=5.25";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.25";
-import { archiveStore } from "./simArchiveStore.js?v=5.25";
-import { PAPER_PLAN, PLAN_VERSION, BASE_DOC } from "./paperPlan.js?v=5.25";
+} from "./slidersData.js?v=5.27";
+import { LukashianClock } from "./lukashianTime.js?v=5.27";
+import { wireAuthUi } from "./auth.js?v=5.27";
+import { SensitivityPool } from "./sensitivityPool.js?v=5.27";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.27";
+import { minOf } from "./simMath.js?v=5.27";
+import { buildFlowSummary } from "./simMaxFlow.js?v=5.27";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.27";
+import { archiveStore } from "./simArchiveStore.js?v=5.27";
+import { PAPER_PLAN, PLAN_VERSION, BASE_DOC } from "./paperPlan.js?v=5.27";
 
 export class SimUi {
   constructor(simMain) {
@@ -2274,7 +2275,12 @@ export class SimUi {
                 latencyData: flowFresh ? sm.lastLatencyData : null,
                 maxFlowGbps: flowFresh ? sm.maxFlowGbps : null,
                 flowError: needFlow && !settled ? "live flow did not settle" : null,
-                flowSummary: null,
+                // Same flow-card shape the worker scenarios record (ground/junction
+                // flows + route-use accounting) — live flow entries used to archive
+                // no flow card at all.
+                flowSummary: flowFresh && Array.isArray(sm.networkData?.links)
+                  ? buildFlowSummary(sm.networkData.links, sm.maxFlowGbps || 0, sm.routeSummary?.routes)
+                  : null,
                 resultTreesData: sm.resultTrees || [],
                 sizedConfig,
               };
@@ -3437,12 +3443,14 @@ export class SimUi {
       ]);
     }
     if (fc) {
+      const ru = fc.routeUse;
       html += pre("Flow", [
         `${planet(fc.earthGround, "●")}  Earth ${fmtM((fc.earthGround?.side1 || 0) + (fc.earthGround?.side2 || 0))}`,
         fc.earthJunction ? `${bar(":")}  ${fmtM(fc.earthJunction.sumMbps)} · ${fc.earthJunction.links} links · ${r3(fc.earthJunction)} per link` : null,
         `${bar("│")}  max-flow ${fc.maxFlowGbps != null ? (fc.maxFlowGbps >= 1 ? fc.maxFlowGbps.toFixed(2) + " Gbps" : Math.round(fc.maxFlowGbps * 1000) + " Mbps") : "—"}`,
         fc.marsJunction ? `${bar(":")}  ${fmtM(fc.marsJunction.sumMbps)} · ${fc.marsJunction.links} links · ${r3(fc.marsJunction)} per link` : null,
         `${planet(fc.marsGround, "•")}  Mars ${fmtM((fc.marsGround?.side1 || 0) + (fc.marsGround?.side2 || 0))}`,
+        ru ? `routes ${ru.routesUsed}/${ru.routeCount} used · ${ru.utilizationPct}% of route capacity (${ru.minUtilPct}|${ru.avgUtilPct}|${ru.maxUtilPct}%)` : null,
       ]);
     } else {
       html += `<div class="muted" style="font-size:11px; margin-top:4px;">flow: not computed for this run</div>`;
@@ -5590,7 +5598,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=5.25");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=5.27");
     let result = null;
     try {
       result = await solveBandDistribution({
