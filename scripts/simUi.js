@@ -5,17 +5,17 @@ import {
   junctionDeficits,
   mapSliderValueToUserFacing as mapToUserFacing,
   mapUserFacingToSliderValue as mapToSliderInternal,
-} from "./slidersData.js?v=5.30";
-import { LukashianClock } from "./lukashianTime.js?v=5.30";
-import { wireAuthUi } from "./auth.js?v=5.30";
-import { SensitivityPool } from "./sensitivityPool.js?v=5.30";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.30";
-import { minOf } from "./simMath.js?v=5.30";
-import { buildFlowSummary } from "./simMaxFlow.js?v=5.30";
-import { linksToThumbData, renderThumbDataURL } from "./simThumbs.js?v=5.30";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.30";
-import { archiveStore } from "./simArchiveStore.js?v=5.30";
-import { PAPER_PLAN, PLAN_VERSION, BASE_DOC } from "./paperPlan.js?v=5.30";
+} from "./slidersData.js?v=5.32";
+import { LukashianClock } from "./lukashianTime.js?v=5.32";
+import { wireAuthUi } from "./auth.js?v=5.32";
+import { SensitivityPool } from "./sensitivityPool.js?v=5.32";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.32";
+import { minOf } from "./simMath.js?v=5.32";
+import { buildFlowSummary } from "./simMaxFlow.js?v=5.32";
+import { linksToThumbData, renderThumbDataURL } from "./simThumbs.js?v=5.32";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.32";
+import { archiveStore } from "./simArchiveStore.js?v=5.32";
+import { PAPER_PLAN, PLAN_VERSION, BASE_DOC } from "./paperPlan.js?v=5.32";
 
 export class SimUi {
   constructor(simMain) {
@@ -4575,6 +4575,65 @@ export class SimUi {
       }
     });
 
+    // Download every stored thumbnail as one zip — the path from IndexedDB to
+    // the hard drive. Entirely client-side: jszip (vendored) assembles the
+    // archive in memory and a Blob download saves it to the browser's Downloads
+    // folder. Folder per measurement set, two images per run; the JSON export
+    // stays image-free by design.
+    const zipBtn = document.createElement("button");
+    zipBtn.type = "button"; zipBtn.className = "btn";
+    zipBtn.style.cssText = "width:100%;";
+    zipBtn.textContent = "🖼 Download images (zip)";
+    zipBtn.title = "Save every measurement's capacity/flow thumbnails as a zip (one folder per measurement set). Client-side — lands in your Downloads.";
+    const loadJSZip = () => new Promise((resolve, reject) => {
+      if (window.JSZip) return resolve(window.JSZip);
+      const s = document.createElement("script");
+      s.src = "scripts/imported/jszip/jszip.min.js";
+      s.onload = () => (window.JSZip ? resolve(window.JSZip) : reject(new Error("JSZip did not load")));
+      s.onerror = () => reject(new Error("could not load jszip"));
+      document.head.appendChild(s);
+    });
+    zipBtn.addEventListener("click", async () => {
+      const orig = zipBtn.textContent;
+      const fail = (msg) => { zipBtn.textContent = `✕ ${msg}`; setTimeout(() => { zipBtn.textContent = orig; }, 2500); };
+      try {
+        zipBtn.textContent = "… collecting images";
+        const safe = (s) => String(s ?? "").replace(/[^a-zA-Z0-9 ._·×|-]+/g, "_").replace(/\s+/g, " ").trim().slice(0, 120);
+        const extOf = (u) => (u.startsWith("data:image/webp") ? "webp" : u.startsWith("data:image/png") ? "png" : "jpg");
+        const files = []; // {path, base64}
+        const addPair = (folder, label, thumbs) => {
+          if (!thumbs) return;
+          for (const [kind, url] of [["capacity", thumbs.cap], ["flow", thumbs.flow]]) {
+            if (!url) continue;
+            files.push({ path: `${folder}/${safe(label)} · ${kind}.${extOf(url)}`, base64: url.split(",")[1] });
+          }
+        };
+        for (const e of load()) {
+          if (e.kind === "set" && Array.isArray(e.items)) {
+            e.items.forEach((it, i) => addPair(safe(e.name), `${String(i + 1).padStart(3, "0")} ${it.label}`, it.thumbs));
+          } else addPair("single entries", e.name, e.thumbs);
+        }
+        if (!files.length) return fail("no images in the archive yet");
+        zipBtn.textContent = `… zipping ${files.length} images`;
+        const JSZip = await loadJSZip();
+        const zip = new JSZip();
+        for (const f of files) zip.file(f.path, f.base64, { base64: true });
+        const blob = await zip.generateAsync({ type: "blob" });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = `marslink-images-${new Date().toISOString().slice(0, 10)}.zip`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+        zipBtn.textContent = `✓ ${files.length} images · ${blob.size >= 1048576 ? (blob.size / 1048576).toFixed(1) + " MB" : Math.round(blob.size / 1024) + " KB"}`;
+        setTimeout(() => { zipBtn.textContent = orig; }, 3000);
+      } catch (e2) {
+        console.error("[Archive] image zip failed", e2);
+        fail("zip failed — see console");
+      }
+    });
+
     // x-axis toggle: express the charts against ring count or satellite count.
     const mkLabel = (t) => { const d = document.createElement("div"); d.style.cssText = "font-size:13px; font-weight:600;"; d.textContent = t; return d; };
     const xToggle = document.createElement("div");
@@ -4706,7 +4765,7 @@ export class SimUi {
     });
     danger.append(dangerTitle, dangerDesc, deleteAllBtn);
 
-    wrap.append(saveBtn, copyBtn, importBtn, importPanel, chartsLabel, xToggle, techRow, legend, chartsWrap, mkLabel("Cost vs capacity"), costVsMbpsWrap, mkLabel("Saved configs"), listEl, danger);
+    wrap.append(saveBtn, copyBtn, zipBtn, importBtn, importPanel, chartsLabel, xToggle, techRow, legend, chartsWrap, mkLabel("Cost vs capacity"), costVsMbpsWrap, mkLabel("Saved configs"), listEl, danger);
     host.appendChild(wrap);
     setXMode(xMode);
     renderAll();
@@ -5697,7 +5756,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=5.30");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=5.32");
     let result = null;
     try {
       result = await solveBandDistribution({
