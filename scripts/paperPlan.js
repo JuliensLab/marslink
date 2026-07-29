@@ -30,7 +30,11 @@
 // correctness guarantee: every measurement drives the real sliders and the
 // live sim, monitorable in the 3D view); geometry grids run live by stepping
 // the main-UI placement sliders per cell.
-export const PLAN_VERSION = 3;
+// v4: baseline pins the fleet cap to 1,000,000 (heavy items — the R→120 fleet
+// tail, 10 Gbps transfer rows — exceed the 100k default and silently truncated
+// with "too many satellites"); baselines also now derive from FACTORY defaults
+// (simUi._factoryDefaults) rather than the runtime-mutated slidersData values.
+export const PLAN_VERSION = 4;
 
 // REPRODUCIBILITY CONTRACT: before each item the runner pins EVERY
 // build-affecting input — all ~120 sliders to their slidersData defaults and
@@ -46,6 +50,8 @@ export const PLAN_VERSION = 3;
 export const BASE_DOC = [
   { key: "laser_technology.improvement-factor", value: 7, shown: "×128 (2^7)",
     why: "The paper's reference laser-technology factor — every quoted capacity is at ×128 and rescales linearly (§7)." },
+  { key: "simulation.maxSatCount", value: 6, shown: "1,000,000 (10^6)",
+    why: "Fleet cap raised above every item's need (the R→120 fleet tail approaches 3×10⁵ sats; 10 Gbps transfer rows ~10⁵): at the 100k default, heavy items truncate the build (\"too many satellites\") and measure a capped fleet." },
   { key: "relay_type.planet_sizing", value: "auto", shown: "auto",
     why: "Planet rings must be sized BY the measured relay capacity (§11's sizing rule), not left at manual rates." },
   { key: "simulation.planet-placement", value: "Date", shown: "Date",

@@ -9,17 +9,17 @@
 // Loaded as an ES module worker:
 //   new Worker(new URL("./simWorker.js", import.meta.url), { type: "module" })
 
-import { SimSolarSystem } from "./simSolarSystem.js?v=5.37";
-import { SimSatellites } from "./simSatellites.js?v=5.37";
-import { SimLinkBudget } from "./simLinkBudget.js?v=5.37";
-import { SimNetwork } from "./simNetwork.js?v=5.37";
-import { SimDeployment } from "./simDeployment.js?v=5.37";
-import { SimMissionValidator } from "./simMissionValidator.js?v=5.37";
-import { minOf } from "./simMath.js?v=5.37";
-import { buildFlowSummary } from "./simMaxFlow.js?v=5.37";
-import { linksToThumbData } from "./simThumbs.js?v=5.37";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.37";
-import { planetRingRequiredMbps, junctionDeficits } from "./slidersData.js?v=5.37";
+import { SimSolarSystem } from "./simSolarSystem.js?v=5.38";
+import { SimSatellites } from "./simSatellites.js?v=5.38";
+import { SimLinkBudget } from "./simLinkBudget.js?v=5.38";
+import { SimNetwork } from "./simNetwork.js?v=5.38";
+import { SimDeployment } from "./simDeployment.js?v=5.38";
+import { SimMissionValidator } from "./simMissionValidator.js?v=5.38";
+import { minOf } from "./simMath.js?v=5.38";
+import { buildFlowSummary } from "./simMaxFlow.js?v=5.38";
+import { linksToThumbData } from "./simThumbs.js?v=5.38";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.38";
+import { planetRingRequiredMbps, junctionDeficits } from "./slidersData.js?v=5.38";
 
 // --- State (initialized lazily on the first compute) ---
 let simLinkBudget = null;
@@ -530,6 +530,10 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
   const planets = Object.values(planetsObj);
   const satellites = simSatellites.updateSatellitesPositions(date);
   const satellitesCount = satellites.length;
+  // Fleet-cap truncation must ride the result: a capped build measures a
+  // partial constellation and its numbers are NOT the configuration's.
+  const satsRequested = simSatellites.requestedSatelliteCount || satellitesCount;
+  const satsTruncated = !!simSatellites.satellitesTruncated;
 
   let missionProfilesData = null, resultTreesData = null;
   try {
@@ -616,6 +620,8 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
     requestId,
     scenarioId,
     satellitesCount,
+    satsRequested,
+    satsTruncated,
     maxFlowGbps,
     thumbData,
     // Solved links (flow-annotated when the flow finished) — opt-in ONLY: the in-process

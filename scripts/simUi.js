@@ -5,17 +5,17 @@ import {
   junctionDeficits,
   mapSliderValueToUserFacing as mapToUserFacing,
   mapUserFacingToSliderValue as mapToSliderInternal,
-} from "./slidersData.js?v=5.37";
-import { LukashianClock } from "./lukashianTime.js?v=5.37";
-import { wireAuthUi } from "./auth.js?v=5.37";
-import { SensitivityPool } from "./sensitivityPool.js?v=5.37";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.37";
-import { minOf } from "./simMath.js?v=5.37";
-import { buildFlowSummary } from "./simMaxFlow.js?v=5.37";
-import { linksToThumbData, renderThumbDataURL } from "./simThumbs.js?v=5.37";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.37";
-import { archiveStore } from "./simArchiveStore.js?v=5.37";
-import { PAPER_PLAN, PLAN_VERSION, BASE_DOC } from "./paperPlan.js?v=5.37";
+} from "./slidersData.js?v=5.38";
+import { LukashianClock } from "./lukashianTime.js?v=5.38";
+import { wireAuthUi } from "./auth.js?v=5.38";
+import { SensitivityPool } from "./sensitivityPool.js?v=5.38";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.38";
+import { minOf } from "./simMath.js?v=5.38";
+import { buildFlowSummary } from "./simMaxFlow.js?v=5.38";
+import { linksToThumbData, renderThumbDataURL } from "./simThumbs.js?v=5.38";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.38";
+import { archiveStore } from "./simArchiveStore.js?v=5.38";
+import { PAPER_PLAN, PLAN_VERSION, BASE_DOC } from "./paperPlan.js?v=5.38";
 
 export class SimUi {
   constructor(simMain) {
@@ -2103,6 +2103,9 @@ export class SimUi {
                 ringCount: s.resolvedRingCount,
                 routeCount: s.routeCount ?? null,
                 satCount: res.satellitesCount || 0,
+                // Cap-truncated builds are flagged: their numbers describe a capped
+                // fleet, not the configuration (raise simulation.maxSatCount).
+                ...(res.satsTruncated ? { satsTruncated: true, satsRequested: res.satsRequested || null } : {}),
                 // Population split + per-ring counts (earth/mars/each relay ring):
                 // theory's S is relay-only, so archives must carry the separation.
                 earthSats: metrics.earthSats, marsSats: metrics.marsSats, relaySats: metrics.relaySats,
@@ -2333,6 +2336,8 @@ export class SimUi {
               }
               const res = {
                 satellitesCount: sm.satellitesCount || 0,
+                satsRequested: sm.simSatellites?.requestedSatelliteCount || sm.satellitesCount || 0,
+                satsTruncated: !!sm.simSatellites?.satellitesTruncated,
                 capacityInfo: sm.capacityInfo ? JSON.parse(JSON.stringify(sm.capacityInfo)) : null,
                 routeSummary: sm.routeSummary ? JSON.parse(JSON.stringify(sm.routeSummary)) : null,
                 latencyData: flowFresh ? sm.lastLatencyData : null,
@@ -2511,6 +2516,7 @@ export class SimUi {
                       routeCount: routeCount ?? null,
                       latticeCount: this._latticeTerminals(),
                       satCount: res.satellitesCount || 0,
+                      ...(res.satsTruncated ? { satsTruncated: true, satsRequested: res.satsRequested || null } : {}),
                       earthSats: metrics.earthSats, marsSats: metrics.marsSats, relaySats: metrics.relaySats,
                       jctSats: metrics.jctSats, junctionRings: metrics.junctionRings, junctionRingsMars: metrics.junctionRingsMars,
                       ringSats: metrics.ringSats,
@@ -4202,6 +4208,7 @@ export class SimUi {
         ringCount: parseFloat(this.sliders.relay_type?.ringcount?.value ?? this.slidersData.relay_type.ringcount.value) || 0,
         latticeCount: this._latticeTerminals(),
         satCount: sm.satellitesCount || costs?.satellitesCount || 0,
+        ...(sm.simSatellites?.satellitesTruncated ? { satsTruncated: true, satsRequested: sm.simSatellites.requestedSatelliteCount || null } : {}),
         gbps: Math.round(gbps * 1000) / 1000,
         latMinMin: lat && Number.isFinite(lat.bestLatency) ? Math.round((lat.bestLatency / 60) * 10) / 10 : null,
         latP50Min: lat && Number.isFinite(lat.medianLatency) ? Math.round((lat.medianLatency / 60) * 10) / 10 : null,
@@ -5898,7 +5905,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=5.37");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=5.38");
     let result = null;
     try {
       result = await solveBandDistribution({
