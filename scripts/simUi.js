@@ -5,17 +5,17 @@ import {
   junctionDeficits,
   mapSliderValueToUserFacing as mapToUserFacing,
   mapUserFacingToSliderValue as mapToSliderInternal,
-} from "./slidersData.js?v=5.36";
-import { LukashianClock } from "./lukashianTime.js?v=5.36";
-import { wireAuthUi } from "./auth.js?v=5.36";
-import { SensitivityPool } from "./sensitivityPool.js?v=5.36";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.36";
-import { minOf } from "./simMath.js?v=5.36";
-import { buildFlowSummary } from "./simMaxFlow.js?v=5.36";
-import { linksToThumbData, renderThumbDataURL } from "./simThumbs.js?v=5.36";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.36";
-import { archiveStore } from "./simArchiveStore.js?v=5.36";
-import { PAPER_PLAN, PLAN_VERSION, BASE_DOC } from "./paperPlan.js?v=5.36";
+} from "./slidersData.js?v=5.37";
+import { LukashianClock } from "./lukashianTime.js?v=5.37";
+import { wireAuthUi } from "./auth.js?v=5.37";
+import { SensitivityPool } from "./sensitivityPool.js?v=5.37";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.37";
+import { minOf } from "./simMath.js?v=5.37";
+import { buildFlowSummary } from "./simMaxFlow.js?v=5.37";
+import { linksToThumbData, renderThumbDataURL } from "./simThumbs.js?v=5.37";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.37";
+import { archiveStore } from "./simArchiveStore.js?v=5.37";
+import { PAPER_PLAN, PLAN_VERSION, BASE_DOC } from "./paperPlan.js?v=5.37";
 
 export class SimUi {
   constructor(simMain) {
@@ -2359,11 +2359,23 @@ export class SimUi {
                     const f = fl.get(l.fromId + "|" + l.toId) ?? fl.get(l.toId + "|" + l.fromId);
                     return f ? { ...l, gbpsFlow: f } : l;
                   });
+                  // Positions come from the snapshot taken when these links
+                  // arrived — NOT from the live fleet, which may already belong
+                  // to the next scenario (same names, different phasing) and
+                  // would draw the links as a swirl of mismatched chords.
+                  const snap = sm.lastPossibleLinkPositions;
                   const pos = new Map();
-                  for (const st of sm.simSatellites?.satellites || []) if (st && st.name && st.position) pos.set(st.name, st.position);
                   const planets = sm.simSolarSystem?.getSolarSystemData?.().planets || [];
-                  for (const p of planets) if (p && p.name && p.position) pos.set(p.name, p.position);
-                  return linksToThumbData(links, (id) => pos.get(id), planets) || undefined;
+                  if (snap) {
+                    for (const k in snap) pos.set(k, snap[k]);
+                  } else {
+                    for (const st of sm.simSatellites?.satellites || []) if (st && st.name && st.position) pos.set(st.name, st.position);
+                    for (const p of planets) if (p && p.name && p.position) pos.set(p.name, p.position);
+                  }
+                  // Planet dots + orbit elements ride the planet objects; positions
+                  // are overridden from the same snapshot for epoch consistency.
+                  const planetsForThumb = planets.map((p) => (snap && p && snap[p.name] ? { ...p, position: snap[p.name] } : p));
+                  return linksToThumbData(links, (id) => pos.get(id), planetsForThumb) || undefined;
                 })(),
                 resultTreesData: sm.resultTrees || [],
                 sizedConfig,
@@ -5886,7 +5898,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=5.36");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=5.37");
     let result = null;
     try {
       result = await solveBandDistribution({

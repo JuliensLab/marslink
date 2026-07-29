@@ -1,24 +1,24 @@
 // simMain.js
 
-import { SimUi } from "./simUi.js?v=5.36";
-import { SimTime } from "./simTime.js?v=5.36";
-import { SimSolarSystem } from "./simSolarSystem.js?v=5.36";
-import { SimSatellites } from "./simSatellites.js?v=5.36";
-import { SimDeployment } from "./simDeployment.js?v=5.36";
-import { SimMissionValidator } from "./simMissionValidator.js?v=5.36";
-import { SimLinkBudget } from "./simLinkBudget.js?v=5.36";
-import { SimNetwork } from "./simNetwork.js?v=5.36";
+import { SimUi } from "./simUi.js?v=5.37";
+import { SimTime } from "./simTime.js?v=5.37";
+import { SimSolarSystem } from "./simSolarSystem.js?v=5.37";
+import { SimSatellites } from "./simSatellites.js?v=5.37";
+import { SimDeployment } from "./simDeployment.js?v=5.37";
+import { SimMissionValidator } from "./simMissionValidator.js?v=5.37";
+import { SimLinkBudget } from "./simLinkBudget.js?v=5.37";
+import { SimNetwork } from "./simNetwork.js?v=5.37";
 // Import both SimDisplay implementations with unique names
-import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=5.36";
-import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=5.36";
-import { generateReport } from "./reportGenerator.js?v=5.36";
-import { SIM_CONSTANTS } from "./simConstants.js?v=5.36";
-import { minOf, maxOf } from "./simMath.js?v=5.36";
-import { routeFlowUtilization } from "./simMaxFlow.js?v=5.36";
-import { SimFlightController } from "./simFlightController.js?v=5.36";
-import { SimProbeController } from "./simProbeController.js?v=5.36";
-import { findDepartureWindows } from "./simTransfer.js?v=5.36";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.36";
+import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=5.37";
+import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=5.37";
+import { generateReport } from "./reportGenerator.js?v=5.37";
+import { SIM_CONSTANTS } from "./simConstants.js?v=5.37";
+import { minOf, maxOf } from "./simMath.js?v=5.37";
+import { routeFlowUtilization } from "./simMaxFlow.js?v=5.37";
+import { SimFlightController } from "./simFlightController.js?v=5.37";
+import { SimProbeController } from "./simProbeController.js?v=5.37";
+import { findDepartureWindows } from "./simTransfer.js?v=5.37";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.37";
 
 export class SimMain {
   // Clamp argument to [-1, 1] to prevent NaN from Math.asin domain errors
@@ -71,7 +71,7 @@ export class SimMain {
     if (typeof window !== "undefined") window.simMain = this;
 
     // --- Worker + triple-buffered window cache (-1/0/+1) ---
-    this.simWorker = new Worker(new URL("./simWorker.js?v=5.36", import.meta.url), { type: "module" });
+    this.simWorker = new Worker(new URL("./simWorker.js?v=5.37", import.meta.url), { type: "module" });
     this.simWorker.onmessage = (event) => this.handleWorkerMessage(event);
     this.simWorker.onerror = (event) => console.error("[Marslink] Worker error:", event.message);
     this.simWorker.postMessage({ type: "init" });
@@ -2315,6 +2315,17 @@ export class SimMain {
     this.lastLatencyData = result.latencyData || null; // surfaced to the archive metric capture
     // Surfaced to the live thumbnail capture (top-down links image at archive time).
     this.lastPossibleLinks = result.possibleLinks || null;
+    // Position SNAPSHOT taken the moment these links arrive (plain numbers, not
+    // object references): the live thumb capture runs later, and by then a sweep
+    // may already have rebuilt the fleet for its NEXT scenario — same satellite
+    // names, different phasing — which drew archived thumbnails as a swirl of
+    // mismatched chords. Links and positions must come from the same tick.
+    if (this.lastPossibleLinks && this.lastPossibleLinks.length) {
+      const snap = {};
+      for (const s of this.simSatellites?.satellites || []) if (s && s.name && s.position) snap[s.name] = { x: s.position.x, y: s.position.y };
+      for (const p of this.simSolarSystem?.getSolarSystemData?.().planets || []) if (p && p.name && p.position) snap[p.name] = { x: p.position.x, y: p.position.y };
+      this.lastPossibleLinkPositions = snap;
+    } else this.lastPossibleLinkPositions = null;
     this.maxFlowGbps = result.networkData ? result.networkData.maxFlowGbps || 0 : 0;
     this.capacityInfo = result.capacityInfo || null;
     this.routeSummary = result.routeSummary || null;

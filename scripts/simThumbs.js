@@ -16,6 +16,8 @@
 // STRIPPED from the copy-paste JSON export — images leave via the archive UI,
 // not the clipboard.
 
+import { positionFromSolarAngle } from "./simOrbits.js?v=5.37";
+
 /**
  * Compact geometry for the two thumbnails: per link [x1,y1,x2,y2,capMbps,flowMbps]
  * flattened into one numeric array (ecliptic-plane AU; the top-down view is the
@@ -43,7 +45,29 @@ export function linksToThumbData(links, posOf, planets) {
     const p = (planets || []).find((q) => q && q.name === name)?.position;
     return p ? [p.x, p.y] : null;
   };
-  return { seg, earth: P("Earth"), mars: P("Mars"), stride };
+  return { seg, earth: P("Earth"), mars: P("Mars"), stride, orbits: orbitGuides(planets) };
+}
+
+/**
+ * True orbit polylines for the Earth/Mars guides — the planets' actual ellipses
+ * (from their orbital elements, which ride the planet objects), not the e = 0
+ * circles the renderer previously drew at the semi-major axes. Flat [x0,y0,x1,y1…]
+ * per planet, ~3 significant digits; absent (renderer falls back to circles)
+ * when the elements are missing.
+ */
+export function orbitGuides(planets) {
+  const out = {};
+  for (const p of planets || []) {
+    if (!p || (p.name !== "Earth" && p.name !== "Mars")) continue;
+    if (!(p.a > 0) || p.e === undefined) continue;
+    const pts = [];
+    for (let ang = 0; ang <= 360; ang += 4) {
+      const q = positionFromSolarAngle(p, ang);
+      if (q && Number.isFinite(q.x) && Number.isFinite(q.y)) pts.push(Math.round(q.x * 1000) / 1000, Math.round(q.y * 1000) / 1000);
+    }
+    if (pts.length >= 8) out[p.name === "Earth" ? "earth" : "mars"] = pts;
+  }
+  return (out.earth || out.mars) ? out : undefined;
 }
 
 /**
@@ -65,13 +89,26 @@ export function renderThumbDataURL(td, mode, size = 480) {
   const X = (x) => size / 2 + x * s;
   const Y = (y) => size / 2 - y * s;
 
-  // Faint orbit guides at Earth's and Mars's semi-major axes.
+  // Faint orbit guides — the TRUE Earth/Mars ellipses when the capture recorded
+  // them (td.orbits), else the legacy e = 0 circles at the semi-major axes.
   ctx.strokeStyle = "rgba(255,255,255,0.08)";
   ctx.lineWidth = 1;
-  for (const r of [1.0, 1.524]) {
-    ctx.beginPath();
-    ctx.arc(size / 2, size / 2, r * s, 0, 2 * Math.PI);
-    ctx.stroke();
+  if (td.orbits && (td.orbits.earth || td.orbits.mars)) {
+    for (const key of ["earth", "mars"]) {
+      const pts = td.orbits[key];
+      if (!pts || pts.length < 8) continue;
+      ctx.beginPath();
+      ctx.moveTo(X(pts[0]), Y(pts[1]));
+      for (let i = 2; i < pts.length; i += 2) ctx.lineTo(X(pts[i]), Y(pts[i + 1]));
+      ctx.closePath();
+      ctx.stroke();
+    }
+  } else {
+    for (const r of [1.0, 1.524]) {
+      ctx.beginPath();
+      ctx.arc(size / 2, size / 2, r * s, 0, 2 * Math.PI);
+      ctx.stroke();
+    }
   }
 
   const seg = td.seg;
