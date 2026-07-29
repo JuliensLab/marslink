@@ -1,24 +1,24 @@
 // simMain.js
 
-import { SimUi } from "./simUi.js?v=5.38";
-import { SimTime } from "./simTime.js?v=5.38";
-import { SimSolarSystem } from "./simSolarSystem.js?v=5.38";
-import { SimSatellites } from "./simSatellites.js?v=5.38";
-import { SimDeployment } from "./simDeployment.js?v=5.38";
-import { SimMissionValidator } from "./simMissionValidator.js?v=5.38";
-import { SimLinkBudget } from "./simLinkBudget.js?v=5.38";
-import { SimNetwork } from "./simNetwork.js?v=5.38";
+import { SimUi } from "./simUi.js?v=5.39";
+import { SimTime } from "./simTime.js?v=5.39";
+import { SimSolarSystem } from "./simSolarSystem.js?v=5.39";
+import { SimSatellites } from "./simSatellites.js?v=5.39";
+import { SimDeployment } from "./simDeployment.js?v=5.39";
+import { SimMissionValidator } from "./simMissionValidator.js?v=5.39";
+import { SimLinkBudget } from "./simLinkBudget.js?v=5.39";
+import { SimNetwork } from "./simNetwork.js?v=5.39";
 // Import both SimDisplay implementations with unique names
-import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=5.38";
-import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=5.38";
-import { generateReport } from "./reportGenerator.js?v=5.38";
-import { SIM_CONSTANTS } from "./simConstants.js?v=5.38";
-import { minOf, maxOf } from "./simMath.js?v=5.38";
-import { routeFlowUtilization } from "./simMaxFlow.js?v=5.38";
-import { SimFlightController } from "./simFlightController.js?v=5.38";
-import { SimProbeController } from "./simProbeController.js?v=5.38";
-import { findDepartureWindows } from "./simTransfer.js?v=5.38";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.38";
+import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=5.39";
+import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=5.39";
+import { generateReport } from "./reportGenerator.js?v=5.39";
+import { SIM_CONSTANTS } from "./simConstants.js?v=5.39";
+import { minOf, maxOf } from "./simMath.js?v=5.39";
+import { routeFlowUtilization } from "./simMaxFlow.js?v=5.39";
+import { SimFlightController } from "./simFlightController.js?v=5.39";
+import { SimProbeController } from "./simProbeController.js?v=5.39";
+import { findDepartureWindows } from "./simTransfer.js?v=5.39";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.39";
 
 export class SimMain {
   // Clamp argument to [-1, 1] to prevent NaN from Math.asin domain errors
@@ -71,7 +71,7 @@ export class SimMain {
     if (typeof window !== "undefined") window.simMain = this;
 
     // --- Worker + triple-buffered window cache (-1/0/+1) ---
-    this.simWorker = new Worker(new URL("./simWorker.js?v=5.38", import.meta.url), { type: "module" });
+    this.simWorker = new Worker(new URL("./simWorker.js?v=5.39", import.meta.url), { type: "module" });
     this.simWorker.onmessage = (event) => this.handleWorkerMessage(event);
     this.simWorker.onerror = (event) => console.error("[Marslink] Worker error:", event.message);
     this.simWorker.postMessage({ type: "init" });
@@ -2311,6 +2311,11 @@ export class SimMain {
     // Live-sweep settle probe: full window results (flow included when enabled)
     // increment this — the sweep waits for one AFTER the design stops changing.
     this._windowResultCount = (this._windowResultCount || 0) + 1;
+    // Epoch of the build this result describes (cache entries carry it;
+    // synthetic callers don't — keep the last real value). The live sweep's
+    // stale-record guard compares it against configEpoch: displayed state
+    // whose epoch lags the current build must never be archived as current.
+    if (result.configEpoch !== undefined) this._lastAppliedConfigEpoch = result.configEpoch;
     this.lastNetworkData = result.networkData || null;
     this.lastLatencyData = result.latencyData || null; // surfaced to the archive metric capture
     // Surfaced to the live thumbnail capture (top-down links image at archive time).
@@ -2689,6 +2694,11 @@ export class SimMain {
       this.appliedSatellitesConfig = this.newSatellitesConfig;
       this.newSatellitesConfig = null;
       configJustApplied = true;
+      // The uiConfig actually BUILT (consumed here), as opposed to _lastUiConfig
+      // which is written at push time: a stalled update loop (hidden tab — rAF
+      // paused) leaves _lastUiConfig describing an intent that never became a
+      // fleet. The live sweep's drift guard compares scenarios against this.
+      this._builtUiConfig = this._lastUiConfig;
 
       // Invalidate cache — all windows are stale
       this.configEpoch++;

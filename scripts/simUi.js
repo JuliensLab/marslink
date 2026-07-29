@@ -5,17 +5,17 @@ import {
   junctionDeficits,
   mapSliderValueToUserFacing as mapToUserFacing,
   mapUserFacingToSliderValue as mapToSliderInternal,
-} from "./slidersData.js?v=5.38";
-import { LukashianClock } from "./lukashianTime.js?v=5.38";
-import { wireAuthUi } from "./auth.js?v=5.38";
-import { SensitivityPool } from "./sensitivityPool.js?v=5.38";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.38";
-import { minOf } from "./simMath.js?v=5.38";
-import { buildFlowSummary } from "./simMaxFlow.js?v=5.38";
-import { linksToThumbData, renderThumbDataURL } from "./simThumbs.js?v=5.38";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.38";
-import { archiveStore } from "./simArchiveStore.js?v=5.38";
-import { PAPER_PLAN, PLAN_VERSION, BASE_DOC } from "./paperPlan.js?v=5.38";
+} from "./slidersData.js?v=5.39";
+import { LukashianClock } from "./lukashianTime.js?v=5.39";
+import { wireAuthUi } from "./auth.js?v=5.39";
+import { SensitivityPool } from "./sensitivityPool.js?v=5.39";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.39";
+import { minOf } from "./simMath.js?v=5.39";
+import { buildFlowSummary } from "./simMaxFlow.js?v=5.39";
+import { linksToThumbData, renderThumbDataURL } from "./simThumbs.js?v=5.39";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.39";
+import { archiveStore } from "./simArchiveStore.js?v=5.39";
+import { PAPER_PLAN, PLAN_VERSION, BASE_DOC } from "./paperPlan.js?v=5.39";
 
 export class SimUi {
   constructor(simMain) {
@@ -2087,6 +2087,10 @@ export class SimUi {
             const { scenario, metrics, costs, capacityInfo, rs, cards } = buildScenarioMetrics(res, s.ringCount, s.techUserVal, s.placement.label, s.routeCount);
             resultArray.push({
               scenario,
+              // Live-exec validation verdict (settle + freshness + design-drift
+              // guards): a failed row's numbers describe SOME build, not this
+              // scenario's — kept for diagnosis, never charted as data.
+              ...(res.measureFailed ? { measureFailed: res.measureFailed } : {}),
               liveMetrics: {
                 satellites: res.satellitesCount,
                 costs, metrics,
@@ -2095,10 +2099,11 @@ export class SimUi {
               },
               data: [{ maxFlowGbps: res.maxFlowGbps }],
             });
-            pushChartPoint(scenario, metrics);
+            if (!res.measureFailed) pushChartPoint(scenario, metrics);
             if (doArchive && this._archiveAppend) {
               const gbpsVal = rs && rs.totalThroughput > 0 ? rs.totalThroughput / 1000 : (res.maxFlowGbps || 0);
               const m = {
+                ...(res.measureFailed ? { measureFailed: res.measureFailed } : {}),
                 relayType: s.archiveRelayType,
                 ringCount: s.resolvedRingCount,
                 routeCount: s.routeCount ?? null,
@@ -2139,7 +2144,7 @@ export class SimUi {
                 // around the tangent point (knee/N_max analysis).
                 junctionAngles: res.capacityInfo?.junctionAngles || null,
               };
-              const tag = `sweep: ${s.ringCount ?? "cur"} rings${s.techUserVal != null ? " · " + s.techUserVal + "x" : ""}${s.routeCount != null ? " · " + s.routeCount + " " + secondAxisMeta.unit : ""} · ${s.placement.label}`;
+              const tag = `sweep: ${s.ringCount ?? "cur"} rings${s.techUserVal != null ? " · " + s.techUserVal + "x" : ""}${s.routeCount != null ? " · " + s.routeCount + " " + secondAxisMeta.unit : ""} · ${s.placement.label}${res.measureFailed ? " · ⚠ FAILED" : ""}`;
               // Per-measurement thumbnails: capacity always, flow only when a flow
               // solve actually ran (flowSummary exists iff it did). ~15–40 KB each,
               // IndexedDB-only — the JSON export strips them.
@@ -2259,7 +2264,42 @@ export class SimUi {
               }
               this.applySliderValues(w);
             }
-            const LIVE_SETTLE_MS = Number.isFinite(flowMs) ? Math.min(600000, Math.max(120000, flowMs * 3)) : 600000;
+            // Ceiling derives from the flow budget only when flow actually runs;
+            // capacity-only scenarios get the full 10 min — the ceiling only
+            // bites genuinely slow converges, and those rows now FAIL (below)
+            // instead of archiving whatever state the timeout caught.
+            const LIVE_SETTLE_MS = needFlow && Number.isFinite(flowMs) ? Math.min(600000, Math.max(120000, flowMs * 3)) : 600000;
+            // ── Hidden-tab-proof metronome. The whole live pipeline hangs off
+            //    the rAF update loop (config consume → worker dispatch → sizing
+            //    steps), and browsers pause rAF + collapse timers to ~1/min in
+            //    hidden tabs. The b2-junction-recal failure: with the tab
+            //    backgrounded, every slider apply sat queued for the entire run
+            //    and all five scenarios archived the untouched pre-run build.
+            //    Worker messages are exempt from timer throttling, so a tiny
+            //    Blob-worker tick drives the update loop and the settle polls at
+            //    full rate regardless of tab visibility. ──
+            let liveClockWaiters = [];
+            this._sensLiveClock = (() => {
+              try {
+                const w = new Worker(URL.createObjectURL(new Blob(["setInterval(() => postMessage(0), 300)"], { type: "text/javascript" })));
+                w.onmessage = () => {
+                  try { this.simMain.updateLoop(); } catch (e) { /* keep ticking */ }
+                  const rs = liveClockWaiters;
+                  liveClockWaiters = [];
+                  for (const r of rs) r();
+                };
+                return w;
+              } catch (e) {
+                console.warn("[Sensitivity] live clock worker unavailable — falling back to timers; keep the tab visible for the whole run:", e?.message);
+                return null;
+              }
+            })();
+            // One poll beat: a clock tick when available (safety timeout in case
+            // the clock worker dies), a plain 300 ms timer otherwise.
+            const tick = () => new Promise((resolve) => {
+              const t = setTimeout(resolve, this._sensLiveClock ? 5000 : 300);
+              if (this._sensLiveClock) liveClockWaiters.push(() => { clearTimeout(t); resolve(); });
+            });
             // Settled = converge, then PROVE it. Sizing rounds (links-ready +
             // planet/junction step) only fire after a rebuild, so once a round goes
             // quiet we trigger ONE verification recompute of the same config: if its
@@ -2276,7 +2316,7 @@ export class SimUi {
               let wrAtVerify = 0;
               while (performance.now() - t0 < maxMs) {
                 if (stopRequested) return false;
-                await new Promise((r) => setTimeout(r, 300));
+                await tick();
                 const round = sm._sizingRound || 0;
                 const wr = sm._windowResultCount || 0;
                 if (round === lastRound) {
@@ -2307,23 +2347,63 @@ export class SimUi {
             console.log(`[Sensitivity] live (sliders): ${scenarios.length} scenarios serially`);
             for (const s of scenarios) {
               if (stopRequested) break;
+              const sm = this.simMain;
+              const wr0 = sm._windowResultCount || 0; // window results applied before this scenario's writes
               // 1. Write this scenario's design to the real sliders (the same calls
               //    the enumerator used to build configs — now the live sim runs them).
               applySecondAxisPre(s.routeCount, s.ringCount);
               if (s.ringCount != null) this.applySimpleDefaults(s.ringCount);
+              if (s.techUserVal != null) this.applySliderValues({ "laser_technology.improvement-factor": Math.round(Math.log2(s.techUserVal)) });
               applySecondAxisPost(s.routeCount);
               // Placement is NOT written here: the main Simulation section already
               // holds it (Date, or Geometry + the two angle sliders), fixed for the
               // whole run; s.placement only carries the label for charts/archive.
+              // Consume the queued config NOW (not on the next rAF/clock beat) so
+              // the settle wait starts against this scenario's own build.
+              try { sm.updateLoop(); } catch (e) { /* settle wait proceeds */ }
               // 2. Converge.
               const settled = await waitForLiveSettle(LIVE_SETTLE_MS);
               if (stopRequested) break;
-              if (!settled) console.warn(`[Sensitivity] live scenario ${s.scenarioId} did not settle within ${Math.round(LIVE_SETTLE_MS / 1000)}s — recording current state as-is (flow omitted)`);
+              // 3. Prove the recorded state IS this scenario, and fail the row
+              //    loudly otherwise — timeouts used to archive silently as clean
+              //    ("current state as-is"), which let a stalled tab (rAF paused,
+              //    applies never consumed) archive the untouched PRE-RUN build
+              //    for every scenario: five b2 rate-swept rows, one identical
+              //    stale concentric fleet, "bottleneck: earth ground".
+              //    Freshness: a window result must have been applied for the
+              //    CURRENT build epoch since this scenario's writes. Drift: the
+              //    BUILT config's design inputs — family, ring count, tech
+              //    factor, swept rate/routes — must equal the enumerated
+              //    scenario's (sizing outputs are excluded: the pipeline
+              //    legitimately rewrites planet rates and junction counts).
+              const fresh = !sm.newSatellitesConfig
+                && (sm._windowResultCount || 0) > wr0
+                && sm._lastAppliedConfigEpoch === sm.configEpoch;
+              const drift = [];
+              if (sm._builtUiConfig) {
+                const flown = sm._builtUiConfig;
+                const designKeys = ["relay_type.selected", "relay_type.ringcount", "laser_technology.improvement-factor", "adapted_eccentric_rings.requiredmbpsbetweensats"];
+                if (String(s.uiConfig["adapted_rings.auto_route_count"]) === "no") designKeys.push("adapted_rings.route_count");
+                for (const k of designKeys) {
+                  if (!(k in s.uiConfig) || !(k in flown)) continue;
+                  const a = s.uiConfig[k], b = flown[k];
+                  const na = parseFloat(a), nb = parseFloat(b);
+                  const same = Number.isFinite(na) && Number.isFinite(nb)
+                    ? Math.abs(na - nb) <= Math.max(1e-9, Math.abs(na) * 1e-6)
+                    : String(a) === String(b);
+                  if (!same) drift.push(`${k}: built ${b} ≠ intended ${a}`);
+                }
+              }
+              const failReasons = [];
+              if (!settled) failReasons.push(`did not settle within ${Math.round(LIVE_SETTLE_MS / 1000)}s`);
+              if (!fresh) failReasons.push("no window result for the current build (stalled update loop / hidden tab?)");
+              if (drift.length) failReasons.push(`design drift — ${drift.join("; ")}`);
+              const measureFailed = failReasons.length ? failReasons.join(" · ") : null;
+              if (measureFailed) console.error(`[Sensitivity] live scenario ${s.scenarioId} MEASUREMENT FAILED: ${measureFailed} — archived flagged, excluded from charts`);
               // 4. Capture the live state in worker-result shape and reuse the shared
               //    chart + archive path. sizedConfig reads the live sliders the sizing
               //    steps actually wrote — "as flown" by construction. Flow/latency are
               //    recorded only when the settle condition proved them fresh.
-              const sm = this.simMain;
               const flowFresh = needFlow && settled;
               const sizedConfig = {};
               for (const fullId of ["ring_earth.requiredmbpsbetweensats", "ring_mars.requiredmbpsbetweensats", "adapted_eccentric_rings.junction-ring-count", "adapted_eccentric_rings.junction-ring-count-mars"]) {
@@ -2343,6 +2423,9 @@ export class SimUi {
                 latencyData: flowFresh ? sm.lastLatencyData : null,
                 maxFlowGbps: flowFresh ? sm.maxFlowGbps : null,
                 flowError: needFlow && !settled ? "live flow did not settle" : null,
+                // Step-3 validation verdict (null = proven clean) — the shared
+                // record path flags the archive row and keeps it off the charts.
+                measureFailed,
                 // Same flow-card shape the worker scenarios record (ground/junction
                 // flows + route-use accounting) — live flow entries used to archive
                 // no flow card at all.
@@ -2604,6 +2687,11 @@ export class SimUi {
         console.error("Sensitivity analysis error:", error);
       } finally {
         this.simMain._sensitivityRunning = false;
+        // Live-exec metronome (hidden-tab-proof clock worker) dies with the run.
+        if (this._sensLiveClock) {
+          try { this._sensLiveClock.terminate(); } catch {}
+          this._sensLiveClock = null;
+        }
         // Single end-of-run signal for programmatic drivers (the paper-plan runner
         // awaits this to sequence its items). Fired for every exec mode.
         try { this._onSweepComplete?.(); } catch {}
@@ -5905,7 +5993,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=5.38");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=5.39");
     let result = null;
     try {
       result = await solveBandDistribution({

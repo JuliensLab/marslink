@@ -34,7 +34,13 @@
 // tail, 10 Gbps transfer rows — exceed the 100k default and silently truncated
 // with "too many satellites"); baselines also now derive from FACTORY defaults
 // (simUi._factoryDefaults) rather than the runtime-mutated slidersData values.
-export const PLAN_VERSION = 4;
+// v5: b2-junction-recal pins junction rings OFF (manual / 0 / 0) — BASE's auto
+// growth absorbs the very saturation knee the item measures, and every growth
+// round rebuilds the fleet, stretching live settles. Live-exec rows are also
+// now validated at record time (settle + build-freshness + design-drift guards
+// in simUi) and archive flagged `measureFailed` instead of passing as clean —
+// pre-v5 live sets could contain silently stale rows (rAF-starved hidden tab).
+export const PLAN_VERSION = 5;
 
 // REPRODUCIBILITY CONTRACT: before each item the runner pins EVERY
 // build-affecting input — all ~120 sliders to their slidersData defaults and
@@ -199,7 +205,16 @@ export const PAPER_PLAN = [
     title: "Junction window-law recalibration (single ring × rate)",
     feeds: "§10 J(n) + w(x) recalibration — the raw junction-pair angle arrays (junctionAngles) ride every entry, live and worker alike (runPipeline attaches them too)",
     family: "Contoured transfer",
-    sliders: { ...BASE },
+    // Junction rings OFF: the knee IS the measurement — §10's window law is
+    // fitted on the natural (junction-ring-free) planet↔relay window, and
+    // BASE's auto growth widens exactly the bottleneck being measured. The
+    // relay/junction complex stays the bottleneck; planet rings auto-size to
+    // match it (BASE planet_sizing) so supporting capacity sits at/above it.
+    sliders: { ...BASE,
+      "adapted_eccentric_rings.junction-ring-mode": "manual",
+      "adapted_eccentric_rings.junction-ring-count": 0,
+      "adapted_eccentric_rings.junction-ring-count-mars": 0,
+    },
     sens: {
       ringSegs: [{ start: 1, end: 1, step: 1 }],
       rate: { mode: "inring", start: 500, end: 16000, step: 3875 },
