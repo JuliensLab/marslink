@@ -1,6 +1,6 @@
 // simTopology.js — Topology building logic extracted from SimNetwork.
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=5.34";
+import { SIM_CONSTANTS } from "./simConstants.js?v=5.36";
 
 export class TopologyBuilder {
   constructor(simLinkBudget, simSatellites) {

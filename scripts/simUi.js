@@ -5,22 +5,34 @@ import {
   junctionDeficits,
   mapSliderValueToUserFacing as mapToUserFacing,
   mapUserFacingToSliderValue as mapToSliderInternal,
-} from "./slidersData.js?v=5.34";
-import { LukashianClock } from "./lukashianTime.js?v=5.34";
-import { wireAuthUi } from "./auth.js?v=5.34";
-import { SensitivityPool } from "./sensitivityPool.js?v=5.34";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.34";
-import { minOf } from "./simMath.js?v=5.34";
-import { buildFlowSummary } from "./simMaxFlow.js?v=5.34";
-import { linksToThumbData, renderThumbDataURL } from "./simThumbs.js?v=5.34";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.34";
-import { archiveStore } from "./simArchiveStore.js?v=5.34";
-import { PAPER_PLAN, PLAN_VERSION, BASE_DOC } from "./paperPlan.js?v=5.34";
+} from "./slidersData.js?v=5.36";
+import { LukashianClock } from "./lukashianTime.js?v=5.36";
+import { wireAuthUi } from "./auth.js?v=5.36";
+import { SensitivityPool } from "./sensitivityPool.js?v=5.36";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.36";
+import { minOf } from "./simMath.js?v=5.36";
+import { buildFlowSummary } from "./simMaxFlow.js?v=5.36";
+import { linksToThumbData, renderThumbDataURL } from "./simThumbs.js?v=5.36";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.36";
+import { archiveStore } from "./simArchiveStore.js?v=5.36";
+import { PAPER_PLAN, PLAN_VERSION, BASE_DOC } from "./paperPlan.js?v=5.36";
 
 export class SimUi {
   constructor(simMain) {
     this.simMain = simMain;
     this.slidersData = slidersData;
+    // Factory defaults, captured BEFORE any persistence/restore path mutates
+    // slidersData.value at runtime (updateValues writes live values back into
+    // it) — the basis for "Reset defaults" and the paper-plan baseline.
+    this._factoryDefaults = {};
+    for (const section in slidersData) {
+      const group = slidersData[section];
+      if (!group || typeof group !== "object") continue;
+      for (const sliderId in group) {
+        const v = group[sliderId]?.value;
+        if (v !== undefined) this._factoryDefaults[`${section}.${sliderId}`] = Array.isArray(v) ? [...v] : v;
+      }
+    }
     this.sliders = {};
     this.sliderContainers = {};
     this.dependencies = {};
@@ -735,6 +747,43 @@ export class SimUi {
     container.appendChild(relayRow.wrap);
     container.appendChild(ringRow.wrap);
     container.appendChild(techRow.wrap);
+
+    // Reset defaults — pins every build slider (advanced panel included) and the
+    // adaptation curves back to their shipped defaults. The archive's undo slot
+    // captures the pre-reset state, so the Archive tab's Revert can restore it.
+    const resetWrap = document.createElement("div");
+    resetWrap.style.cssText = "margin-top:8px; display:flex; align-items:center; gap:8px;";
+    const resetBtn = document.createElement("button");
+    resetBtn.type = "button"; resetBtn.className = "btn";
+    resetBtn.id = "simple-reset-defaults";
+    resetBtn.style.cssText = "font-size:11px; padding:3px 10px;";
+    resetBtn.textContent = "↺ Reset defaults";
+    resetBtn.title = "Reset ALL settings (advanced panel included) and adaptation curves to their defaults";
+    const resetNote = document.createElement("span");
+    resetNote.className = "muted";
+    resetNote.style.cssText = "font-size:10px;";
+    resetBtn.addEventListener("click", () => {
+      if (!confirm("Reset ALL settings (advanced panel included) and adaptation curves to their defaults?")) return;
+      this._archiveCaptureUndo?.("defaults (reset)");
+      this.resetAllDefaults();
+      // Re-sync the simple rows (applySliderValues writes the advanced inputs
+      // without firing their input events).
+      const rt = this.slidersData.simulation["time-acceleration-slider"];
+      timeRow.slider.value = this.sliders.simulation?.["time-acceleration-slider"]?.value ?? rt.value;
+      timeRow.valInput.value = signedPow2(parseFloat(timeRow.slider.value));
+      const tv = this.sliders.laser_technology?.["improvement-factor"]?.value ?? techData.value;
+      techRow.slider.value = tv;
+      techRow.valInput.value = Math.pow(2, parseFloat(tv));
+      const rv = this.sliders.relay_type?.ringcount?.value ?? ringData.value;
+      ringRow.slider.value = rv;
+      ringRow.valInput.value = rv;
+      const checked = this.sliders.relay_type?.selected?.querySelector?.("input[type=radio]:checked");
+      if (checked) relayRow.sel.value = checked.value;
+      resetNote.textContent = this._archiveCaptureUndo ? "reset — revert available in the Archive tab" : "reset";
+      setTimeout(() => { resetNote.textContent = ""; }, 8000);
+    });
+    resetWrap.append(resetBtn, resetNote);
+    container.appendChild(resetWrap);
 
     // Initialize: ring count is the input. Apply the active family's structural defaults
     // + the current ring count and seed Earth/Mars; the first links-ready then sizes the
@@ -3714,7 +3763,13 @@ export class SimUi {
    * per-item override. (The time-acceleration slider is visualization-only and
    * left alone; per-scenario sizing outputs are derived, and recorded as such.)
    */
-  _applyPlanBaseline(item) {
+  /**
+   * Pin every build slider (visualization-only controls skipped) and the adapted
+   * curves back to their slidersData defaults, optionally overlaying overrides,
+   * then rebuild. Shared by the paper-plan baseline and the simple-panel
+   * "Reset defaults" button.
+   */
+  resetAllDefaults(overrides = {}) {
     const CATS = ["economics", "simulation", "laser_technology", "ring_mars", "relay_type", "circular_rings", "eccentric_rings", "ring_earth", "adapted_rings", "adapted_eccentric_rings", "launch_schedule", "launch_vehicle", "satellite"];
     const SKIP = new Set(["simulation.time-acceleration-slider"]);
     const defaults = {};
@@ -3725,16 +3780,23 @@ export class SimUi {
         const fullId = `${section}.${sliderId}`;
         if (SKIP.has(fullId)) continue;
         if (!this.sliders[section]?.[sliderId]) continue; // real controls only
-        const def = group[sliderId];
-        if (def && def.value !== undefined) defaults[fullId] = def.value;
+        // Factory value captured at construction — slidersData.value itself is
+        // mutated to the LIVE value at runtime, so reading it here would make
+        // this reset a no-op.
+        const v = this._factoryDefaults[fullId] ?? group[sliderId]?.value;
+        if (v !== undefined) defaults[fullId] = v;
       }
     }
-    this.applySliderValues({ ...defaults, "relay_type.selected": item.family, ...(item.sliders || {}) });
+    this.applySliderValues({ ...defaults, ...overrides });
     for (const [k, dflt] of SimUi.ADAPTED_CURVES) {
       const anchors = Array.isArray(dflt) ? dflt.map((a) => ({ ...a })) : [{ x: 0, y: dflt }, { x: 1, y: dflt }];
       this._setCurve(k, anchors);
       this._curveRefresh?.[k]?.();
     }
+  }
+
+  _applyPlanBaseline(item) {
+    this.resetAllDefaults({ "relay_type.selected": item.family, ...(item.sliders || {}) });
   }
 
   /**
@@ -4196,11 +4258,17 @@ export class SimUi {
       clearUndo();
     });
     undoDismiss.addEventListener("click", clearUndo);
-    const loadWithUndo = (entry, label) => {
+    const captureUndo = (label) => {
       if (!this._archiveUndoState) this._archiveUndoState = { config: this._archiveSnapshotConfig(), ts: Date.now() };
-      loadEntry(entry);
       undoLabel.innerHTML = `Loaded <b>${esc(label || "archived config")}</b> — previous settings saved.`;
       undoBanner.hidden = false;
+    };
+    // Exposed so other features (the simple panel's "Reset defaults") can make
+    // their own destructive apply revertible through the same banner.
+    this._archiveCaptureUndo = captureUndo;
+    const loadWithUndo = (entry, label) => {
+      captureUndo(label);
+      loadEntry(entry);
     };
 
     // One-time migration of legacy "presets" (sliders-only) into the archive, then
@@ -5818,7 +5886,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=5.34");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=5.36");
     let result = null;
     try {
       result = await solveBandDistribution({
