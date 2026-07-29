@@ -16,7 +16,7 @@
 // STRIPPED from the copy-paste JSON export — images leave via the archive UI,
 // not the clipboard.
 
-import { positionFromSolarAngle } from "./simOrbits.js?v=5.39";
+import { positionFromSolarAngle } from "./simOrbits.js?v=5.40";
 
 /**
  * Compact geometry for the two thumbnails: per link [x1,y1,x2,y2,capMbps,flowMbps]

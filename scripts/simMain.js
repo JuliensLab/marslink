@@ -1,24 +1,24 @@
 // simMain.js
 
-import { SimUi } from "./simUi.js?v=5.39";
-import { SimTime } from "./simTime.js?v=5.39";
-import { SimSolarSystem } from "./simSolarSystem.js?v=5.39";
-import { SimSatellites } from "./simSatellites.js?v=5.39";
-import { SimDeployment } from "./simDeployment.js?v=5.39";
-import { SimMissionValidator } from "./simMissionValidator.js?v=5.39";
-import { SimLinkBudget } from "./simLinkBudget.js?v=5.39";
-import { SimNetwork } from "./simNetwork.js?v=5.39";
+import { SimUi } from "./simUi.js?v=5.40";
+import { SimTime } from "./simTime.js?v=5.40";
+import { SimSolarSystem } from "./simSolarSystem.js?v=5.40";
+import { SimSatellites } from "./simSatellites.js?v=5.40";
+import { SimDeployment } from "./simDeployment.js?v=5.40";
+import { SimMissionValidator } from "./simMissionValidator.js?v=5.40";
+import { SimLinkBudget } from "./simLinkBudget.js?v=5.40";
+import { SimNetwork } from "./simNetwork.js?v=5.40";
 // Import both SimDisplay implementations with unique names
-import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=5.39";
-import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=5.39";
-import { generateReport } from "./reportGenerator.js?v=5.39";
-import { SIM_CONSTANTS } from "./simConstants.js?v=5.39";
-import { minOf, maxOf } from "./simMath.js?v=5.39";
-import { routeFlowUtilization } from "./simMaxFlow.js?v=5.39";
-import { SimFlightController } from "./simFlightController.js?v=5.39";
-import { SimProbeController } from "./simProbeController.js?v=5.39";
-import { findDepartureWindows } from "./simTransfer.js?v=5.39";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.39";
+import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=5.40";
+import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=5.40";
+import { generateReport } from "./reportGenerator.js?v=5.40";
+import { SIM_CONSTANTS } from "./simConstants.js?v=5.40";
+import { minOf, maxOf } from "./simMath.js?v=5.40";
+import { routeFlowUtilization } from "./simMaxFlow.js?v=5.40";
+import { SimFlightController } from "./simFlightController.js?v=5.40";
+import { SimProbeController } from "./simProbeController.js?v=5.40";
+import { findDepartureWindows } from "./simTransfer.js?v=5.40";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.40";
 
 export class SimMain {
   // Clamp argument to [-1, 1] to prevent NaN from Math.asin domain errors
@@ -71,7 +71,7 @@ export class SimMain {
     if (typeof window !== "undefined") window.simMain = this;
 
     // --- Worker + triple-buffered window cache (-1/0/+1) ---
-    this.simWorker = new Worker(new URL("./simWorker.js?v=5.39", import.meta.url), { type: "module" });
+    this.simWorker = new Worker(new URL("./simWorker.js?v=5.40", import.meta.url), { type: "module" });
     this.simWorker.onmessage = (event) => this.handleWorkerMessage(event);
     this.simWorker.onerror = (event) => console.error("[Marslink] Worker error:", event.message);
     this.simWorker.postMessage({ type: "init" });
@@ -1603,6 +1603,10 @@ export class SimMain {
       html += `<span class="metric-value-sm">${capHeaderValue}</span>`;
       html += `</div>`;
       const subParts = [];
+      // Which relay design this card describes — always shown, not only when
+      // the relay happens to be the bottleneck (concentric vs transfer was
+      // otherwise invisible on the card).
+      if (relayRingCount > 0) subParts.push(`${relayLabel} × ${relayRingCount}`);
       if (bottleneckLine) subParts.push(bottleneckLine);
       if (techFactor > 1) subParts.push(`Laser tech ${techFactor}x`);
       if (subParts.length) html += `<div class="metric-sub">${subParts.join(" · ")}</div>`;

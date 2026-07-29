@@ -5,17 +5,17 @@ import {
   junctionDeficits,
   mapSliderValueToUserFacing as mapToUserFacing,
   mapUserFacingToSliderValue as mapToSliderInternal,
-} from "./slidersData.js?v=5.39";
-import { LukashianClock } from "./lukashianTime.js?v=5.39";
-import { wireAuthUi } from "./auth.js?v=5.39";
-import { SensitivityPool } from "./sensitivityPool.js?v=5.39";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.39";
-import { minOf } from "./simMath.js?v=5.39";
-import { buildFlowSummary } from "./simMaxFlow.js?v=5.39";
-import { linksToThumbData, renderThumbDataURL } from "./simThumbs.js?v=5.39";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.39";
-import { archiveStore } from "./simArchiveStore.js?v=5.39";
-import { PAPER_PLAN, PLAN_VERSION, BASE_DOC } from "./paperPlan.js?v=5.39";
+} from "./slidersData.js?v=5.40";
+import { LukashianClock } from "./lukashianTime.js?v=5.40";
+import { wireAuthUi } from "./auth.js?v=5.40";
+import { SensitivityPool } from "./sensitivityPool.js?v=5.40";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.40";
+import { minOf } from "./simMath.js?v=5.40";
+import { buildFlowSummary } from "./simMaxFlow.js?v=5.40";
+import { linksToThumbData, renderThumbDataURL } from "./simThumbs.js?v=5.40";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.40";
+import { archiveStore } from "./simArchiveStore.js?v=5.40";
+import { PAPER_PLAN, PLAN_VERSION, BASE_DOC } from "./paperPlan.js?v=5.40";
 
 export class SimUi {
   constructor(simMain) {
@@ -2027,6 +2027,30 @@ export class SimUi {
           return estSats > maxSat ? 20 : Math.max(20, estSats * 0.016);
         };
 
+        // Sized values (pipeline-computed, as flown) for the archive entry's dedicated
+        // `sized` section — from the worker's sizedConfig, wrapped with units so exports
+        // read without a decoder (mirrors the manual-save sizedFromLive shape).
+        // Handler-level: BOTH branches archive — the optimized branch referenced this
+        // while it lived inside the simple branch, a ReferenceError on opt+archive.
+        const SIZED_UNITS = {
+          "ring_earth.requiredmbpsbetweensats": "Mbps",
+          "ring_mars.requiredmbpsbetweensats": "Mbps",
+          "adapted_eccentric_rings.junction-ring-count": "rings",
+          "adapted_eccentric_rings.junction-ring-count-mars": "rings",
+        };
+        const sizedOf = (res) => (res && res.sizedConfig
+          ? Object.fromEntries(Object.entries(res.sizedConfig).map(([k, v]) => [k, { value: v, unit: SIZED_UNITS[k] ?? "" }]))
+          : null);
+        // Abbreviated relay family for archived measurement names — every row's
+        // title must say which family it measured (conc | tran | circ | ecc):
+        // "sweep: tran 1 rings · …" is unambiguous in the archive list.
+        const relayAbbrev = (t) =>
+          t === "Contoured concentric" ? "conc"
+          : t === "Contoured transfer" ? "tran"
+          : t === "Circular" ? "circ"
+          : t === "Eccentric" ? "ecc"
+          : t ? String(t).slice(0, 4).toLowerCase() : "";
+
         if (!optimizedMode) {
           // ── Simple: fan scenarios out across a worker pool (parallel). ──
           // Generate every scenario's uiConfig synchronously, in a stable nested
@@ -2066,19 +2090,6 @@ export class SimUi {
               }
             }
           }
-
-          // Sized values (pipeline-computed, as flown) for the archive entry's dedicated
-          // `sized` section — from the worker's sizedConfig, wrapped with units so exports
-          // read without a decoder (mirrors the manual-save sizedFromLive shape).
-          const SIZED_UNITS = {
-            "ring_earth.requiredmbpsbetweensats": "Mbps",
-            "ring_mars.requiredmbpsbetweensats": "Mbps",
-            "adapted_eccentric_rings.junction-ring-count": "rings",
-            "adapted_eccentric_rings.junction-ring-count-mars": "rings",
-          };
-          const sizedOf = (res) => (res && res.sizedConfig
-            ? Object.fromEntries(Object.entries(res.sizedConfig).map(([k, v]) => [k, { value: v, unit: SIZED_UNITS[k] ?? "" }]))
-            : null);
 
           // Record one finished scenario into the charts + archive. Shared by the worker
           // pool and the in-process Main-thread path; does not touch progress counters.
@@ -2144,7 +2155,8 @@ export class SimUi {
                 // around the tangent point (knee/N_max analysis).
                 junctionAngles: res.capacityInfo?.junctionAngles || null,
               };
-              const tag = `sweep: ${s.ringCount ?? "cur"} rings${s.techUserVal != null ? " · " + s.techUserVal + "x" : ""}${s.routeCount != null ? " · " + s.routeCount + " " + secondAxisMeta.unit : ""} · ${s.placement.label}${res.measureFailed ? " · ⚠ FAILED" : ""}`;
+              const fam = relayAbbrev(s.archiveRelayType);
+              const tag = `sweep: ${fam ? fam + " " : ""}${s.ringCount ?? "cur"} rings${s.techUserVal != null ? " · " + s.techUserVal + "x" : ""}${s.routeCount != null ? " · " + s.routeCount + " " + secondAxisMeta.unit : ""} · ${s.placement.label}${res.measureFailed ? " · ⚠ FAILED" : ""}`;
               // Per-measurement thumbnails: capacity always, flow only when a flow
               // solve actually ran (flowSummary exists iff it did). ~15–40 KB each,
               // IndexedDB-only — the JSON export strips them.
@@ -2621,7 +2633,8 @@ export class SimUi {
                       lasers: costs?.laserCount ?? null,
                       junctionAngles: res.capacityInfo?.junctionAngles || null,
                     };
-                    const tag = `opt: ${ringCount ?? "cur"} rings${techUserVal != null ? " · " + techUserVal + "x" : ""}${routeCount != null ? " · " + routeCount + " " + secondAxisMeta.unit : ""} · ${placement.label}`;
+                    const famOpt = relayAbbrev(m.relayType);
+                    const tag = `opt: ${famOpt ? famOpt + " " : ""}${ringCount ?? "cur"} rings${techUserVal != null ? " · " + techUserVal + "x" : ""}${routeCount != null ? " · " + routeCount + " " + secondAxisMeta.unit : ""} · ${placement.label}`;
                     this._archiveAppend({ id: Date.now() + scenarioId, name: tag, ts: new Date().toISOString(), ms: res?.totalMs ?? null, config: this._archiveSnapshotConfig?.() || {}, sized: sizedOf(res), metrics: m });
                   }
                   completed++;
@@ -3640,8 +3653,20 @@ export class SimUi {
       `<div style="font-size:11px; font-weight:600; margin:6px 0 2px;">${title}</div>` +
       `<pre class="capacity-diagram" style="margin:0; font-size:11px; line-height:1.45;">${lines.filter(Boolean).join("\n")}</pre>`;
     let html = "";
+    // Relay family for the card titles — the diagram must say WHICH design it
+    // describes (concentric vs transfer was invisible here). Stored relayType
+    // when present; old entries fall back to the per-ring names' prefixes
+    // (same mapping as the live card's relayLabel in simMain).
+    const fam = m.relayType || (() => {
+      const has = (p) => (m.ringSats || []).some((r) => String(r?.ring || "").startsWith(p));
+      return has("ring_adapt") ? "Contoured concentric"
+        : has("ring_adecc") ? "Contoured transfer"
+        : has("ring_circ") ? "Circular"
+        : has("ring_ecce") ? "Eccentric" : null;
+    })();
+    const famTitle = fam ? ` — ${fam}${Number.isFinite(m.ringCount) && m.ringCount > 0 ? ` × ${m.ringCount}` : ""}` : "";
     if (cc) {
-      html += pre("Capacity", [
+      html += pre(`Capacity${famTitle}`, [
         `${planet(cc.earthGround, "●")}  Earth ${fmtM((cc.earthGround?.side1 || 0) + (cc.earthGround?.side2 || 0))} · ring ${r3(cc.earthRingInring)} Mbps`,
         cc.earthJunction ? `${bar(":")}  ${fmtM(cc.earthJunction.sumMbps)} · ${cc.earthJunction.links} links` : null,
         `${bar("│")}  ${fmtM(cc.relayIntrinsicMbps)} intrinsic${cc.relayTotalMbps != null ? ` · ${fmtM(cc.relayTotalMbps)} total` : ""}${cc.routes != null ? ` · ${cc.routes} routes` : ""}${cc.routeMbps ? ` · ${r3(cc.routeMbps)} Mbps/route` : ""}`,
@@ -5993,7 +6018,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=5.39");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=5.40");
     let result = null;
     try {
       result = await solveBandDistribution({
