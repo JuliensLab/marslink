@@ -5,17 +5,17 @@ import {
   junctionDeficits,
   mapSliderValueToUserFacing as mapToUserFacing,
   mapUserFacingToSliderValue as mapToSliderInternal,
-} from "./slidersData.js?v=5.33";
-import { LukashianClock } from "./lukashianTime.js?v=5.33";
-import { wireAuthUi } from "./auth.js?v=5.33";
-import { SensitivityPool } from "./sensitivityPool.js?v=5.33";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.33";
-import { minOf } from "./simMath.js?v=5.33";
-import { buildFlowSummary } from "./simMaxFlow.js?v=5.33";
-import { linksToThumbData, renderThumbDataURL } from "./simThumbs.js?v=5.33";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.33";
-import { archiveStore } from "./simArchiveStore.js?v=5.33";
-import { PAPER_PLAN, PLAN_VERSION, BASE_DOC } from "./paperPlan.js?v=5.33";
+} from "./slidersData.js?v=5.34";
+import { LukashianClock } from "./lukashianTime.js?v=5.34";
+import { wireAuthUi } from "./auth.js?v=5.34";
+import { SensitivityPool } from "./sensitivityPool.js?v=5.34";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.34";
+import { minOf } from "./simMath.js?v=5.34";
+import { buildFlowSummary } from "./simMaxFlow.js?v=5.34";
+import { linksToThumbData, renderThumbDataURL } from "./simThumbs.js?v=5.34";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.34";
+import { archiveStore } from "./simArchiveStore.js?v=5.34";
+import { PAPER_PLAN, PLAN_VERSION, BASE_DOC } from "./paperPlan.js?v=5.34";
 
 export class SimUi {
   constructor(simMain) {
@@ -4167,6 +4167,42 @@ export class SimUi {
       try { this.simMain.setSatellitesConfig(this.getGroupsConfig(BUILD_CATS)); } catch (e) { console.error("[Archive] load failed", e); }
     };
 
+    // --- load-with-undo -------------------------------------------------------
+    // Archive loads snapshot the settings from before the FIRST load of a chain
+    // (exploring several entries then reverting returns to your own pre-load
+    // state, not to the previous archive entry), and a banner offers a one-click
+    // revert. In-memory only: a page reload forgets the saved previous settings.
+    const undoBanner = document.createElement("div");
+    undoBanner.hidden = true;
+    undoBanner.style.cssText = "display:flex; gap:8px; align-items:center; border:1px solid var(--accent,#4a90e2); border-radius:6px; padding:6px 10px; font-size:12px;";
+    const undoLabel = document.createElement("span");
+    undoLabel.style.cssText = "flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;";
+    const undoBtn = document.createElement("button");
+    undoBtn.type = "button"; undoBtn.className = "btn";
+    undoBtn.style.cssText = "font-size:11px; padding:2px 10px; flex:none;";
+    undoBtn.textContent = "↩ Revert";
+    undoBtn.title = "Restore the settings from before the load";
+    const undoDismiss = document.createElement("button");
+    undoDismiss.type = "button"; undoDismiss.className = "btn";
+    undoDismiss.style.cssText = "font-size:11px; padding:2px 8px; flex:none;";
+    undoDismiss.textContent = "✕";
+    undoDismiss.title = "Keep the loaded config and forget the previous settings";
+    undoBanner.append(undoLabel, undoBtn, undoDismiss);
+    const clearUndo = () => { this._archiveUndoState = null; undoBanner.hidden = true; };
+    undoBtn.addEventListener("click", () => {
+      const st = this._archiveUndoState;
+      if (!st) return clearUndo();
+      loadEntry({ config: st.config });
+      clearUndo();
+    });
+    undoDismiss.addEventListener("click", clearUndo);
+    const loadWithUndo = (entry, label) => {
+      if (!this._archiveUndoState) this._archiveUndoState = { config: this._archiveSnapshotConfig(), ts: Date.now() };
+      loadEntry(entry);
+      undoLabel.innerHTML = `Loaded <b>${esc(label || "archived config")}</b> — previous settings saved.`;
+      undoBanner.hidden = false;
+    };
+
     // One-time migration of legacy "presets" (sliders-only) into the archive, then
     // retire the old store so there is a single source of truth.
     (() => {
@@ -4364,6 +4400,7 @@ export class SimUi {
             `<div style="border-top:1px dashed var(--border-2,#333); padding-top:4px;">` +
             `<div style="display:flex; gap:6px; align-items:center; font-size:11px;">` +
             `<button type="button" class="btn run-cards-toggle" data-set="${esc(set.id)}" data-i="${i}" style="font-size:10px; padding:0 6px;">▦</button>` +
+            `<button type="button" class="btn run-load" data-set="${esc(set.id)}" data-i="${i}" title="Apply this run's exact configuration (set baseline + its deltas)" style="font-size:10px; padding:0 6px;">Load</button>` +
             `<span style="min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(it.label)}</span>` +
             `<span class="muted" style="margin-left:auto; flex:none;">${it.metrics?.gbps != null ? it.metrics.gbps + " Gbps" : ""}${it.wallMs ? ` · ${Math.round(it.wallMs / 1000)}s` : ""}</span>` +
             `</div><div class="run-cards" data-set="${esc(set.id)}" data-i="${i}" hidden style="margin:4px 0 2px 26px;"></div></div>`).join("") ||
@@ -4379,6 +4416,20 @@ export class SimUi {
         if (!box || !it) return;
         if (box.hidden) { box.innerHTML = this._cardDiagramsHtml(it.metrics, it.thumbs); box.hidden = false; }
         else box.hidden = true;
+        return;
+      }
+      if (t.classList?.contains("run-load")) {
+        // Apply one archived run's exact configuration: the set's baseline
+        // sliders overlaid with the run's swept deltas, plus the baseline curves
+        // (the same merge flattenArchive uses for charts/export).
+        const set = load().find((x) => String(x.id) === t.dataset.set);
+        const it = set?.items?.[+t.dataset.i];
+        if (!set || !it) return;
+        const base = set.baseConfig || {};
+        loadWithUndo(
+          { config: { sliders: { ...(base.sliders || {}), ...(it.deltaSliders || {}) }, curves: base.curves || {} } },
+          `${set.name} · ${it.label}`
+        );
         return;
       }
       if (t.classList?.contains("entry-cards-toggle")) {
@@ -4452,7 +4503,9 @@ export class SimUi {
       }
       listEl.querySelectorAll(".archive-load").forEach((b) => b.addEventListener("click", () => {
         const e = load().find((x) => String(x.id) === b.dataset.id);
-        if (e) loadEntry(e.kind === "set" ? { config: e.baseConfig || {} } : e);
+        if (!e) return;
+        if (e.kind === "set") loadWithUndo({ config: e.baseConfig || {} }, `${e.name} · baseline`);
+        else loadWithUndo(e, e.name);
       }));
       listEl.querySelectorAll(".archive-del").forEach((b) => b.addEventListener("click", () => {
         if (!confirm("Delete this saved config?")) return;
@@ -4774,7 +4827,7 @@ export class SimUi {
     });
     danger.append(dangerTitle, dangerDesc, deleteAllBtn);
 
-    wrap.append(saveBtn, copyBtn, zipBtn, importBtn, importPanel, chartsLabel, xToggle, techRow, legend, chartsWrap, mkLabel("Cost vs capacity"), costVsMbpsWrap, mkLabel("Saved configs"), listEl, danger);
+    wrap.append(saveBtn, copyBtn, zipBtn, importBtn, importPanel, chartsLabel, xToggle, techRow, legend, chartsWrap, mkLabel("Cost vs capacity"), costVsMbpsWrap, mkLabel("Saved configs"), undoBanner, listEl, danger);
     host.appendChild(wrap);
     setXMode(xMode);
     renderAll();
@@ -5765,7 +5818,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=5.33");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=5.34");
     let result = null;
     try {
       result = await solveBandDistribution({
