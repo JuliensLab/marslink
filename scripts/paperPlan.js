@@ -40,7 +40,24 @@
 // now validated at record time (settle + build-freshness + design-drift guards
 // in simUi) and archive flagged `measureFailed` instead of passing as clean —
 // pre-v5 live sets could contain silently stale rows (rAF-starved hidden tab).
-export const PLAN_VERSION = 5;
+// v6: ADDS the three fig14 probe-grid items (coverage-probe capacity+latency
+// distributions × 16 geometry cells for 2-ring transfer / 40-ring transfer /
+// concentric R50, all ≈10 Gbps at ×128) — probe items force live exec and the
+// runner drives the coverage field per item; rows carry a `coverage` block.
+// estMin values recalibrated from the v2 campaign's measured wall times (see
+// TIME MODEL below). No semantics changed for the 8 existing items — their v5
+// sets remain valid; the version chip will read stale but re-measuring them is
+// only needed for their own failed rows.
+export const PLAN_VERSION = 6;
+
+// TIME MODEL (fitted on the v2 campaign's 103 clean timed rows, 2026-07-30):
+// per-scenario settle wall time is LINEAR in fleet size — t ≈ 0.64 ms × sats
+// (R² = 0.74; residual spread ×0.35–×13, the tail = extra sizing rounds) — and
+// a flow solve adds a family-dependent constant: ≈ +30 s (transfer) / +120 s
+// (concentric lattice — denser flow graph). Sat count predicts better than the
+// link-count proxy for settles; rows now record `linkCount` so a proper
+// link-based flow model can be fitted from v3 data on. estMin per item ≈
+// Σ cells × t(expected sats), rounded up.
 
 // REPRODUCIBILITY CONTRACT: before each item the runner pins EVERY
 // build-affecting input — all ~120 sliders to their slidersData defaults and
@@ -101,7 +118,7 @@ export const PAPER_PLAN = [
       placement: "current",
       flow: false,
     },
-    estMin: 35,
+    estMin: 4,
   },
   {
     id: "fig5-ridge",
@@ -115,7 +132,7 @@ export const PAPER_PLAN = [
       placement: "current",
       flow: false,
     },
-    estMin: 15,
+    estMin: 3,
   },
   {
     id: "fig5-fleet",
@@ -130,7 +147,7 @@ export const PAPER_PLAN = [
       flow: false,
     },
     heavy: true,
-    estMin: 25,
+    estMin: 15,
   },
   {
     id: "fig9-transfer",
@@ -147,7 +164,7 @@ export const PAPER_PLAN = [
       placement: "current",
       flow: false,
     },
-    estMin: 30,
+    estMin: 40,
   },
   {
     id: "fig13-grid-conc",
@@ -166,7 +183,7 @@ export const PAPER_PLAN = [
       placement: "geometry-16",
       flow: { budgetSec: 90 },
     },
-    estMin: 60,
+    estMin: 35,
   },
   {
     id: "fig13-grid-tran",
@@ -180,7 +197,7 @@ export const PAPER_PLAN = [
       placement: "geometry-16",
       flow: { budgetSec: 90 },
     },
-    estMin: 25,
+    estMin: 15,
   },
   {
     id: "table1-transfer-10g",
@@ -198,7 +215,7 @@ export const PAPER_PLAN = [
       flow: { budgetSec: 120 },
     },
     heavy: true,
-    estMin: 30,
+    estMin: 20,
   },
   {
     id: "b2-junction-recal",
@@ -221,7 +238,7 @@ export const PAPER_PLAN = [
       placement: "current",
       flow: false,
     },
-    estMin: 12,
+    estMin: 5,
   },
   {
     id: "eq13-planet-law",
@@ -230,12 +247,67 @@ export const PAPER_PLAN = [
     manual: true,
     note: "No dedicated sweep: every auto-sized entry in every set archives the sized rate (sized block) with earthSats/marsSats. Fitting N against √T across ALL sets validates Eq (13) over the full capacity range — an analysis step on data the other items already produce.",
   },
+  // ── fig14 probe grids: coverage-probe capacity + latency DISTRIBUTIONS per
+  //    geometry cell, the three head-to-head scenarios at ≈10 Gbps / ×128.
+  //    probes: {count, seed} makes the runner enable + configure the coverage
+  //    field for the item and FORCES live exec (the field is measured on the
+  //    main thread against the displayed window — worker scenarios never build
+  //    it). Every row archives a `coverage` block: per-connected-probe Mbps to
+  //    the network and end-to-end to each planet, plus the matching latencies
+  //    (500 probes, seed 1 — same cloud for all three scenarios and all cells).
+  {
+    id: "fig14-probes-tran2",
+    title: "Coverage probes ×16 geom — transfer 2 rings @ 10 Gbps",
+    feeds: "Fig 14 / Table 1 ship columns / §13 G3 — probe capacity+latency distributions per geometry cell",
+    family: "Contoured transfer",
+    sliders: { ...BASE },
+    probes: { count: 500, seed: 1 },
+    sens: {
+      ringSegs: [{ start: 2, end: 2, step: 1 }],
+      rate: { mode: "total", start: 10000, end: 10000, step: 1 },
+      placement: "geometry-16",
+      flow: false,
+    },
+    estMin: 8,
+  },
+  {
+    id: "fig14-probes-tran40",
+    title: "Coverage probes ×16 geom — transfer 40 rings @ 10 Gbps",
+    feeds: "Fig 14 / Table 1 ship columns / §13 G3 — the many-ring transfer coverage case",
+    family: "Contoured transfer",
+    sliders: { ...BASE },
+    probes: { count: 500, seed: 1 },
+    sens: {
+      ringSegs: [{ start: 40, end: 40, step: 1 }],
+      rate: { mode: "total", start: 10000, end: 10000, step: 1 },
+      placement: "geometry-16",
+      flow: false,
+    },
+    heavy: true,
+    estMin: 18,
+  },
+  {
+    id: "fig14-probes-conc",
+    title: "Coverage probes ×16 geom — concentric R50 (≈10 Gbps)",
+    feeds: "Fig 14 / §13 G3 — concentric coverage at the matched capacity (ridge: R50 ≈ 9.8 Gbps)",
+    family: "Contoured concentric",
+    sliders: { ...BASE },
+    probes: { count: 500, seed: 1 },
+    sens: {
+      ringSegs: [{ start: 50, end: 50, step: 1 }],
+      rate: null,
+      placement: "geometry-16",
+      flow: false,
+    },
+    heavy: true,
+    estMin: 14,
+  },
   {
     id: "fig14-coverage",
     title: "Coverage Monte-Carlo (probe field)",
     feeds: "Fig 14, Table 1 ship columns, §13 G3",
     manual: true,
-    note: "Probe field is live-view only: set each config (concentric ≈10 Gbps; transfer 1/2/20/40/60 rings at 10 Gbps), enable Coverage probes, let the field settle, then Save from the Archive tab (coverage distributions are captured automatically).",
+    note: "SUPERSEDED for the 16-geometry × 3-scenario grid by the runnable fig14-probes-* items above. Manual path (other configs): set the config, enable Coverage probes, let the sim settle, then Save from the Archive tab (coverage distributions are captured automatically).",
   },
   {
     id: "fig6-optimized",

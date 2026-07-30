@@ -5,17 +5,17 @@ import {
   junctionDeficits,
   mapSliderValueToUserFacing as mapToUserFacing,
   mapUserFacingToSliderValue as mapToSliderInternal,
-} from "./slidersData.js?v=5.40";
-import { LukashianClock } from "./lukashianTime.js?v=5.40";
-import { wireAuthUi } from "./auth.js?v=5.40";
-import { SensitivityPool } from "./sensitivityPool.js?v=5.40";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.40";
-import { minOf } from "./simMath.js?v=5.40";
-import { buildFlowSummary } from "./simMaxFlow.js?v=5.40";
-import { linksToThumbData, renderThumbDataURL } from "./simThumbs.js?v=5.40";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.40";
-import { archiveStore } from "./simArchiveStore.js?v=5.40";
-import { PAPER_PLAN, PLAN_VERSION, BASE_DOC } from "./paperPlan.js?v=5.40";
+} from "./slidersData.js?v=5.43";
+import { LukashianClock } from "./lukashianTime.js?v=5.43";
+import { wireAuthUi } from "./auth.js?v=5.43";
+import { SensitivityPool } from "./sensitivityPool.js?v=5.43";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.43";
+import { minOf } from "./simMath.js?v=5.43";
+import { buildFlowSummary } from "./simMaxFlow.js?v=5.43";
+import { linksToThumbData, renderThumbDataURL } from "./simThumbs.js?v=5.43";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.43";
+import { archiveStore } from "./simArchiveStore.js?v=5.43";
+import { PAPER_PLAN, PLAN_VERSION, BASE_DOC } from "./paperPlan.js?v=5.43";
 
 export class SimUi {
   constructor(simMain) {
@@ -1503,6 +1503,16 @@ export class SimUi {
       sensCharts = [];
     };
 
+    // Abbreviated relay family (conc | tran | circ | ecc) — every measurement
+    // NAME and every CHART must say which relay design it describes: archive
+    // rows read "sweep: tran 1 rings · …", chart titles carry "— tran R2".
+    const relayAbbrev = (t) =>
+      t === "Contoured concentric" ? "conc"
+      : t === "Contoured transfer" ? "tran"
+      : t === "Circular" ? "circ"
+      : t === "Eccentric" ? "ecc"
+      : t ? String(t).slice(0, 4).toLowerCase() : "";
+
     // Per-category folds: each toggle (data-target) collapses the breakdown charts
     // in its category. Resize on expand since charts created while a fold is hidden
     // start at zero size.
@@ -1538,6 +1548,12 @@ export class SimUi {
     const createCharts = (enabledDims, dimValues) => {
       destroyCharts();
       chartsWrap.style.display = "";
+
+      // Chart-title context: the relay design under test — family always, ring
+      // count unless rings are a swept dimension (then R is on the axis/legend).
+      const famA = relayAbbrev(this.getSelectedRelayType?.() || "");
+      const ringCtx = enabledDims.includes("rings") ? "" : ` R${parseFloat(this.sliders.relay_type?.ringcount?.value) || "?"}`;
+      const famCtx = famA ? ` — ${famA}${ringCtx}` : "";
 
       // Determine chart type and series grouping
       const xDim = enabledDims[0];       // x-axis dimension
@@ -1643,7 +1659,7 @@ export class SimUi {
                   },
                 },
                 legend: { display: datasets.length > 1, labels: legendLabels },
-                title: { display: true, text: cfg.title, color: textMuted, font: { size: 11, weight: "normal" }, padding: { bottom: 4 } },
+                title: { display: true, text: cfg.title + famCtx, color: textMuted, font: { size: 11, weight: "normal" }, padding: { bottom: 4 } },
               },
             },
           });
@@ -1726,7 +1742,7 @@ export class SimUi {
                 },
               },
               legend: { display: datasets.length > 1, labels: legendLabels },
-              title: { display: true, text: cfg.title, color: textMuted, font: { size: 11, weight: "normal" }, padding: { bottom: 4 } },
+              title: { display: true, text: cfg.title + famCtx, color: textMuted, font: { size: 11, weight: "normal" }, padding: { bottom: 4 } },
             },
           },
         });
@@ -2041,16 +2057,6 @@ export class SimUi {
         const sizedOf = (res) => (res && res.sizedConfig
           ? Object.fromEntries(Object.entries(res.sizedConfig).map(([k, v]) => [k, { value: v, unit: SIZED_UNITS[k] ?? "" }]))
           : null);
-        // Abbreviated relay family for archived measurement names — every row's
-        // title must say which family it measured (conc | tran | circ | ecc):
-        // "sweep: tran 1 rings · …" is unambiguous in the archive list.
-        const relayAbbrev = (t) =>
-          t === "Contoured concentric" ? "conc"
-          : t === "Contoured transfer" ? "tran"
-          : t === "Circular" ? "circ"
-          : t === "Eccentric" ? "ecc"
-          : t ? String(t).slice(0, 4).toLowerCase() : "";
-
         if (!optimizedMode) {
           // ── Simple: fan scenarios out across a worker pool (parallel). ──
           // Generate every scenario's uiConfig synchronously, in a stable nested
@@ -2119,6 +2125,9 @@ export class SimUi {
                 ringCount: s.resolvedRingCount,
                 routeCount: s.routeCount ?? null,
                 satCount: res.satellitesCount || 0,
+                // Backbone link count when the exec path knows it (live: always;
+                // worker: only with includeLinks) — compute-time-model predictor.
+                linkCount: Array.isArray(res.possibleLinks) ? res.possibleLinks.length : (res.linkCount ?? null),
                 // Cap-truncated builds are flagged: their numbers describe a capped
                 // fleet, not the configuration (raise simulation.maxSatCount).
                 ...(res.satsTruncated ? { satsTruncated: true, satsRequested: res.satsRequested || null } : {}),
@@ -2156,7 +2165,9 @@ export class SimUi {
                 junctionAngles: res.capacityInfo?.junctionAngles || null,
               };
               const fam = relayAbbrev(s.archiveRelayType);
-              const tag = `sweep: ${fam ? fam + " " : ""}${s.ringCount ?? "cur"} rings${s.techUserVal != null ? " · " + s.techUserVal + "x" : ""}${s.routeCount != null ? " · " + s.routeCount + " " + secondAxisMeta.unit : ""} · ${s.placement.label}${res.measureFailed ? " · ⚠ FAILED" : ""}`;
+              // Ring count: the swept value, else the resolved live count — a
+              // name must always say family AND ring count, never "cur".
+              const tag = `sweep: ${fam ? fam + " " : ""}${s.ringCount ?? s.resolvedRingCount ?? "?"} rings${s.techUserVal != null ? " · " + s.techUserVal + "x" : ""}${s.routeCount != null ? " · " + s.routeCount + " " + secondAxisMeta.unit : ""} · ${s.placement.label}${res.measureFailed ? " · ⚠ FAILED" : ""}`;
               // Per-measurement thumbnails: capacity always, flow only when a flow
               // solve actually ran (flowSummary exists iff it did). ~15–40 KB each,
               // IndexedDB-only — the JSON export strips them.
@@ -2169,7 +2180,7 @@ export class SimUi {
                   };
                 } catch (e) { console.warn("[Sensitivity] thumbnail render failed:", e?.message); }
               }
-              this._archiveAppend({ id: Date.now() + s.scenarioId, name: tag, ts: new Date().toISOString(), ms: res?.totalMs ?? null, config: s.archiveConfig || {}, sized: sizedOf(res), metrics: m, thumbs });
+              this._archiveAppend({ id: Date.now() + s.scenarioId, name: tag, ts: new Date().toISOString(), ms: res?.totalMs ?? null, config: s.archiveConfig || {}, sized: sizedOf(res), metrics: m, thumbs, coverage: res.coverage || null });
             }
           };
 
@@ -2430,6 +2441,9 @@ export class SimUi {
                 satellitesCount: sm.satellitesCount || 0,
                 satsRequested: sm.simSatellites?.requestedSatelliteCount || sm.satellitesCount || 0,
                 satsTruncated: !!sm.simSatellites?.satellitesTruncated,
+                // Backbone link count — predictor for the compute-time model
+                // (settle time is ~linear in sats; flow-solve time needs links).
+                linkCount: Array.isArray(sm.lastPossibleLinks) ? sm.lastPossibleLinks.length : null,
                 capacityInfo: sm.capacityInfo ? JSON.parse(JSON.stringify(sm.capacityInfo)) : null,
                 routeSummary: sm.routeSummary ? JSON.parse(JSON.stringify(sm.routeSummary)) : null,
                 latencyData: flowFresh ? sm.lastLatencyData : null,
@@ -2476,6 +2490,20 @@ export class SimUi {
                   // are overridden from the same snapshot for epoch consistency.
                   const planetsForThumb = planets.map((p) => (snap && p && snap[p.name] ? { ...p, position: snap[p.name] } : p));
                   return linksToThumbData(links, (id) => pos.get(id), planetsForThumb) || undefined;
+                })(),
+                // Coverage-probe distributions (Monte-Carlo field) — attached when
+                // the probe field is enabled for the run (paper-plan probe items).
+                // Only if the field was measured against the SAME links the cards
+                // describe: Phase 5c re-measures on every applied window, so at
+                // settle the identity check holds; a mismatch means stale probes.
+                coverage: (() => {
+                  const p = sm.simProbe;
+                  if (!p || !p.enabled) return null;
+                  if (sm._probeMeasdLinks !== sm.lastPossibleLinks) {
+                    console.warn("[Sensitivity] probe field enabled but its measurement is stale vs the recorded links — coverage omitted for this row");
+                    return null;
+                  }
+                  return this._archiveCaptureCoverage?.() || null;
                 })(),
                 resultTreesData: sm.resultTrees || [],
                 sizedConfig,
@@ -2634,7 +2662,7 @@ export class SimUi {
                       junctionAngles: res.capacityInfo?.junctionAngles || null,
                     };
                     const famOpt = relayAbbrev(m.relayType);
-                    const tag = `opt: ${famOpt ? famOpt + " " : ""}${ringCount ?? "cur"} rings${techUserVal != null ? " · " + techUserVal + "x" : ""}${routeCount != null ? " · " + routeCount + " " + secondAxisMeta.unit : ""} · ${placement.label}`;
+                    const tag = `opt: ${famOpt ? famOpt + " " : ""}${ringCount ?? m.ringCount ?? "?"} rings${techUserVal != null ? " · " + techUserVal + "x" : ""}${routeCount != null ? " · " + routeCount + " " + secondAxisMeta.unit : ""} · ${placement.label}`;
                     this._archiveAppend({ id: Date.now() + scenarioId, name: tag, ts: new Date().toISOString(), ms: res?.totalMs ?? null, config: this._archiveSnapshotConfig?.() || {}, sized: sizedOf(res), metrics: m });
                   }
                   completed++;
@@ -3852,9 +3880,30 @@ export class SimUi {
     const setNum = (id, v) => { const e = document.getElementById(id); if (e) { e.value = String(v); fire(e, "input"); fire(e, "change"); } };
     const setCheck = (id, on) => { const e = document.getElementById(id); if (e && e.checked !== !!on) { e.checked = !!on; fire(e, "change"); } };
     const setSel = (id, v) => { const e = document.getElementById(id); if (e) { e.value = v; fire(e, "change"); } };
-    const mode = execMode || this._planExecMode();
+    let mode = execMode || this._planExecMode();
+    // Probe items MUST run live regardless of the panel toggle: the coverage
+    // field is measured on the main thread against the DISPLAYED window
+    // (Phase 5c) — worker scenarios never build it.
+    if (item.probes && mode !== "live") {
+      console.log(`[Paper plan] ${item.id}: forcing live exec (probe field is live-view only)`);
+      mode = "live";
+    }
     document.getElementById("sens-mode-simple")?.click();
     this._applyPlanBaseline(item);
+    // Coverage-probe field per item: enabled + configured for probe items,
+    // OFF for every other item (a leftover field would slow settles and
+    // attach meaningless coverage to non-probe rows). The user's own probe
+    // setting is restored from localStorage when the plan run ends.
+    const probeCtl = this.simMain?.simProbe;
+    if (probeCtl) {
+      probeCtl.setEnabled(!!item.probes);
+      probeCtl.showProbes = !!item.probes;
+      if (item.probes) probeCtl.setConfig({
+        count: item.probes.count || 500,
+        seed: item.probes.seed || 1,
+        portsPerProbe: item.probes.ports || 1,
+      });
+    }
     setCheck(item.family === "Contoured transfer" ? "sens-family-tran" : "sens-family-conc", true);
     // LIVE is the default and the guarantee: every scenario writes the real
     // sliders and waits for the live sim to converge, visible in the 3D view.
@@ -4130,6 +4179,16 @@ export class SimUi {
       if (preState) {
         try { this._archiveApplyConfig?.(preState); if (statusEl) statusEl.textContent += " · your pre-plan config was restored"; } catch (e2) { console.error("[PaperPlan] restore failed:", e2); }
       }
+      // Probe items toggled the coverage field per item — put back the user's
+      // own persisted setting (the injected probe UI stores it in localStorage).
+      try {
+        const p = this.simMain?.simProbe;
+        if (p) {
+          const on = localStorage.getItem("coverage_probes.enabled") === "1";
+          p.setEnabled(on);
+          p.showProbes = on;
+        }
+      } catch {}
       clearInterval(heartbeat);
       clearInterval(lockBeat);
       try { if (readLock()?.id === lockId) localStorage.removeItem(LOCK_KEY); } catch {}
@@ -4185,6 +4244,9 @@ export class SimUi {
             config: { sliders: { ...(base.sliders || {}), ...(it.deltaSliders || {}) }, curves: base.curves || {} },
             sized: it.sized,
             metrics: it.metrics || {},
+            // Per-probe coverage distributions ride flattened rows like manual
+            // saves (probe-grid items); absent on ordinary sweep rows.
+            ...(it.coverage ? { coverage: it.coverage } : {}),
           }));
         } else out.push(e);
       }
@@ -4745,7 +4807,7 @@ export class SimUi {
         const wallMs = Math.max(0, now - (t.lastAt || now));
         t.lastAt = now;
         t.totalMs = now - (t.startedAt || now);
-        set.items.push({ label: entry.name, ts: entry.ts, ms: entry.ms ?? null, wallMs, deltaSliders: delta, sized: entry.sized, metrics: entry.metrics, thumbs: entry.thumbs || null });
+        set.items.push({ label: entry.name, ts: entry.ts, ms: entry.ms ?? null, wallMs, deltaSliders: delta, sized: entry.sized, metrics: entry.metrics, thumbs: entry.thumbs || null, coverage: entry.coverage || null });
         archiveStore.touch(set);
         renderAll();
         // Tell the main window a result landed (it re-reads the shared store).
@@ -6018,7 +6080,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=5.40");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=5.43");
     let result = null;
     try {
       result = await solveBandDistribution({
