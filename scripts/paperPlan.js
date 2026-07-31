@@ -48,7 +48,17 @@
 // TIME MODEL below). No semantics changed for the 8 existing items — their v5
 // sets remain valid; the version chip will read stale but re-measuring them is
 // only needed for their own failed rows.
-export const PLAN_VERSION = 6;
+// v7: MATCHED-CAPACITY RULE (Julien, after the deck's slide-20 mismatch —
+// conc R28 @2 Gbps vs transfer @10 Gbps was uncomparable): every head-to-head
+// item group compares the three systems at ONE capacity point. The fig13
+// geometry grids are now the matched 1 Gbps trio (conc R22 ≈ 1.03 Gbps /
+// 2-ring @1 Gbps / NEW 40-ring @1 Gbps — the deck's slide-20 basis and the
+// V1 program point); the probe grids stay the matched ≈10 Gbps trio (conc
+// R50 ≈ 9.8 / 2-ring / 40-ring — the paper's Table-1/Fig-14 point). The old
+// 10 Gbps 2-ring grid survives as b3-grid-tran-10g: its stronger worst-cell
+// flow dip (84.5% @10G vs 93% @1G) is the demand-dependent junction
+// saturation §13 discusses — a per-family finding, not a head-to-head.
+export const PLAN_VERSION = 7;
 
 // TIME MODEL (fitted on the v2 campaign's 103 clean timed rows, 2026-07-30):
 // per-scenario settle wall time is LINEAR in fleet size — t ≈ 0.64 ms × sats
@@ -166,10 +176,14 @@ export const PAPER_PLAN = [
     },
     estMin: 40,
   },
+  // ── fig13: the MATCHED 1 Gbps geometry-grid trio (v7 rule). One capacity
+  //    point across all three systems — conc R22 ≈ 1.03 Gbps on the measured
+  //    ridge, both transfer grids at 1 Gbps total — so Fig 13 / deck slide 20
+  //    compare like for like (latency, delivered fraction AND fleet size).
   {
     id: "fig13-grid-conc",
-    title: "Concentric geometry grid ×16 (flow ON)",
-    feeds: "Fig 13 + §13 G2: delivered capacity invariant across the synodic geometry, no conjunction blackout — the standing concentric flow-ON grid gap; also demonstrates flow ≈ routed parity",
+    title: "Concentric R22 geometry grid ×16 @ ≈1 Gbps (flow ON)",
+    feeds: "Fig 13 + §13 G2 + deck slide 20: capacity invariance, latency by geometry group, matched-capacity fleet — measured 2026-07-31: routed 1.029 Gbps invariant, flow 94–108%, 13,054 sats",
     family: "Contoured concentric",
     // Geometry ×16 places the planets by angle, decoupled from any calendar —
     // the date-independence device the paper's Fig 13 is built on. In live
@@ -178,17 +192,45 @@ export const PAPER_PLAN = [
     // in worker exec the sens placement axis sweeps the grid in one run.
     sliders: { ...BASE },
     sens: {
-      ringSegs: [{ start: 28, end: 28, step: 1 }],
+      ringSegs: [{ start: 22, end: 22, step: 1 }],
       rate: null,
       placement: "geometry-16",
       flow: { budgetSec: 90 },
     },
-    estMin: 35,
+    estMin: 15,
   },
   {
     id: "fig13-grid-tran",
-    title: "Transfer geometry grid ×16 (flow ON)",
-    feeds: "Fig 13 transfer half + §13 G2; re-measures the rotated-geometry delivered-capacity question post ring-pinning/sizing fixes",
+    title: "Transfer 2-ring geometry grid ×16 @ 1 Gbps (flow ON)",
+    feeds: "Fig 13 transfer half + §13 G2 + deck slide 20 — measured 2026-07-31: routed 1.005 Gbps invariant, flow 93–100%, 9,601 sats",
+    family: "Contoured transfer",
+    sliders: { ...BASE },
+    sens: {
+      ringSegs: [{ start: 2, end: 2, step: 1 }],
+      rate: { mode: "total", start: 1000, end: 1000, step: 1 },
+      placement: "geometry-16",
+      flow: { budgetSec: 90 },
+    },
+    estMin: 8,
+  },
+  {
+    id: "fig13-grid-tran40",
+    title: "Transfer 40-ring geometry grid ×16 @ 1 Gbps (flow ON)",
+    feeds: "Fig 13 / deck slide 20 third column — measured 2026-07-31: routed 1.046 Gbps invariant, flow 93–100%, 24,823 sats",
+    family: "Contoured transfer",
+    sliders: { ...BASE },
+    sens: {
+      ringSegs: [{ start: 40, end: 40, step: 1 }],
+      rate: { mode: "total", start: 1000, end: 1000, step: 1 },
+      placement: "geometry-16",
+      flow: { budgetSec: 90 },
+    },
+    estMin: 12,
+  },
+  {
+    id: "b3-grid-tran-10g",
+    title: "Transfer 2-ring geometry grid ×16 @ 10 Gbps (flow ON)",
+    feeds: "§13 rotated-geometry junction saturation: the worst-cell delivered fraction is DEMAND-dependent (84.5% in the M0 cells @10 Gbps vs 93% @1 Gbps) — a per-family finding, kept OUT of the matched head-to-head trio",
     family: "Contoured transfer",
     sliders: { ...BASE },
     sens: {
