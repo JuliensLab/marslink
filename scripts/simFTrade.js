@@ -153,8 +153,10 @@ export function programCostB(family, tGbps, f, term, a = DEFAULTS) {
   const S = secs.reduce((s, x) => s + x.S, 0);
   let hwB, launchB;
   if (a.legacyTerminals) {
-    // Paper Table 4 model: one lump first-unit per family, flat $0.2M terminals.
-    const firstSatM = family === "concentric" ? 6.4 : 7.25;
+    // Paper Table 4 model: one lump first-unit per family, flat $0.2M terminals
+    // (concentric = 5M bus + 5×0.2M terminals + 1.0M solar/radiator, per the
+    // corrected 5-terminal budget; transfer = 5 + 3×0.2 + 1.65).
+    const firstSatM = family === "concentric" ? 7.0 : 7.25;
     hwB = (firstSatM * Math.pow(S, w)) / w / 1000;
     launchB = a.includeLaunch
       ? (a.launchFirstM * Math.pow(S / a.satsPerFlight, w)) / w / 1000 : 0;
@@ -341,5 +343,10 @@ function refresh(body) {
      DSOC flight transceiver (22 cm, 4 W, photon-counting; program $206M) bounds the flagship end.
      Telescope cost exponent βD: space assemblies ≈ D^1.8–2.0 (Stahl et al. 2010; van Belle,
      Meinel &amp; Meinel 2004), ground D^2.5–2.8 (Meinel 1979); the default adds the λ/D pointing
-     burden. Satellite bus, launch, planetary-ring and relay laws as in the paper's cost model.</p>`;
+     burden. Terminal budget per satellite — concentric relay 5: two radial (relay chain), two
+     azimuthal (in-ring links: aggregate parallel routes for an in-transit spacecraft; later the
+     feeders into V2 transfer rings), one dedicated to in-transit spacecraft; transfer 3: two
+     in-ring, one opportunistic (by position: planetary-ring junction / cross-ring link / spacecraft
+     service); planetary rings 3; junction rings 2. Satellite bus, launch, planetary-ring and relay
+     laws as in the paper's cost model.</p>`;
 }
