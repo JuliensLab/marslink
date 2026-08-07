@@ -5,17 +5,17 @@ import {
   junctionDeficits,
   mapSliderValueToUserFacing as mapToUserFacing,
   mapUserFacingToSliderValue as mapToSliderInternal,
-} from "./slidersData.js?v=5.44";
-import { LukashianClock } from "./lukashianTime.js?v=5.44";
-import { wireAuthUi } from "./auth.js?v=5.44";
-import { SensitivityPool } from "./sensitivityPool.js?v=5.44";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.44";
-import { minOf } from "./simMath.js?v=5.44";
-import { buildFlowSummary } from "./simMaxFlow.js?v=5.44";
-import { linksToThumbData, renderThumbDataURL } from "./simThumbs.js?v=5.44";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.44";
-import { archiveStore } from "./simArchiveStore.js?v=5.44";
-import { PAPER_PLAN, PLAN_VERSION, BASE_DOC } from "./paperPlan.js?v=5.44";
+} from "./slidersData.js?v=5.50";
+import { LukashianClock } from "./lukashianTime.js?v=5.50";
+import { wireAuthUi, isAuthed, openLoginPopup } from "./auth.js?v=5.50";
+import { SensitivityPool } from "./sensitivityPool.js?v=5.50";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.50";
+import { minOf } from "./simMath.js?v=5.50";
+import { buildFlowSummary } from "./simMaxFlow.js?v=5.50";
+import { linksToThumbData, renderThumbDataURL } from "./simThumbs.js?v=5.50";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.50";
+import { archiveStore } from "./simArchiveStore.js?v=5.50";
+import { PAPER_PLAN, PLAN_VERSION, BASE_DOC } from "./paperPlan.js?v=5.50";
 
 export class SimUi {
   constructor(simMain) {
@@ -155,6 +155,14 @@ export class SimUi {
     const STORAGE_KEY = "marslinkRightPanelCollapsed";
     const apply = (collapsed) => {
       panel.classList.toggle("collapsed", collapsed);
+      // Fixed popup panels (report, f-trade) reclaim the right-panel width.
+      // Chrome doesn't reliably re-resolve the `.collapsed ~` sibling rule on
+      // these pre-existing fixed elements, so set the offset directly; the
+      // body class + CSS rules remain as the declarative fallback.
+      document.body.classList.toggle("rp-collapsed", collapsed);
+      document.querySelectorAll(".popup-panel").forEach((p) => {
+        p.style.right = collapsed ? "var(--s-4)" : "";
+      });
       toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
       toggle.setAttribute("aria-label", collapsed ? "Expand panel" : "Collapse panel");
       toggle.title = collapsed ? "Expand panel" : "Collapse panel";
@@ -305,6 +313,7 @@ export class SimUi {
     const archivePane = document.getElementById("archive-pane");
     const measurePane = document.getElementById("measure-pane");
     const reportPanel = document.getElementById("report-panel");
+    const ftradePanel = document.getElementById("ftrade-panel");
 
     const setActiveButtons = (mode) => {
       // Only the mode tabs — NOT the .kbd-toggle link-label buttons, which also carry
@@ -327,6 +336,10 @@ export class SimUi {
     const closeReportPanel = () => {
       reportPanel.hidden = true;
       reportPanel.setAttribute("aria-hidden", "true");
+      if (ftradePanel) {
+        ftradePanel.hidden = true;
+        ftradePanel.setAttribute("aria-hidden", "true");
+      }
     };
 
     const openMode = (mode) => {
@@ -358,8 +371,16 @@ export class SimUi {
           modeDrawer.classList.remove("sens-expanded");
           document.getElementById("sens-expand-btn")?.setAttribute("aria-pressed", "false");
         }
+      } else if (mode === "ftrade") {
+        closeDrawer();
+        closeReportPanel();
+        ftradePanel.hidden = false;
+        ftradePanel.setAttribute("aria-hidden", "false");
+        import("./simFTrade.js?v=5.50").then((m) =>
+          m.renderFTradePanel(document.getElementById("ftrade-panel-body")));
       } else if (mode === "report") {
         closeDrawer();
+        closeReportPanel();
         reportPanel.hidden = false;
         reportPanel.setAttribute("aria-hidden", "false");
         // Show a placeholder until generation finishes
@@ -3383,7 +3404,69 @@ export class SimUi {
     try { this._measureChan()?.postMessage({ ...msg, at: Date.now() }); } catch {}
   }
 
+  /**
+   * Entry point for the Paper plan tab. The plan is login-only, so this only
+   * wires the auth listener and defers to _syncPaperPlanAuth() — the panel
+   * itself is built by _buildPaperPlanPanel() once the user is authed.
+   */
   _injectPaperPlanUI() {
+    if (!this._paperPlanAuthWired) {
+      this._paperPlanAuthWired = true;
+      window.addEventListener("marslink:auth-changed", () => this._syncPaperPlanAuth());
+    }
+    this._syncPaperPlanAuth();
+  }
+
+  /**
+   * Gate the Paper plan behind the existing shared-password login.
+   *
+   * Logged out: the top-bar tab is hidden, the built panel is torn down (the
+   * item list — which figures/tables the paper needs and how they're measured —
+   * is itself the thing being kept back, so it must not sit in the DOM), the
+   * pane shows a "log in" prompt, and an open Paper-plan drawer is closed.
+   * Logged in: the tab comes back and the panel is built once.
+   *
+   * Same threat model as the rest of auth.js — a gate against casual visitors,
+   * not a defense against someone who fetches scripts/paperPlan.js directly.
+   */
+  _syncPaperPlanAuth() {
+    const authed = isAuthed();
+
+    // [hidden] loses to the tab's `display:flex`, so drive display directly.
+    const tab = document.querySelector('.mode-tab[data-mode="measure"]');
+    if (tab) {
+      tab.hidden = !authed;
+      tab.style.display = authed ? "" : "none";
+    }
+
+    const body = document.getElementById("measure-pane-body");
+    if (!body) return;
+
+    if (!authed) {
+      document.getElementById("paper-plan-panel")?.remove();
+      if (!document.getElementById("paper-plan-locked")) {
+        const lock = document.createElement("div");
+        lock.id = "paper-plan-locked";
+        lock.className = "empty-state";
+        lock.innerHTML = `🔒 The paper measurement plan is available after logging in. `;
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "btn";
+        btn.textContent = "Log in";
+        btn.addEventListener("click", () => openLoginPopup());
+        lock.appendChild(btn);
+        body.appendChild(lock);
+      }
+      // The tab this pane belongs to just disappeared — don't strand the drawer.
+      if (this.activeMode === "measure") document.querySelector("[data-close-drawer]")?.click();
+      return;
+    }
+
+    document.getElementById("paper-plan-locked")?.remove();
+    this._buildPaperPlanPanel();
+  }
+
+  _buildPaperPlanPanel() {
     // Own top-level tab (after Archive) rather than a section of the Sensitivity
     // pane: a plan run is its own activity, and the panel doubles as the progress
     // mirror while the runner window measures.
@@ -3496,9 +3579,10 @@ export class SimUi {
         }
       };
     }
-    if (!runnerMode) {
+    if (!runnerMode && !this._measureProgressTimer) {
       // Keep the "last update" age fresh even between runner messages.
-      setInterval(() => { if (this._runnerMsg) this._renderMeasureProgress(); }, 2000);
+      // Guarded: a logout/login cycle rebuilds this panel, and the timer outlives it.
+      this._measureProgressTimer = setInterval(() => { if (this._runnerMsg) this._renderMeasureProgress(); }, 2000);
     }
 
     // Show the Continue button whenever an interrupted set exists and nothing is
@@ -3518,6 +3602,10 @@ export class SimUi {
         btn.title = `Resume: ${names}. Completed segments are kept; the partially-run segment is re-measured.`;
       }
     };
+    // One-shot bootstrap: a logout/login cycle rebuilds the panel, but picking up
+    // the runner request and offering the resume prompt must happen once per load.
+    if (this._paperPlanBootstrapped) return;
+    this._paperPlanBootstrapped = true;
     this._archiveReady?.then(() => {
       this._refreshPaperPlanResume?.();
       if (runnerMode) {
@@ -3548,6 +3636,7 @@ export class SimUi {
    * panel to a progress mirror, so the main window stays usable while measuring.
    */
   _startMeasureRun({ ids = null, resume = false } = {}) {
+    if (!isAuthed()) { openLoginPopup(); return null; }
     if (this._isMeasureRunner()) return this._runPaperPlan({ resume, ids });
     const list = ids || [...document.querySelectorAll(".paper-plan-item:checked")].map((c) => c.dataset.id);
     if (!resume && !list.length) {
@@ -3989,6 +4078,8 @@ export class SimUi {
    */
   async _runPaperPlan(opts = {}) {
     if (this._paperPlanRunning) return;
+    // The plan is login-only; the runner window is reachable by URL (?measure=run).
+    if (!isAuthed()) return;
     // Cross-window lock: two runner windows measuring the same plan would write
     // interleaved items into the same archive set and corrupt it. The holder
     // refreshes a heartbeat; a stale lock (crashed window) is taken over.
@@ -6080,7 +6171,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=5.44");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=5.50");
     let result = null;
     try {
       result = await solveBandDistribution({
