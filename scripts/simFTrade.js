@@ -20,19 +20,35 @@ const DEFAULTS = {
   concP: 1.26,
   kT: 1.07e-7,             // transfer: T = kT·S²/R  [Gbps]
   planetK: 5469,           // planetary rings, both planets: S = planetK·√T(Gbps)
-  lineRateGbps: 100,       // per-link max data rate (paper §7)
+  // Per-link max data rate. NOT physics — an electronics/architecture knob:
+  // Starlink's demonstrated 100 Gbps is the ×1 anchor; TBIRD flew 200 Gbps
+  // from a CubeSat (Schieler 2023), NICT demonstrated 2 Tbps with small
+  // flight-class terminals (2025), DLR 13.16 Tbps over 10.45 km of atmosphere
+  // by 54-channel WDM, and ESA HydRON targets Tbps ISLs. Raising it = more
+  // WDM channels behind the same monostatic telescope, priced per channel in
+  // terminalForFactor below.
+  lineRateGbps: 100,
   concFloorRelay: 1000,    // flag concentric cells whose relay count drops below this
   // Program-cost model (paper Table 3)
   busFirstM: 5,            // $M, first satellite bus
-  extrasConcM: 1.0,        // $M, solar+radiator first-unit (concentric)
+  extrasConcM: 1.0,        // $M, solar+radiator first-unit (concentric relay)
   extrasTransferM: 1.65,   // $M, aphelion arrays + perihelion radiators (transfer)
+  extrasPlanetM: 1.35,     // $M, planetary rings (Earth-ring 1.0 / Mars-ring 1.65 average)
+  extrasJunctionM: 1.0,    // $M, junction rings
   termVolM: 0.2,           // $M, Starlink-class terminal at volume
   starlinkN0: 10000,       // terminals over which that volume price was learned
   wright: 0.85,            // progress ratio per production doubling
-  launchFirstM: 20,        // $M, first Starship-class flight
-  satsPerFlight: 37,       // incl. tanker share, at the ≈2 t satellite class
-  termsConc: 2,
+  launchFirstM: 20,        // $M, first Starship-class flight (economics.launch-cost-slider)
+  satsPerFlight: 37,       // legacy model only: 1 flight per ≈37 sats, tankers incl.
+  payloadPerFlightKg: 74000, // = 37 sats × 2 t — effective payload per flight, tankers incl.
+  satMassKg: 2000,         // ≈2 t satellite class (dry bus + propellant)
+  includeLaunch: true,     // add launch cost (mass-aware flights under Wright's law)
+  junctionSats: 0,         // transfer-family junction rings: no closed form; 0 = plane-node pair
+  // Terminals per satellite, per network section
+  termsConc: 5,            // concentric relay: 2 radial + 2 in-ring + 1 access
   termsTransfer: 3,
+  termsPlanet: 3,
+  termsJunction: 2,
   // Component model of one terminal (shares of the FIRST-unit cost)
   shares: { telescope: 0.35, laser: 0.20, modem: 0.15, receiver: 0.15, converter: 0.05, structure: 0.10 },
   apertureMm: 75,          // ×1 baseline aperture (monostatic, tx+rx shared)
@@ -73,48 +89,87 @@ export function terminalForFactor(f, a = DEFAULTS) {
     const pm = fRem / Math.pow(dm, 4);              // P/P0 makes up the rest
     const optW = a.laserW * pm;
     const busKw = (optW / a.wallPlug - a.laserW / a.wallPlug) / 1000;
+    // Extra WDM channels raise the line rate past 100 Gbps: per channel, one
+    // more transceiver chain (laser + modem + converter) behind the SAME
+    // telescope — electronics, not optics (TBIRD/NICT/HydRON path).
+    const wdmExtra = Math.max(0, Math.ceil(a.lineRateGbps / 100) - 1);
     const hwM =
       firstM * (
         s.telescope * Math.pow(dm, a.betaD) +
         (s.laser + s.converter) * Math.pow(pm, a.betaP) +
         (s.modem + s.receiver) * (pcEngaged ? 2 : 1) +
-        s.structure);
+        s.structure +
+        wdmExtra * (s.laser + s.modem + s.converter));
     const busM = busKw * a.busPerKwM;
     if (!best || hwM + busM < best.hwM + best.busM) {
       best = { hwM, busM, dm, pm, optW,
         elecW: optW / a.wallPlug,
         apertureMm: a.apertureMm * dm,
-        massKg: a.massKg * (0.4 * Math.pow(dm, 2.5) + 0.2 * Math.pow(pm, 0.8) + 0.4) };
+        massKg: a.massKg * (0.4 * Math.pow(dm, 2.5) + 0.2 * Math.pow(pm, 0.8) + 0.4)
+          + 2 * wdmExtra }; // ~2 kg of electronics per extra WDM channel
     }
   }
   return { firstBaseM: firstM, pcEngaged, ...best };
 }
 
-// Fleet size per family from the ×128-anchored laws, rescaled linearly in f.
-export function fleetFor(family, tGbps, f, a = DEFAULTS) {
+// Network sections per family from the ×128-anchored laws (rescaled linearly
+// in f), each with its own terminal count and solar/radiator extras. The
+// family total is the SUM of its sections' scaling laws.
+export function sectionsFor(family, tGbps, f, a = DEFAULTS) {
   const scale = f / 128;
-  const planet = a.planetK * Math.sqrt(tGbps) / Math.sqrt(scale);
+  const planet = { name: "planetary rings",
+    S: a.planetK * Math.sqrt(tGbps) / Math.sqrt(scale),
+    k: a.termsPlanet, extrasM: a.extrasPlanetM };
   if (family === "concentric") {
-    const relay = Math.pow(tGbps / (a.concA * scale), 1 / a.concP);
-    return { relay, planet, total: relay + planet };
+    return [
+      { name: "concentric relay", S: Math.pow(tGbps / (a.concA * scale), 1 / a.concP),
+        k: a.termsConc, extrasM: a.extrasConcM },
+      planet,
+    ];
   }
-  const rings = Math.sqrt((tGbps * a.ringCount) / (a.kT * scale));
-  return { relay: rings, planet, total: rings + planet };
+  const out = [
+    { name: "transfer rings", S: Math.sqrt((tGbps * a.ringCount) / (a.kT * scale)),
+      k: a.termsTransfer, extrasM: a.extrasTransferM },
+    planet,
+  ];
+  if (a.junctionSats > 0) {
+    out.push({ name: "junction rings", S: a.junctionSats, k: a.termsJunction, extrasM: a.extrasJunctionM });
+  }
+  return out;
 }
 
-// Program cost (hardware + launch) with Wright's law on the fleet count.
+export function fleetFor(family, tGbps, f, a = DEFAULTS) {
+  const secs = sectionsFor(family, tGbps, f, a);
+  return { relay: secs[0].S, planet: secs[1].S,
+    total: secs.reduce((s, x) => s + x.S, 0), sections: secs };
+}
+
+// Program cost with Wright's law: hardware per section (each section's
+// first-unit satellite = bus + its extras + its terminal count × first
+// terminal), launch pooled over mass-derived flight count.
 export function programCostB(family, tGbps, f, term, a = DEFAULTS) {
   const w = 1 + Math.log2(a.wright); // ≈ 0.7655
-  const k = family === "concentric" ? a.termsConc : a.termsTransfer;
-  const extras = family === "concentric" ? a.extrasConcM : a.extrasTransferM;
-  const S = fleetFor(family, tGbps, f, a).total;
-  const termFirstM = a.legacyTerminals ? a.termVolM : term.hwM + term.busM;
-  const firstSatM = a.busFirstM + extras + k * termFirstM;
-  const addedKg = a.legacyTerminals ? 0 : k * Math.max(0, term.massKg - a.massKg);
-  const perFlight = a.satsPerFlight * 2000 / (2000 + addedKg);
-  const hwB = (firstSatM * Math.pow(S, w)) / w / 1000;
-  const launchB = (a.launchFirstM * Math.pow(S / perFlight, w)) / w / 1000;
-  return { S, totalB: hwB + launchB, hwB, launchB, firstSatM };
+  const secs = sectionsFor(family, tGbps, f, a);
+  const S = secs.reduce((s, x) => s + x.S, 0);
+  let hwB, launchB;
+  if (a.legacyTerminals) {
+    // Paper Table 4 model: one lump first-unit per family, flat $0.2M terminals.
+    const firstSatM = family === "concentric" ? 6.4 : 7.25;
+    hwB = (firstSatM * Math.pow(S, w)) / w / 1000;
+    launchB = a.includeLaunch
+      ? (a.launchFirstM * Math.pow(S / a.satsPerFlight, w)) / w / 1000 : 0;
+  } else {
+    const termFirstM = term.hwM + term.busM;
+    hwB = secs.reduce((sum, x) =>
+      sum + ((a.busFirstM + x.extrasM + x.k * termFirstM) * Math.pow(x.S, w)) / w, 0) / 1000;
+    const flights = secs.reduce((sum, x) => {
+      const satKg = a.satMassKg + x.k * Math.max(0, term.massKg - a.massKg);
+      return sum + (x.S * satKg) / a.payloadPerFlightKg;
+    }, 0);
+    launchB = a.includeLaunch
+      ? (a.launchFirstM * Math.pow(flights, w)) / w / 1000 : 0;
+  }
+  return { S, totalB: hwB + launchB, hwB, launchB };
 }
 
 /* ───────────────────────── flags ───────────────────────── */
@@ -130,7 +185,9 @@ function cellFlags(family, tGbps, f, fleet, a) {
   if (family === "concentric" && fleet.relay < a.concFloorRelay) {
     flags.push("below concentric structural floor");
   }
-  if (tGbps > 200) flags.push("planetary rings need layering (>0.2 Tbps aggregate)");
+  if (tGbps > 2 * a.lineRateGbps) {
+    flags.push(`planetary rings need layering or a higher line rate (aggregate > 2 × ${fmt(a.lineRateGbps)} Gbps per ring)`);
+  }
   return flags;
 }
 
@@ -184,7 +241,18 @@ function ladderTable(a) {
 }
 
 const FIELDS = [
-  ["lineRateGbps", "Per-link max rate (Gbps)", 1],
+  ["lineRateGbps", "Per-link max rate (Gbps)", 1,
+   "Not physics — an electronics knob. Demonstrated beyond 100 Gbps: TBIRD 200 Gbps from a CubeSat, " +
+   "NICT 2 Tbps with small flight-class terminals (2025), DLR 13.16 Tbps over 10.45 km by 54-channel WDM; " +
+   "ESA HydRON targets Tbps ISLs. Extra 100 Gbps channels are priced into the terminal (one transceiver " +
+   "chain each, telescope shared)."],
+  ["launchFirstM", "First flight ($M)", 1,
+   "Matches the economics panel's launch-cost slider default ($20M first Starship-class flight)."],
+  ["satMassKg", "Satellite mass class (kg)", 100],
+  ["payloadPerFlightKg", "Payload per flight, tankers incl. (kg)", 1000,
+   "74 t = the paper's 1 flight per ≈37 satellites at the 2 t class. Heavier terminals reduce satellites per flight."],
+  ["junctionSats", "Junction-ring satellites (transfer)", 500,
+   "No closed form in the paper; the plane-node pair needs none (0). Counted at 2 terminals per satellite."],
   ["termVolM", "Terminal volume cost ($M)", 0.01],
   ["starlinkN0", "Volume learned over (units)", 1],
   ["wright", "Wright progress ratio", 0.01],
@@ -211,15 +279,19 @@ export function renderFTradePanel(body) {
   body.innerHTML = `
     <div class="report ftrade">
       <p class="muted">Analytic technology-factor trade — <strong>scaling laws only, no simulation</strong>.
-      Fleet laws anchored at f = ×128 (optimized concentric fit, transfer S²/R, planetary rings);
-      capacities rescale linearly in f. Program cost = hardware + launch under Wright's law.
-      The first-terminal cost is rebuilt per f from components (telescope · laser · modulation ·
-      receiver · converter), un-learning the Starlink-class volume price back to a first unit.
-      ⚑ marks cells that violate a stated assumption (hover for which).</p>
+      Each family's fleet is the sum of its network sections' scaling laws, anchored at f = ×128
+      (concentric relay: optimized fit, 5 terminals/sat · transfer rings: S²/R, 3 · planetary rings: 3 ·
+      junction rings: 2), and capacities rescale linearly in f. Program cost = per-section hardware +
+      mass-aware launch under Wright's law. The first-terminal cost is rebuilt per f from components
+      (telescope · laser · modulation · receiver · converter), un-learning the Starlink-class volume
+      price back to a first unit. ⚑ marks cells that violate a stated assumption (hover for which).</p>
       <div class="ftrade-form">
         ${inputs}
         <label class="ftrade-field ftrade-check">
-          <input type="checkbox" data-key="legacyTerminals"> Flat $0.2M terminals (paper Table 4 model)
+          <input type="checkbox" data-key="includeLaunch"${a.includeLaunch ? " checked" : ""}> Include launch cost
+        </label>
+        <label class="ftrade-field ftrade-check">
+          <input type="checkbox" data-key="legacyTerminals"${a.legacyTerminals ? " checked" : ""}> Flat $0.2M terminals (paper Table 4 model)
         </label>
         <div class="ftrade-field ftrade-check">
           <button type="button" class="btn ftrade-reset" title="Restore every assumption to the Starlink-anchored defaults">Reset to Starlink baseline</button>
