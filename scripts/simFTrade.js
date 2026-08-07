@@ -9,7 +9,12 @@
 // Anchors: laws at f = ×128 (paper Sections 8–11); cost model = the simulator's
 // stated unit assumptions (paper Table 3); Starlink-class terminal as the ×1
 // baseline (monostatic, 75 mm class); Wright's law un-applied from the volume
-// price to recover the first-unit terminal cost.
+// price to recover the first-unit terminal cost. Launch follows the website's
+// deployment model analytically (simDeployment.js): per-section Hohmann Δv,
+// Starship does the first burn and returns, satellites do the second burn
+// electrically, tankers refill the mission propellant in LEO.
+
+import { calculateHohmannDeltaV_km_s } from "./simDeltaV.js?v=5.53";
 
 const DEFAULTS = {
   factors: [1, 16, 128, 1024, 1e4, 1e5], // ×1 = Starlink-class hardware as-is (baseline)
@@ -40,9 +45,19 @@ const DEFAULTS = {
   wright: 0.85,            // progress ratio per production doubling
   launchFirstM: 20,        // $M, first Starship-class flight (economics.launch-cost-slider)
   satsPerFlight: 37,       // legacy model only: 1 flight per ≈37 sats, tankers incl.
-  payloadPerFlightKg: 74000, // = 37 sats × 2 t — effective payload per flight, tankers incl.
   satMassKg: 2000,         // ≈2 t satellite class (dry bus + propellant)
-  includeLaunch: true,     // add launch cost (mass-aware flights under Wright's law)
+  includeLaunch: true,     // add launch cost (deployment-model flights under Wright's law)
+  // Deployment model (mirrors simDeployment.js analytically)
+  leoPayloadT: 100,        // t to LEO per launch; also a tanker's propellant delivery
+  starshipDryT: 120,       // t (simDeployment vehicleProperties.starship)
+  starshipPropCapT: 1200,  // t propellant capacity
+  starshipIspS: 370,       // s
+  landingPropT: 20,        // t reserved for deorbit + landing
+  escapeDvKmS: 3.2,        // LEO → Earth-SOI escape (simDeployment.ESCAPE_BURN_DV_KM_S)
+  concMeanA: 1.26,         // AU, satellite-weighted mean concentric ring
+  transferA: 1.26,         // AU + e of the tangency transfer ellipse (Fig 9)
+  transferE: 0.206,
+  marsA: 1.524,            // AU, Mars planetary ring
   junctionSats: 0,         // transfer-family junction rings: no closed form; 0 = plane-node pair
   // Terminals per satellite, per network section
   termsConc: 5,            // concentric relay: 2 radial + 2 in-ring + 1 access
@@ -144,6 +159,38 @@ export function fleetFor(family, tGbps, f, a = DEFAULTS) {
     total: secs.reduce((s, x) => s + x.S, 0), sections: secs };
 }
 
+// Deployment profile for one section (mirrors simDeployment.js analytically).
+// The Starship performs the section's first burn and a symmetric return; the
+// satellites fly the second Hohmann burn, inclination, station-keeping and
+// end-of-life return on their own electric propulsion (inside their ≈2 t).
+// Tankers refill the full mission propellant in LEO before departure.
+export function deployFor(sectionName, satKg, a = DEFAULTS) {
+  let dv;
+  if (sectionName === "concentric relay") {
+    dv = calculateHohmannDeltaV_km_s({ a: 1, e: 0, i: 0 }, { a: a.concMeanA, e: 0, i: 0 }).deltaV1;
+  } else if (sectionName === "planetary rings") {
+    // Earth ring: SOI-escape burn; Mars ring: Hohmann injection. Weight by the
+    // Eq-13 split N ∝ r: Mars share 1.524/(1+1.524).
+    const dvM = calculateHohmannDeltaV_km_s({ a: 1, e: 0, i: 0 }, { a: a.marsA, e: 0, i: 0 }).deltaV1;
+    const wM = a.marsA / (1 + a.marsA);
+    dv = (1 - wM) * a.escapeDvKmS + wM * dvM;
+  } else { // transfer + junction rings: ellipse injection at the Earth-orbit perihelion
+    const h = calculateHohmannDeltaV_km_s({ a: 1, e: 0, i: 0 }, { a: a.transferA, e: a.transferE, i: 0 });
+    dv = Math.max(h.deltaV1, h.deltaV2);
+  }
+  const ve = 9.81 * a.starshipIspS / 1000;          // km/s exhaust velocity
+  const E = Math.exp(dv / ve);
+  const base = a.starshipDryT + a.landingPropT;     // mass after payload release, incl. landing reserve
+  const satT = satKg / 1000;
+  const nPay = Math.floor(a.leoPayloadT / satT);
+  const nProp = Math.floor(
+    (a.starshipPropCapT - a.landingPropT - (E - 1) * base * (1 + E)) / ((E - 1) * satT));
+  const n = Math.max(1, Math.min(nPay, nProp));
+  const propTotal = a.landingPropT + base * (E - 1) + (base * E + n * satT) * (E - 1);
+  const tankers = Math.ceil(propTotal / a.leoPayloadT);
+  return { dv, n, tankers, propTotal, launchesPerSat: (1 + tankers) / n };
+}
+
 // Program cost with Wright's law: hardware per section (each section's
 // first-unit satellite = bus + its extras + its terminal count × first
 // terminal), launch pooled over mass-derived flight count.
@@ -164,12 +211,12 @@ export function programCostB(family, tGbps, f, term, a = DEFAULTS) {
     const termFirstM = term.hwM + term.busM;
     hwB = secs.reduce((sum, x) =>
       sum + ((a.busFirstM + x.extrasM + x.k * termFirstM) * Math.pow(x.S, w)) / w, 0) / 1000;
-    const flights = secs.reduce((sum, x) => {
+    const launches = secs.reduce((sum, x) => {
       const satKg = a.satMassKg + x.k * Math.max(0, term.massKg - a.massKg);
-      return sum + (x.S * satKg) / a.payloadPerFlightKg;
+      return sum + x.S * deployFor(x.name, satKg, a).launchesPerSat;
     }, 0);
     launchB = a.includeLaunch
-      ? (a.launchFirstM * Math.pow(flights, w)) / w / 1000 : 0;
+      ? (a.launchFirstM * Math.pow(launches, w)) / w / 1000 : 0;
   }
   return { S, totalB: hwB + launchB, hwB, launchB };
 }
@@ -242,6 +289,24 @@ function ladderTable(a) {
     <tbody>${rows}</tbody></table>`;
 }
 
+function deployTable(a, term) {
+  const secs = [
+    ["concentric relay", a.termsConc], ["transfer rings", a.termsTransfer],
+    ["planetary rings", a.termsPlanet], ["junction rings", a.termsJunction],
+  ];
+  const rows = secs.map(([name, k]) => {
+    const satKg = a.satMassKg + k * Math.max(0, term.massKg - a.massKg);
+    const d = deployFor(name, satKg, a);
+    return `<tr><td>${name}</td><td>${d.dv.toFixed(2)} km/s</td>
+      <td>${Math.round(satKg)} kg</td><td>${d.n}</td><td>${d.tankers}</td>
+      <td>${(100 * d.launchesPerSat).toFixed(1)}</td></tr>`;
+  }).join("");
+  return `<h3>Deployment model per section (terminals at the ×128 rung)</h3>
+    <table><thead><tr><th>Section</th><th>Starship Δv</th><th>Sat mass</th>
+    <th>Sats / flight</th><th>Tankers / flight</th><th>Launches / 100 sats</th></tr></thead>
+    <tbody>${rows}</tbody></table>`;
+}
+
 const FIELDS = [
   ["lineRateGbps", "Per-link max rate (Gbps)", 1,
    "Not physics — an electronics knob. Demonstrated beyond 100 Gbps: TBIRD 200 Gbps from a CubeSat, " +
@@ -251,8 +316,11 @@ const FIELDS = [
   ["launchFirstM", "First flight ($M)", 1,
    "Matches the economics panel's launch-cost slider default ($20M first Starship-class flight)."],
   ["satMassKg", "Satellite mass class (kg)", 100],
-  ["payloadPerFlightKg", "Payload per flight, tankers incl. (kg)", 1000,
-   "74 t = the paper's 1 flight per ≈37 satellites at the 2 t class. Heavier terminals reduce satellites per flight."],
+  ["leoPayloadT", "Payload to LEO per launch (t)", 10,
+   "Also a tanker's propellant delivery per launch. The simulator's sliders default to 200 t; " +
+   "100 t is the conservative near-term figure. At 200 t the model reproduces the paper's ≈37 sats/flight."],
+  ["starshipIspS", "Starship Isp (s)", 5],
+  ["landingPropT", "Landing propellant reserve (t)", 5],
   ["junctionSats", "Junction-ring satellites (transfer)", 500,
    "No closed form in the paper; the plane-node pair needs none (0). Counted at 2 terminals per satellite."],
   ["termVolM", "Terminal volume cost ($M)", 0.01],
@@ -335,6 +403,7 @@ function refresh(body) {
   const out = body.querySelector(".ftrade-out");
   out.innerHTML =
     ladderTable(a) +
+    deployTable(a, terminalForFactor(128, a)) +
     familyTable("concentric", a) +
     familyTable("transfer", a) +
     `<p class="muted">Anchors: Starlink-class ×1 baseline (monostatic ${DEFAULTS.apertureMm} mm-class,
@@ -348,5 +417,10 @@ function refresh(body) {
      feeders into V2 transfer rings), one dedicated to in-transit spacecraft; transfer 3: two
      in-ring, one opportunistic (by position: planetary-ring junction / cross-ring link / spacecraft
      service); planetary rings 3; junction rings 2. Satellite bus, launch, planetary-ring and relay
-     laws as in the paper's cost model.</p>`;
+     laws as in the paper's cost model. Launch mirrors the website's deployment model analytically:
+     per section, the Starship flies the first Hohmann burn (transfer-family: the ellipse injection;
+     Earth ring: the 3.2 km/s escape) with a symmetric return and a ${DEFAULTS.landingPropT} t landing
+     reserve; the satellites fly the second burn, inclination, station-keeping and end-of-life return
+     on their own electric propulsion; tanker count = mission propellant ÷ the per-launch payload;
+     every launch (deploy + tanker) is priced under Wright's law.</p>`;
 }
