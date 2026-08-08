@@ -9,17 +9,17 @@
 // Loaded as an ES module worker:
 //   new Worker(new URL("./simWorker.js", import.meta.url), { type: "module" })
 
-import { SimSolarSystem } from "./simSolarSystem.js?v=5.54";
-import { SimSatellites } from "./simSatellites.js?v=5.54";
-import { SimLinkBudget } from "./simLinkBudget.js?v=5.54";
-import { SimNetwork } from "./simNetwork.js?v=5.54";
-import { SimDeployment } from "./simDeployment.js?v=5.54";
-import { SimMissionValidator } from "./simMissionValidator.js?v=5.54";
-import { minOf } from "./simMath.js?v=5.54";
-import { buildFlowSummary } from "./simMaxFlow.js?v=5.54";
-import { linksToThumbData } from "./simThumbs.js?v=5.54";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.54";
-import { planetRingRequiredMbps, junctionDeficits } from "./slidersData.js?v=5.54";
+import { SimSolarSystem } from "./simSolarSystem.js?v=5.55";
+import { SimSatellites } from "./simSatellites.js?v=5.55";
+import { SimLinkBudget } from "./simLinkBudget.js?v=5.55";
+import { SimNetwork } from "./simNetwork.js?v=5.55";
+import { SimDeployment } from "./simDeployment.js?v=5.55";
+import { SimMissionValidator } from "./simMissionValidator.js?v=5.55";
+import { minOf } from "./simMath.js?v=5.55";
+import { buildFlowSummary } from "./simMaxFlow.js?v=5.55";
+import { linksToThumbData } from "./simThumbs.js?v=5.55";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.55";
+import { planetRingRequiredMbps, junctionDeficits } from "./slidersData.js?v=5.55";
 
 // --- State (initialized lazily on the first compute) ---
 let simLinkBudget = null;

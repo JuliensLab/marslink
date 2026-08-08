@@ -14,7 +14,7 @@
 // Starship does the first burn and returns, satellites do the second burn
 // electrically, tankers refill the mission propellant in LEO.
 
-import { calculateHohmannDeltaV_km_s } from "./simDeltaV.js?v=5.54";
+import { calculateHohmannDeltaV_km_s } from "./simDeltaV.js?v=5.55";
 
 export const DEFAULTS = {
   factors: [1, 16, 128, 1024, 1e4, 1e5], // ×1 = Starlink-class hardware as-is (baseline)
@@ -361,7 +361,7 @@ export function renderFTradePanel(body) {
           <input type="checkbox" data-key="includeLaunch"${a.includeLaunch ? " checked" : ""}> Include launch cost
         </label>
         <label class="ftrade-field ftrade-check">
-          <input type="checkbox" data-key="legacyTerminals"${a.legacyTerminals ? " checked" : ""}> Flat $0.2M terminals (paper Table 4 model)
+          <input type="checkbox" data-key="legacyTerminals"${a.legacyTerminals ? " checked" : ""}> Flat $0.2M terminals (baseline comparison)
         </label>
         <div class="ftrade-field ftrade-check">
           <button type="button" class="btn ftrade-reset" title="Restore every assumption to the Starlink-anchored defaults">Reset to Starlink baseline</button>
