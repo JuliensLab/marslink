@@ -5,17 +5,17 @@ import {
   junctionDeficits,
   mapSliderValueToUserFacing as mapToUserFacing,
   mapUserFacingToSliderValue as mapToSliderInternal,
-} from "./slidersData.js?v=5.53";
-import { LukashianClock } from "./lukashianTime.js?v=5.53";
-import { wireAuthUi, isAuthed, openLoginPopup } from "./auth.js?v=5.53";
-import { SensitivityPool } from "./sensitivityPool.js?v=5.53";
-import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.53";
-import { minOf } from "./simMath.js?v=5.53";
-import { buildFlowSummary } from "./simMaxFlow.js?v=5.53";
-import { linksToThumbData, renderThumbDataURL } from "./simThumbs.js?v=5.53";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.53";
-import { archiveStore } from "./simArchiveStore.js?v=5.53";
-import { PAPER_PLAN, PLAN_VERSION, BASE_DOC } from "./paperPlan.js?v=5.53";
+} from "./slidersData.js?v=5.54";
+import { LukashianClock } from "./lukashianTime.js?v=5.54";
+import { wireAuthUi, isAuthed, openLoginPopup } from "./auth.js?v=5.54";
+import { SensitivityPool } from "./sensitivityPool.js?v=5.54";
+import { ensureState as ensureSimWorkerState, runScenario as runScenarioInProcess } from "./simWorker.js?v=5.54";
+import { minOf } from "./simMath.js?v=5.54";
+import { buildFlowSummary } from "./simMaxFlow.js?v=5.54";
+import { linksToThumbData, renderThumbDataURL } from "./simThumbs.js?v=5.54";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.54";
+import { archiveStore } from "./simArchiveStore.js?v=5.54";
+import { PAPER_PLAN, PLAN_VERSION, BASE_DOC } from "./paperPlan.js?v=5.54";
 
 export class SimUi {
   constructor(simMain) {
@@ -376,7 +376,7 @@ export class SimUi {
         closeReportPanel();
         ftradePanel.hidden = false;
         ftradePanel.setAttribute("aria-hidden", "false");
-        import("./simFTrade.js?v=5.53").then((m) =>
+        import("./simFTrade.js?v=5.54").then((m) =>
           m.renderFTradePanel(document.getElementById("ftrade-panel-body")));
       } else if (mode === "report") {
         closeDrawer();
@@ -6171,7 +6171,7 @@ export class SimUi {
     // Earth/Mars use their seeded values here; each accepted best then refines them below.
     previewAccepted(initialWeights);
 
-    const { solveBandDistribution } = await import("./bandSolver.js?v=5.53");
+    const { solveBandDistribution } = await import("./bandSolver.js?v=5.54");
     let result = null;
     try {
       result = await solveBandDistribution({

@@ -14,9 +14,9 @@
 // Starship does the first burn and returns, satellites do the second burn
 // electrically, tankers refill the mission propellant in LEO.
 
-import { calculateHohmannDeltaV_km_s } from "./simDeltaV.js?v=5.53";
+import { calculateHohmannDeltaV_km_s } from "./simDeltaV.js?v=5.54";
 
-const DEFAULTS = {
+export const DEFAULTS = {
   factors: [1, 16, 128, 1024, 1e4, 1e5], // ×1 = Starlink-class hardware as-is (baseline)
   capsGbps: [1, 1000, 1e6],
   ringCount: 2,            // transfer rings (user-selectable, default 2)
@@ -242,14 +242,14 @@ function cellFlags(family, tGbps, f, fleet, a) {
 
 /* ─────────────────────── rendering ─────────────────────── */
 
-const fmt = (n) => {
+export const fmt = (n) => {
   if (!isFinite(n)) return "—";
   if (n >= 1e6) return (n / 1e6).toFixed(n >= 3e6 ? 1 : 2) + "M";
   if (n >= 1e4) return Math.round(n / 1000) + "k";
   if (n >= 1000) return (n / 1000).toFixed(1) + "k";
   return String(Math.round(n));
 };
-const fmtB = (b) => (b >= 1000 ? "$" + (b / 1000).toFixed(1) + "T" : b >= 10 ? "$" + Math.round(b) + "B" : "$" + b.toFixed(1) + "B");
+export const fmtB = (b) => (b >= 1000 ? "$" + (b / 1000).toFixed(1) + "T" : b >= 10 ? "$" + Math.round(b) + "B" : "$" + b.toFixed(1) + "B");
 const fmtF = (f) => "×" + (f >= 1e4 ? f.toExponential(0).replace("e+", "e") : fmt(f));
 const capLabel = (t) => (t >= 1e6 ? t / 1e6 + " Pbps" : t >= 1000 ? t / 1000 + " Tbps" : t + " Gbps");
 
