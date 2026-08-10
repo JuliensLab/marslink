@@ -14,10 +14,12 @@
 // Starship does the first burn and returns, satellites do the second burn
 // electrically, tankers refill the mission propellant in LEO.
 
-import { calculateHohmannDeltaV_km_s } from "./simDeltaV.js?v=5.55";
+import { calculateHohmannDeltaV_km_s } from "./simDeltaV.js?v=5.56";
 
 export const DEFAULTS = {
-  factors: [1, 16, 128, 1024, 1e4, 1e5], // ×1 = Starlink-class hardware as-is (baseline)
+  // Decade ladder; ×1 = Starlink-class hardware as-is. Measurements behind the
+  // scaling laws were run at f = ×128 — decade values are exact linear rescales.
+  factors: [1, 10, 100, 1000, 1e4, 1e5],
   capsGbps: [1, 1000, 1e6],
   ringCount: 2,            // transfer rings (user-selectable, default 2)
   // Scaling-law constants, all quoted at f = ×128
@@ -250,7 +252,7 @@ export const fmt = (n) => {
   return String(Math.round(n));
 };
 export const fmtB = (b) => (b >= 1000 ? "$" + (b / 1000).toFixed(1) + "T" : b >= 10 ? "$" + Math.round(b) + "B" : "$" + b.toFixed(1) + "B");
-const fmtF = (f) => "×" + (f >= 1e4 ? f.toExponential(0).replace("e+", "e") : fmt(f));
+const fmtF = (f) => "×" + (f >= 1e4 ? f.toExponential(0).replace("e+", "e") : f.toLocaleString("en-US"));
 const capLabel = (t) => (t >= 1e6 ? t / 1e6 + " Pbps" : t >= 1000 ? t / 1000 + " Tbps" : t + " Gbps");
 
 function familyTable(family, a) {
@@ -301,7 +303,7 @@ function deployTable(a, term) {
       <td>${Math.round(satKg)} kg</td><td>${d.n}</td><td>${d.tankers}</td>
       <td>${(100 * d.launchesPerSat).toFixed(1)}</td></tr>`;
   }).join("");
-  return `<h3>Deployment model per section (terminals at the ×128 rung)</h3>
+  return `<h3>Deployment model per section (terminals at the ×100 rung)</h3>
     <table><thead><tr><th>Section</th><th>Starship Δv</th><th>Sat mass</th>
     <th>Sats / flight</th><th>Tankers / flight</th><th>Launches / 100 sats</th></tr></thead>
     <tbody>${rows}</tbody></table>`;
@@ -403,7 +405,7 @@ function refresh(body) {
   const out = body.querySelector(".ftrade-out");
   out.innerHTML =
     ladderTable(a) +
-    deployTable(a, terminalForFactor(128, a)) +
+    deployTable(a, terminalForFactor(100, a)) +
     familyTable("concentric", a) +
     familyTable("transfer", a) +
     `<p class="muted">Anchors: Starlink-class ×1 baseline (monostatic ${DEFAULTS.apertureMm} mm-class,
