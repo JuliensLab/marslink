@@ -9,17 +9,18 @@
 // Loaded as an ES module worker:
 //   new Worker(new URL("./simWorker.js", import.meta.url), { type: "module" })
 
-import { SimSolarSystem } from "./simSolarSystem.js?v=5.57";
-import { SimSatellites } from "./simSatellites.js?v=5.57";
-import { SimLinkBudget } from "./simLinkBudget.js?v=5.57";
-import { SimNetwork } from "./simNetwork.js?v=5.57";
-import { SimDeployment } from "./simDeployment.js?v=5.57";
-import { SimMissionValidator } from "./simMissionValidator.js?v=5.57";
-import { minOf } from "./simMath.js?v=5.57";
-import { buildFlowSummary } from "./simMaxFlow.js?v=5.57";
-import { linksToThumbData } from "./simThumbs.js?v=5.57";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.57";
-import { planetRingRequiredMbps, junctionDeficits } from "./slidersData.js?v=5.57";
+import { SimSolarSystem } from "./simSolarSystem.js?v=5.58";
+import { SimSatellites } from "./simSatellites.js?v=5.58";
+import { SimLinkBudget } from "./simLinkBudget.js?v=5.58";
+import { SimNetwork } from "./simNetwork.js?v=5.58";
+import { SimDeployment } from "./simDeployment.js?v=5.58";
+import { SimMissionValidator } from "./simMissionValidator.js?v=5.58";
+import { DEFAULTS as FTRADE_DEFAULTS, terminalForFactor } from "./simFTrade.js?v=5.58";
+import { minOf } from "./simMath.js?v=5.58";
+import { buildFlowSummary } from "./simMaxFlow.js?v=5.58";
+import { linksToThumbData } from "./simThumbs.js?v=5.58";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.58";
+import { planetRingRequiredMbps, junctionDeficits } from "./slidersData.js?v=5.58";
 
 // --- State (initialized lazily on the first compute) ---
 let simLinkBudget = null;
@@ -209,7 +210,12 @@ function runPipeline({ requestId, windowIdx, configEpoch, uiConfig, satellitesCo
     resultTreesData = new SimMissionValidator(missionProfilesData, {
       costPerLaunch: uiConfig["economics.launch-cost-slider"],
       costPerSatellite: uiConfig["economics.satellite-cost-slider"],
-      costPerLaserTerminal: uiConfig["economics.laser-terminal-cost-slider"],
+      costPerLaserTerminal: (() => { // paper Appendix A component model at current f
+        const lr = Number.isFinite(simLinkBudget.cTermGbps) ? simLinkBudget.cTermGbps : FTRADE_DEFAULTS.lineRateGbps;
+        const t = terminalForFactor(simLinkBudget.techImprovementFactor,
+          { ...FTRADE_DEFAULTS, termVolM: uiConfig["economics.laser-terminal-cost-slider"], lineRateGbps: lr });
+        return t.hwM + t.busM;
+      })(),
       laserPortsPerSatellite: simLinkBudget.maxLinksPerSatellite,
     });
     mark("missionValidator", t);
@@ -541,7 +547,12 @@ function runScenario({ requestId, scenarioId, uiConfig, simDate, sizingDate, flo
     resultTreesData = new SimMissionValidator(missionProfilesData, {
       costPerLaunch: uiConfig["economics.launch-cost-slider"],
       costPerSatellite: uiConfig["economics.satellite-cost-slider"],
-      costPerLaserTerminal: uiConfig["economics.laser-terminal-cost-slider"],
+      costPerLaserTerminal: (() => { // paper Appendix A component model at current f
+        const lr = Number.isFinite(simLinkBudget.cTermGbps) ? simLinkBudget.cTermGbps : FTRADE_DEFAULTS.lineRateGbps;
+        const t = terminalForFactor(simLinkBudget.techImprovementFactor,
+          { ...FTRADE_DEFAULTS, termVolM: uiConfig["economics.laser-terminal-cost-slider"], lineRateGbps: lr });
+        return t.hwM + t.busM;
+      })(),
       laserPortsPerRing: simLinkBudget.maxLinksPerRing,
       propellantCostsPerKg: {
         "CH4/O2": uiConfig["economics.fuel-cost-ch4o2"],

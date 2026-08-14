@@ -1,24 +1,25 @@
 // simMain.js
 
-import { SimUi } from "./simUi.js?v=5.57";
-import { SimTime } from "./simTime.js?v=5.57";
-import { SimSolarSystem } from "./simSolarSystem.js?v=5.57";
-import { SimSatellites } from "./simSatellites.js?v=5.57";
-import { SimDeployment } from "./simDeployment.js?v=5.57";
-import { SimMissionValidator } from "./simMissionValidator.js?v=5.57";
-import { SimLinkBudget } from "./simLinkBudget.js?v=5.57";
-import { SimNetwork } from "./simNetwork.js?v=5.57";
+import { SimUi } from "./simUi.js?v=5.58";
+import { DEFAULTS as FTRADE_DEFAULTS, terminalForFactor } from "./simFTrade.js?v=5.58";
+import { SimTime } from "./simTime.js?v=5.58";
+import { SimSolarSystem } from "./simSolarSystem.js?v=5.58";
+import { SimSatellites } from "./simSatellites.js?v=5.58";
+import { SimDeployment } from "./simDeployment.js?v=5.58";
+import { SimMissionValidator } from "./simMissionValidator.js?v=5.58";
+import { SimLinkBudget } from "./simLinkBudget.js?v=5.58";
+import { SimNetwork } from "./simNetwork.js?v=5.58";
 // Import both SimDisplay implementations with unique names
-import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=5.57";
-import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=5.57";
-import { generateReport } from "./reportGenerator.js?v=5.57";
-import { SIM_CONSTANTS } from "./simConstants.js?v=5.57";
-import { minOf, maxOf } from "./simMath.js?v=5.57";
-import { routeFlowUtilization } from "./simMaxFlow.js?v=5.57";
-import { SimFlightController } from "./simFlightController.js?v=5.57";
-import { SimProbeController } from "./simProbeController.js?v=5.57";
-import { findDepartureWindows } from "./simTransfer.js?v=5.57";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.57";
+import { SimDisplay as SimDisplay2D } from "./simDisplay-2d.js?v=5.58";
+import { SimDisplay as SimDisplay3D } from "./simDisplay-3d.js?v=5.58";
+import { generateReport } from "./reportGenerator.js?v=5.58";
+import { SIM_CONSTANTS } from "./simConstants.js?v=5.58";
+import { minOf, maxOf } from "./simMath.js?v=5.58";
+import { routeFlowUtilization } from "./simMaxFlow.js?v=5.58";
+import { SimFlightController } from "./simFlightController.js?v=5.58";
+import { SimProbeController } from "./simProbeController.js?v=5.58";
+import { findDepartureWindows } from "./simTransfer.js?v=5.58";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.58";
 
 export class SimMain {
   // Clamp argument to [-1, 1] to prevent NaN from Math.asin domain errors
@@ -71,7 +72,7 @@ export class SimMain {
     if (typeof window !== "undefined") window.simMain = this;
 
     // --- Worker + triple-buffered window cache (-1/0/+1) ---
-    this.simWorker = new Worker(new URL("./simWorker.js?v=5.57", import.meta.url), { type: "module" });
+    this.simWorker = new Worker(new URL("./simWorker.js?v=5.58", import.meta.url), { type: "module" });
     this.simWorker.onmessage = (event) => this.handleWorkerMessage(event);
     this.simWorker.onerror = (event) => console.error("[Marslink] Worker error:", event.message);
     this.simWorker.postMessage({ type: "init" });
@@ -494,10 +495,25 @@ export class SimMain {
     });
   }
 
+  // Paper Appendix A component model: first-unit terminal cost at the current
+  // improvement factor, anchored on the volume-price slider (×1 = Starlink-class).
+  // The flat slider value is no longer used directly — capability is bought with
+  // aperture/power/photon-counting and priced per component, so terminal cost
+  // scales with f exactly as in the paper's Tables 5-7.
+  terminalFirstUnitCostM() {
+    const volM = this.costPerLaserTerminalVolM ?? FTRADE_DEFAULTS.termVolM;
+    const f = this.simLinkBudget ? this.simLinkBudget.techImprovementFactor : 128;
+    const lineRate = this.simLinkBudget && Number.isFinite(this.simLinkBudget.cTermGbps)
+      ? this.simLinkBudget.cTermGbps : FTRADE_DEFAULTS.lineRateGbps;
+    const t = terminalForFactor(f, { ...FTRADE_DEFAULTS, termVolM: volM, lineRateGbps: lineRate });
+    return t.hwM + t.busM;
+  }
+
   setCosts(costConfig) {
     this.costPerLaunch = costConfig["economics.launch-cost-slider"];
     this.costPerSatellite = costConfig["economics.satellite-cost-slider"];
-    this.costPerLaserTerminal = costConfig["economics.laser-terminal-cost-slider"];
+    this.costPerLaserTerminalVolM = costConfig["economics.laser-terminal-cost-slider"];
+    this.costPerLaserTerminal = this.terminalFirstUnitCostM();
     this.wrightsLawFactor = (costConfig["economics.wrights-law-factor"] || 100) / 100;
     this.propellantCostsPerKg = {
       "CH4/O2": costConfig["economics.fuel-cost-ch4o2"],
@@ -2927,6 +2943,7 @@ export class SimMain {
     // outlier at every tech transition (first ring shows the previous tech's last).
     try {
       this.missionProfiles = this.simDeployment.getMissionProfile(this.simSatellites.getOrbitalElements());
+      this.costPerLaserTerminal = this.terminalFirstUnitCostM(); // sweeps vary f per scenario
       this.resultTrees = new SimMissionValidator(this.missionProfiles, {
         costPerLaunch: this.costPerLaunch,
         costPerSatellite: this.costPerSatellite,

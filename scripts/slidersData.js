@@ -1,6 +1,6 @@
 // slidersData.js
 
-import { SIM_CONSTANTS } from "./simConstants.js?v=5.57";
+import { SIM_CONSTANTS } from "./simConstants.js?v=5.58";
 
 export const slidersData = {
   display: {
@@ -345,12 +345,13 @@ export const slidersData = {
       updateLongTermScore: false,
     },
     "laser-terminal-cost-slider": {
-      label: "1st Laser Terminal",
-      description: "Cost of the first laser terminal (before learning curve)",
-      min: 0.1,
+      label: "Laser terminal (volume, ×1)",
+      description:
+        "Starlink-class terminal price at volume, at improvement factor ×1 — deduced from published satellite unit costs (3 ISLs on an RF-dominated satellite). The FIRST-unit cost at the selected improvement factor is derived from this anchor by the paper's component model (telescope/laser/receiver, Appendix A) and then follows the learning curve.",
+      min: 0.01,
       max: 10,
-      value: 0.2,
-      step: 0.1,
+      value: 0.05,
+      step: 0.01,
       unit: "m$",
       scale: "linear",
       updateLongTermScore: false,
