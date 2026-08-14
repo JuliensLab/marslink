@@ -14,7 +14,7 @@
 // Starship does the first burn and returns, satellites do the second burn
 // electrically, tankers refill the mission propellant in LEO.
 
-import { calculateHohmannDeltaV_km_s } from "./simDeltaV.js?v=5.56";
+import { calculateHohmannDeltaV_km_s } from "./simDeltaV.js?v=5.57";
 
 export const DEFAULTS = {
   // Decade ladder; ×1 = Starlink-class hardware as-is. Measurements behind the
@@ -42,7 +42,9 @@ export const DEFAULTS = {
   extrasTransferM: 1.65,   // $M, aphelion arrays + perihelion radiators (transfer)
   extrasPlanetM: 1.35,     // $M, planetary rings (Earth-ring 1.0 / Mars-ring 1.65 average)
   extrasJunctionM: 1.0,    // $M, junction rings
-  termVolM: 0.2,           // $M, Starlink-class terminal at volume
+  termVolM: 0.05,          // $M, Starlink-class terminal at volume — deduced from published
+                           // satellite unit costs (~$0.25-1M for V1.5/V2 mini) at 3 ISLs per
+                           // satellite on an RF-dominated payload; ISLs are a small line item
   starlinkN0: 10000,       // terminals over which that volume price was learned
   wright: 0.85,            // progress ratio per production doubling
   launchFirstM: 20,        // $M, first Starship-class flight (economics.launch-cost-slider)
