@@ -9,18 +9,18 @@
 // Loaded as an ES module worker:
 //   new Worker(new URL("./simWorker.js", import.meta.url), { type: "module" })
 
-import { SimSolarSystem } from "./simSolarSystem.js?v=5.59";
-import { SimSatellites } from "./simSatellites.js?v=5.59";
-import { SimLinkBudget } from "./simLinkBudget.js?v=5.59";
-import { SimNetwork } from "./simNetwork.js?v=5.59";
-import { SimDeployment } from "./simDeployment.js?v=5.59";
-import { SimMissionValidator } from "./simMissionValidator.js?v=5.59";
-import { DEFAULTS as FTRADE_DEFAULTS, terminalForFactor } from "./simFTrade.js?v=5.59";
-import { minOf } from "./simMath.js?v=5.59";
-import { buildFlowSummary } from "./simMaxFlow.js?v=5.59";
-import { linksToThumbData } from "./simThumbs.js?v=5.59";
-import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.59";
-import { planetRingRequiredMbps, junctionDeficits } from "./slidersData.js?v=5.59";
+import { SimSolarSystem } from "./simSolarSystem.js?v=5.60";
+import { SimSatellites } from "./simSatellites.js?v=5.60";
+import { SimLinkBudget } from "./simLinkBudget.js?v=5.60";
+import { SimNetwork } from "./simNetwork.js?v=5.60";
+import { SimDeployment } from "./simDeployment.js?v=5.60";
+import { SimMissionValidator } from "./simMissionValidator.js?v=5.60";
+import { DEFAULTS as FTRADE_DEFAULTS, terminalForFactor } from "./simFTrade.js?v=5.60";
+import { minOf } from "./simMath.js?v=5.60";
+import { buildFlowSummary } from "./simMaxFlow.js?v=5.60";
+import { linksToThumbData } from "./simThumbs.js?v=5.60";
+import { EARTH_MARS_CLOSEST_APPROACH_DEG } from "./simOrbits.js?v=5.60";
+import { planetRingRequiredMbps, junctionDeficits } from "./slidersData.js?v=5.60";
 
 // --- State (initialized lazily on the first compute) ---
 let simLinkBudget = null;

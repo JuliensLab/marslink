@@ -63,7 +63,10 @@
 // geometry cells). Feeds §17's ship-service claim (currently an estimate)
 // and the concentric companion of Table 1. Earth↔Mars latency at this
 // point is already measured by the fig13 matched 1 Gbps grids.
-export const PLAN_VERSION = 8;
+// v9: ADDS ships-conc-10g — the ≈10 Gbps concentric companion (ridge R50 ≈
+// 9.8 Gbps, ≈57k sats) of the same probe measurement: Table 1's matched-
+// capacity concentric row (ship capacity+latency), 16 geometry cells.
+export const PLAN_VERSION = 9;
 
 // TIME MODEL (fitted on the v2 campaign's 103 clean timed rows, 2026-07-30):
 // per-scenario settle wall time is LINEAR in fleet size — t ≈ 0.64 ms × sats
@@ -363,6 +366,22 @@ export const PAPER_PLAN = [
       flow: false,
     },
     estMin: 8,
+  },
+  {
+    id: "ships-conc-10g",
+    title: "Ship service — concentric R50 probes ×16 geom (≈10 Gbps, Table 1 companion)",
+    feeds: "Table 1 concentric companion at the matched ≈10 Gbps capacity (ridge R50 ≈ 9.8 Gbps): per-ship access capacity and latency distributions vs the 1/2/20/40/60-ring transfer rows.",
+    family: "Contoured concentric",
+    sliders: { ...BASE },
+    probes: { count: 500, seed: 1 },
+    sens: {
+      ringSegs: [{ start: 50, end: 50, step: 1 }],
+      rate: null,
+      placement: "geometry-16",
+      flow: false,
+    },
+    heavy: true,
+    estMin: 14,
   },
   {
     id: "fig14-coverage",

@@ -1,8 +1,8 @@
 // carModel.js
 
-import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js?v=5.59";
-import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js?v=5.59";
-import { RGBELoader } from "three/addons/loaders/RGBELoader.js?v=5.59";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js?v=5.60";
+import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js?v=5.60";
+import { RGBELoader } from "three/addons/loaders/RGBELoader.js?v=5.60";
 
 // Function to load and create a car model. `scaleFactor` may be a number OR a getter
 // () => number, read when the (async) model finishes loading — so the roadster picks up
