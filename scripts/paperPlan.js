@@ -58,7 +58,12 @@
 // 10 Gbps 2-ring grid survives as b3-grid-tran-10g: its stronger worst-cell
 // flow dip (84.5% @10G vs 93% @1G) is the demand-dependent junction
 // saturation §13 discusses — a per-family finding, not a head-to-head.
-export const PLAN_VERSION = 7;
+// v8: ADDS v1-ships-conc-1g — concentric R22 ≈1 Gbps coverage-probe item
+// (per-ship capacity+latency distributions at the V1 program point, 16
+// geometry cells). Feeds §17's ship-service claim (currently an estimate)
+// and the concentric companion of Table 1. Earth↔Mars latency at this
+// point is already measured by the fig13 matched 1 Gbps grids.
+export const PLAN_VERSION = 8;
 
 // TIME MODEL (fitted on the v2 campaign's 103 clean timed rows, 2026-07-30):
 // per-scenario settle wall time is LINEAR in fleet size — t ≈ 0.64 ms × sats
@@ -343,6 +348,21 @@ export const PAPER_PLAN = [
     },
     heavy: true,
     estMin: 14,
+  },
+  {
+    id: "v1-ships-conc-1g",
+    title: "V1 ship service — concentric R22 probes ×16 geom (≈1 Gbps)",
+    feeds: "§17 V1 ship-service claim (measured, replaces the shared-Mbps estimate) + Table 1 concentric companion: per-ship access capacity and latency distributions at the V1 program point. Earth↔Mars latency at R22 ≈1 Gbps is already covered by fig13-grid-conc.",
+    family: "Contoured concentric",
+    sliders: { ...BASE },
+    probes: { count: 500, seed: 1 },
+    sens: {
+      ringSegs: [{ start: 22, end: 22, step: 1 }],
+      rate: null,
+      placement: "geometry-16",
+      flow: false,
+    },
+    estMin: 8,
   },
   {
     id: "fig14-coverage",

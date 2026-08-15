@@ -14,7 +14,7 @@
 // Starship does the first burn and returns, satellites do the second burn
 // electrically, tankers refill the mission propellant in LEO.
 
-import { calculateHohmannDeltaV_km_s } from "./simDeltaV.js?v=5.58";
+import { calculateHohmannDeltaV_km_s } from "./simDeltaV.js?v=5.59";
 
 export const DEFAULTS = {
   // Decade ladder; ×1 = Starlink-class hardware as-is. Measurements behind the
