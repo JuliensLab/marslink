@@ -12,6 +12,16 @@
 // computed as capacities["u_v"] - flows["u_v"], which can range from 0 to 2C
 // because capacities are stored in both directions. This matches the
 // Edmonds-Karp implementation and keeps output format byte-compatible.
+//
+// PERFORMANCE (2026-10-18): the solver works on integer edge slots instead of
+// "u_v" string keys. Every directed pair (u,v) seen in the adjacency gets one
+// slot (duplicates in graph[u] share it), with cap[]/flow[] in Float64Arrays
+// and rev[] pointing at the (v,u) slot. Each neighbour list is mirrored by a
+// parallel slot list, so iteration order — and therefore every push, relabel,
+// BFS and floating-point operation — is exactly the string-keyed algorithm's.
+// The path decomposition re-uses one stamp array for "visited" instead of a
+// fresh Map per path. Output (maxFlow and the flows dict, including key order)
+// is identical to the previous implementation; only the bookkeeping changed.
 
 const EPS = 1e-12;
 
@@ -35,13 +45,60 @@ export function pushRelabel({ graph, capacities, source, sink, perfStart, calcti
     if (id + 1 > V) V = id + 1;
   }
 
+  // --- Edge slots (replaces the "u_v" string keys) ---
+  // Pair key u*W+v (exact in a double for any realistic node count).
+  let W = V;
+  for (let i = 0; i < N; i++) {
+    const nb = graph[liveNodes[i]];
+    if (nb) for (let j = 0; j < nb.length; j++) if (nb[j] + 1 > W) W = nb[j] + 1;
+  }
+  if (source + 1 > W) W = source + 1;
+  if (sink + 1 > W) W = sink + 1;
+  const slotOf = new Map();
+  const slotU = [];
+  const slotV = [];
+  const getSlot = (u, v) => {
+    const k = u * W + v;
+    let e = slotOf.get(k);
+    if (e === undefined) {
+      e = slotU.length;
+      slotOf.set(k, e);
+      slotU.push(u);
+      slotV.push(v);
+    }
+    return e;
+  };
+  // adjSlots[u][i] = slot of (u, graph[u][i]); built for every node that has a
+  // neighbour list (graph[x] is looked up by numeric id exactly as before).
+  const adjSlots = new Map();
+  for (let i = 0; i < N; i++) {
+    const u = liveNodes[i];
+    const nb = graph[u];
+    if (!nb) continue;
+    const sl = new Int32Array(nb.length);
+    for (let j = 0; j < nb.length; j++) {
+      const v = nb[j];
+      sl[j] = getSlot(u, v);
+      getSlot(v, u);
+    }
+    adjSlots.set(u, sl);
+  }
+  const E = slotU.length;
+  const cap = new Float64Array(E);
+  const flow = new Float64Array(E);
+  const rev = new Int32Array(E);
+  for (let e = 0; e < E; e++) {
+    const u = slotU[e], v = slotV[e];
+    cap[e] = capacities[`${u}_${v}`] || 0;
+    rev[e] = slotOf.get(v * W + u);
+  }
+
   // --- Per-node state ---
   const height = new Int32Array(V);
   const excess = new Float64Array(V);
   const inQueue = new Uint8Array(V);
   const heightCount = new Int32Array(2 * N + 2); // buckets for gap heuristic
 
-  const flows = {};
   const queue = [];
   let qHead = 0;
 
@@ -55,21 +112,14 @@ export function pushRelabel({ graph, capacities, source, sink, perfStart, calcti
     }
   };
 
-  /** Push f units from u to v. Preserves antisymmetry. */
-  const push = (u, v, f) => {
-    const fwd = `${u}_${v}`;
-    const rev = `${v}_${u}`;
-    flows[fwd] = (flows[fwd] || 0) + f;
-    flows[rev] = (flows[rev] || 0) - f;
+  /** Push f units from u to v along slot e. Preserves antisymmetry. */
+  const push = (u, v, e, f) => {
+    const r = rev[e];
+    flow[e] = flow[e] + f;
+    flow[r] = flow[r] - f;
     excess[u] -= f;
     excess[v] += f;
     enqueue(v);
-  };
-
-  /** Residual capacity u→v. */
-  const residual = (u, v) => {
-    const key = `${u}_${v}`;
-    return (capacities[key] || 0) - (flows[key] || 0);
   };
 
   /**
@@ -95,12 +145,14 @@ export function pushRelabel({ graph, capacities, source, sink, perfStart, calcti
       const v = bfs[bfsHead++];
       const neighbors = graph[v];
       if (!neighbors) continue;
+      const sl = adjSlots.get(v);
       const hv = height[v];
       for (let i = 0; i < neighbors.length; i++) {
         const u = neighbors[i];
         if (u === source || height[u] !== 2 * N) continue;
-        // Can u push to v? i.e. residual(u, v) > 0
-        if (residual(u, v) > EPS) {
+        // Can u push to v? i.e. residual(u, v) > 0  (slot (u,v) = rev of (v,u))
+        const e = rev[sl[i]];
+        if (cap[e] - flow[e] > EPS) {
           height[u] = hv + 1;
           if (height[u] < heightCount.length) heightCount[height[u]]++;
           bfs.push(u);
@@ -123,9 +175,11 @@ export function pushRelabel({ graph, capacities, source, sink, perfStart, calcti
     const neighbors = graph[u];
     let minH = 2 * N;
     if (neighbors) {
+      const sl = adjSlots.get(u);
       for (let i = 0; i < neighbors.length; i++) {
         const v = neighbors[i];
-        if (residual(u, v) > EPS && height[v] < minH) {
+        const e = sl[i];
+        if (cap[e] - flow[e] > EPS && height[v] < minH) {
           minH = height[v];
         }
       }
@@ -166,16 +220,18 @@ export function pushRelabel({ graph, capacities, source, sink, perfStart, calcti
   const discharge = (u) => {
     const neighbors = graph[u];
     if (!neighbors) return 0;
+    const sl = adjSlots.get(u);
     let work = 0;
     while (excess[u] > EPS) {
       let pushed = false;
       const hu = height[u];
       for (let i = 0; i < neighbors.length; i++) {
         const v = neighbors[i];
-        const r = residual(u, v);
+        const e = sl[i];
+        const r = cap[e] - flow[e];
         if (r > EPS && hu === height[v] + 1) {
           const f = excess[u] < r ? excess[u] : r;
-          push(u, v, f);
+          push(u, v, e, f);
           pushed = true;
           if (excess[u] <= EPS) break;
         }
@@ -201,11 +257,13 @@ export function pushRelabel({ graph, capacities, source, sink, perfStart, calcti
   if (sourceNeighbors) {
     // Set source excess high so push() doesn't run it negative past the
     // point where we care. We'll reset to 0 after.
+    const sl = adjSlots.get(source);
     excess[source] = Infinity;
     for (let i = 0; i < sourceNeighbors.length; i++) {
       const v = sourceNeighbors[i];
-      const cap = capacities[`${source}_${v}`] || 0;
-      if (cap > EPS) push(source, v, cap);
+      const e = sl[i];
+      const c = cap[e];
+      if (c > EPS) push(source, v, e, c);
     }
     excess[source] = 0;
   }
@@ -241,34 +299,49 @@ export function pushRelabel({ graph, capacities, source, sink, perfStart, calcti
   // even when downstream can't absorb it. The main loop drains what it can to
   // sink, but leftover flow either gets stuck (excess > 0 at internal nodes)
   // or forms internal cycles that never reach the sink. Both inflate the
-  // per-link flow values in the `flows` dict beyond their actual contribution
-  // to the max-flow.
+  // per-link flow values beyond their actual contribution to the max-flow.
   //
-  // Path decomposition rebuilds `flows` from scratch by repeatedly finding
+  // Path decomposition rebuilds the flows from scratch by repeatedly finding
   // source→sink paths in the positive-flow subgraph and accumulating them.
   // Cycles disappear (no path can use a cycle without entering sink) and
-  // stuck flow is naturally excluded. The result: `flows[u_v]` contains
+  // stuck flow is naturally excluded. The result: flows["u_v"] contains
   // exactly the flow that travels source→sink through that edge.
-  const pathDecomposition = () => {
-    const newFlows = {};
+  const newFlows = {};
+  {
+    const newFlow = new Float64Array(E);
+    const hasNew = new Uint8Array(E);
+    // Insertion order of the output dict = order slots were first written.
+    const order = [];
+    const visitStamp = new Int32Array(W);
+    const parentNode = new Int32Array(W);
+    const parentSlot = new Int32Array(W);
+    let stamp = 0;
+    const bfsQueue = new Int32Array(W);
     while (true) {
-      // BFS source → sink using only edges where flows[u_v] > EPS
-      const parents = new Map();
-      parents.set(source, -1);
-      const bfsQueue = [source];
+      // BFS source → sink using only edges where flow > EPS
+      stamp++;
+      visitStamp[source] = stamp;
+      parentNode[source] = -1;
+      let qLen = 0;
+      bfsQueue[qLen++] = source;
       let bfsHead = 0;
       let found = false;
-      while (bfsHead < bfsQueue.length) {
+      while (bfsHead < qLen) {
         const u = bfsQueue[bfsHead++];
         if (u === sink) { found = true; break; }
         const neighbors = graph[u];
         if (!neighbors) continue;
+        const sl = adjSlots.get(u);
         for (let j = 0; j < neighbors.length; j++) {
           const v = neighbors[j];
-          if (parents.has(v)) continue;
-          if ((flows[`${u}_${v}`] || 0) > EPS) {
-            parents.set(v, u);
-            bfsQueue.push(v);
+          if (visitStamp[v] === stamp) continue;
+          const e = sl[j];
+          // (flow || 0) > EPS: an untouched slot reads 0 like a missing key
+          if (flow[e] > EPS) {
+            visitStamp[v] = stamp;
+            parentNode[v] = u;
+            parentSlot[v] = e;
+            bfsQueue[qLen++] = v;
           }
         }
       }
@@ -277,30 +350,30 @@ export function pushRelabel({ graph, capacities, source, sink, perfStart, calcti
       let pathFlow = Infinity;
       let s = sink;
       while (s !== source) {
-        const prev = parents.get(s);
-        const f = flows[`${prev}_${s}`] || 0;
+        const f = flow[parentSlot[s]];
         if (f < pathFlow) pathFlow = f;
-        s = prev;
+        s = parentNode[s];
       }
       if (pathFlow <= EPS) break;
-      // Subtract pathFlow from old flows; accumulate into newFlows
+      // Subtract pathFlow from old flows; accumulate into newFlow
       s = sink;
       while (s !== source) {
-        const prev = parents.get(s);
-        const fwd = `${prev}_${s}`;
-        const rev = `${s}_${prev}`;
-        flows[fwd] -= pathFlow;
-        flows[rev] += pathFlow;
-        newFlows[fwd] = (newFlows[fwd] || 0) + pathFlow;
-        newFlows[rev] = (newFlows[rev] || 0) - pathFlow;
-        s = prev;
+        const fwd = parentSlot[s];
+        const rv = rev[fwd];
+        flow[fwd] -= pathFlow;
+        flow[rv] += pathFlow;
+        if (!hasNew[fwd]) { hasNew[fwd] = 1; order.push(fwd); }
+        newFlow[fwd] = newFlow[fwd] + pathFlow;
+        if (!hasNew[rv]) { hasNew[rv] = 1; order.push(rv); }
+        newFlow[rv] = newFlow[rv] - pathFlow;
+        s = parentNode[s];
       }
     }
-    // Replace flows with the decomposed version (cycles removed)
-    for (const key in flows) delete flows[key];
-    for (const key in newFlows) flows[key] = newFlows[key];
-  };
-  pathDecomposition();
+    for (let k = 0; k < order.length; k++) {
+      const e = order[k];
+      newFlows[`${slotU[e]}_${slotV[e]}`] = newFlow[e];
+    }
+  }
 
-  return { maxFlow: excess[sink], flows };
+  return { maxFlow: excess[sink], flows: newFlows };
 }
