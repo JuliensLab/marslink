@@ -25,6 +25,16 @@ export const DEFAULTS = {
   // Scaling-law constants, all quoted at f = ×128
   concA: 1.89e-5,          // optimized concentric fit: T = concA·S^concP  [Gbps]
   concP: 1.26,
+  concUniA: 5.05e-6,       // uniform-placement concentric fit: T = concUniA·S^concUniP  [Gbps]
+  concUniP: 1.37,
+  // Both concentric fits were measured over R = 10–40 rings (≈1.6k–25k relay
+  // satellites). The fits cross at S ≈ 1.6×10⁵ relay satellites, beyond which
+  // the optimized law predicts LESS capacity than uniform placement.
+  concFitMaxRelay: 25000,  // flag concentric cells extrapolated beyond the measured range
+  // false = optimized fit everywhere (21 Aug 2026 draft basis);
+  // true = best of the uniform and optimized fits, i.e. never size above what
+  // uniform placement already achieves (audit 2026-10-18, top item 13).
+  concBestFit: false,
   kT: 1.07e-7,             // transfer: T = kT·S²/R  [Gbps]
   planetK: 5469,           // planetary rings, both planets: S = planetK·√T(Gbps)
   // Per-link max data rate. NOT physics — an electronics/architecture knob:
@@ -144,7 +154,7 @@ export function sectionsFor(family, tGbps, f, a = DEFAULTS) {
     k: a.termsPlanet, extrasM: a.extrasPlanetM };
   if (family === "concentric") {
     return [
-      { name: "concentric relay", S: Math.pow(tGbps / (a.concA * scale), 1 / a.concP),
+      { name: "concentric relay", S: concentricRelayS(tGbps, scale, a),
         k: a.termsConc, extrasM: a.extrasConcM },
       planet,
     ];
@@ -158,6 +168,21 @@ export function sectionsFor(family, tGbps, f, a = DEFAULTS) {
     out.push({ name: "junction rings", S: a.junctionSats, k: a.termsJunction, extrasM: a.extrasJunctionM });
   }
   return out;
+}
+
+// Concentric relay satellites for capacity T at linear f-scale `scale`.
+// Optimized fit by default; with concBestFit, the smaller of the optimized
+// and uniform-placement fleets (whichever fit delivers more capacity per sat).
+export function concentricRelayS(tGbps, scale, a = DEFAULTS) {
+  const sOpt = Math.pow(tGbps / (a.concA * scale), 1 / a.concP);
+  if (!a.concBestFit) return sOpt;
+  const sUni = Math.pow(tGbps / (a.concUniA * scale), 1 / a.concUniP);
+  return Math.min(sOpt, sUni);
+}
+
+// Relay-satellite count where the optimized and uniform concentric fits cross.
+export function concentricFitCrossingS(a = DEFAULTS) {
+  return Math.pow(a.concA / a.concUniA, 1 / (a.concUniP - a.concP));
 }
 
 export function fleetFor(family, tGbps, f, a = DEFAULTS) {
@@ -245,6 +270,12 @@ function cellFlags(family, tGbps, f, fleet, a) {
   }
   if (family === "concentric" && fleet.relay < a.concFloorRelay) {
     flags.push("below concentric structural floor");
+  }
+  if (family === "concentric" && fleet.relay > a.concFitMaxRelay) {
+    flags.push(`concentric law extrapolated: ${fmt(fleet.relay)} relay sats > ${fmt(a.concFitMaxRelay)} measured`);
+    if (!a.concBestFit && fleet.relay > concentricFitCrossingS(a)) {
+      flags.push(`optimized fit below uniform placement here (fits cross at ${fmt(concentricFitCrossingS(a))} relay sats)`);
+    }
   }
   if (tGbps > 2 * a.lineRateGbps) {
     flags.push(`planetary rings need layering or a higher line rate (aggregate > 2 × ${fmt(a.lineRateGbps)} Gbps per ring)`);
@@ -371,6 +402,9 @@ export function renderFTradePanel(body) {
         ${inputs}
         <label class="ftrade-field ftrade-check">
           <input type="checkbox" data-key="includeLaunch"${a.includeLaunch ? " checked" : ""}> Include launch cost
+        </label>
+        <label class="ftrade-field ftrade-check" title="Size concentric relays with whichever measured fit (uniform S^1.37 or optimized S^1.26) needs fewer satellites. The fits cross at ≈1.6×10⁵ relay satellites; both were measured only up to ≈25k.">
+          <input type="checkbox" data-key="concBestFit"${a.concBestFit ? " checked" : ""}> Concentric: best of uniform/optimized fits
         </label>
         <label class="ftrade-field ftrade-check">
           <input type="checkbox" data-key="legacyTerminals"${a.legacyTerminals ? " checked" : ""}> Flat $0.2M terminals (baseline comparison)
