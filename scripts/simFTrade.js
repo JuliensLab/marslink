@@ -39,8 +39,8 @@ export const DEFAULTS = {
   planetK: 5469,           // planetary rings, both planets: S = planetK·√T(Gbps)
   // Per-link max data rate. NOT physics — an electronics/architecture knob:
   // Starlink's demonstrated 100 Gbps is the ×1 anchor; TBIRD flew 200 Gbps
-  // from a CubeSat (Schieler 2023), NICT demonstrated 2 Tbps with small
-  // flight-class terminals (2025), DLR 13.16 Tbps over 10.45 km of atmosphere
+  // from a CubeSat (Schieler 2023), NICT demonstrated 2 Tbps over a 7.4 km
+  // horizontal ground link in Tokyo (Dec 2025; not on orbit), DLR 13.16 Tbps over 10.45 km of atmosphere
   // by 54-channel WDM, and ESA HydRON targets Tbps ISLs. Raising it = more
   // WDM channels behind the same monostatic telescope, priced per channel in
   // terminalForFactor below.
@@ -58,7 +58,8 @@ export const DEFAULTS = {
   starlinkN0: 10000,       // terminals over which that volume price was learned
   wright: 0.85,            // progress ratio per production doubling
   launchFirstM: 20,        // $M, first Starship-class flight (economics.launch-cost-slider)
-  satsPerFlight: 37,       // legacy model only: 1 flight per ≈37 sats, tankers incl.
+  satsPerFlight: 37,       // legacy model only (legacyTerminals): 1 flight per ≈37 sats, tankers incl.
+                           // — the 21 Aug 2026 draft's Table 3 rate, not derived from deployFor()
   satMassKg: 2000,         // ≈2 t satellite class (dry bus + propellant)
   includeLaunch: true,     // add launch cost (deployment-model flights under Wright's law)
   // Deployment model (mirrors simDeployment.js analytically)
@@ -86,10 +87,11 @@ export const DEFAULTS = {
   apertureMm: 75,          // ×1 baseline aperture (monostatic, tx+rx shared)
   laserW: 2,               // ×1 baseline optical transmit power (assumption)
   // Telescope cost ∝ (D/D0)^betaD (f contribution: D⁴). Evidence: space OTA
-  // ≈ D^1.8–2.0 (Stahl et al. 2010, doi:10.1117/1.3430603; van Belle, Meinel &
-  // Meinel 2004, doi:10.1117/12.552181), ground observatories D^2.5–2.8
-  // (Meinel 1979, Opt. Eng. 18, 645). Terminal-level default 2.25 = the space
-  // band's center plus the pointing burden (beamwidth ∝ λ/D tightens with D).
+  // single-variable fits ≈ D^1.2–1.3 (Stahl et al. 2010, doi:10.1117/1.3430603,
+  // whose survey reports exponents 0.27–2.7) up to ≈ D^2.0 (van Belle, Meinel &
+  // Meinel 2004, doi:10.1117/12.552181); ground observatories D^2.5–2.8
+  // (Meinel 1979, Opt. Eng. 18, 645). Terminal-level default 2.25 sits above
+  // the space band and adds the pointing burden (beamwidth ∝ λ/D tightens with D).
   betaD: 2.25,
   betaP: 0.8,              // laser + converter cost ∝ (P/P0)^betaP  (f contribution: P)
   rhoGain: 20,             // coherent → photon-counting + coding headroom (bounded)
@@ -353,7 +355,7 @@ function deployTable(a, term) {
 const FIELDS = [
   ["lineRateGbps", "Per-link max rate (Gbps)", 1,
    "Not physics — an electronics knob. Demonstrated beyond 100 Gbps: TBIRD 200 Gbps from a CubeSat, " +
-   "NICT 2 Tbps with small flight-class terminals (2025), DLR 13.16 Tbps over 10.45 km by 54-channel WDM; " +
+   "NICT 2 Tbps over a 7.4 km horizontal ground link (2025, not on orbit), DLR 13.16 Tbps over 10.45 km by 54-channel WDM; " +
    "ESA HydRON targets Tbps ISLs. Extra 100 Gbps channels are priced into the terminal (one transceiver " +
    "chain each, telescope shared)."],
   ["launchFirstM", "First flight ($M)", 1,
@@ -361,7 +363,8 @@ const FIELDS = [
   ["satMassKg", "Satellite mass class (kg)", 100],
   ["leoPayloadT", "Payload to LEO per launch (t)", 10,
    "Also a tanker's propellant delivery per launch. The simulator's sliders default to 200 t; " +
-   "100 t is the conservative near-term figure. At 200 t the model reproduces the paper's ≈37 sats/flight."],
+   "100 t is the conservative near-term figure. Satellites per launch (deploy + tankers) at the current " +
+   "settings are in the deployment table below."],
   ["starshipIspS", "Starship Isp (s)", 5],
   ["landingPropT", "Landing propellant reserve (t)", 5],
   ["junctionSats", "Junction-ring satellites (transfer)", 500,
@@ -372,7 +375,7 @@ const FIELDS = [
   ["apertureMm", "Baseline aperture (mm)", 1],
   ["laserW", "Baseline laser (W optical)", 0.5],
   ["betaD", "Telescope cost exponent βD", 0.05,
-   "Space telescope assemblies ≈ D^1.8–2.0 (Stahl et al. 2010; van Belle, Meinel & Meinel 2004); " +
+   "Space telescope assemblies ≈ D^1.2–1.3 (Stahl et al. 2010, single-variable) to ≈ D^2.0 (van Belle, Meinel & Meinel 2004); " +
    "ground observatories D^2.5–2.8 (Meinel 1979). Default 2.25 adds the pointing burden — " +
    "beamwidth ∝ λ/D, so aiming tightens as the aperture grows."],
   ["betaP", "Laser cost exponent βP", 0.1],
@@ -456,7 +459,7 @@ function refresh(body) {
      100 Gbps; volume price un-learned over ${fmt(a.starlinkN0)} units →
      first unit $${(a.termVolM * Math.pow(a.starlinkN0, -Math.log2(a.wright))).toFixed(2)}M).
      DSOC flight transceiver (22 cm, 4 W, photon-counting; program $206M) bounds the flagship end.
-     Telescope cost exponent βD: space assemblies ≈ D^1.8–2.0 (Stahl et al. 2010; van Belle,
+     Telescope cost exponent βD: space assemblies ≈ D^1.2–1.3 (Stahl et al. 2010) to ≈ D^2.0 (van Belle,
      Meinel &amp; Meinel 2004), ground D^2.5–2.8 (Meinel 1979); the default adds the λ/D pointing
      burden. Terminal budget per satellite — concentric relay 5: two radial (relay chain), two
      azimuthal (in-ring links: aggregate parallel routes for an in-transit spacecraft; later the
