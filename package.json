@@ -1,4 +1,7 @@
 {
+  "scripts": {
+    "check": "node --experimental-default-type=module tests/check-deltav.mjs"
+  },
   "dependencies": {
     "docx": "^9.6.1"
   }

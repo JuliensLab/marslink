@@ -14,7 +14,7 @@
 // Starship does the first burn and returns, satellites do the second burn
 // electrically, tankers refill the mission propellant in LEO.
 
-import { calculateHohmannDeltaV_km_s } from "./simDeltaV.js?v=5.60";
+import { calculateHohmannDeltaV_km_s, leoDepartureDeltaV_km_s } from "./simDeltaV.js?v=5.60";
 
 export const DEFAULTS = {
   // Decade ladder; ×1 = Starlink-class hardware as-is. Measurements behind the
@@ -25,12 +25,22 @@ export const DEFAULTS = {
   // Scaling-law constants, all quoted at f = ×128
   concA: 1.89e-5,          // optimized concentric fit: T = concA·S^concP  [Gbps]
   concP: 1.26,
+  concUniA: 5.05e-6,       // uniform-placement concentric fit: T = concUniA·S^concUniP  [Gbps]
+  concUniP: 1.37,
+  // Both concentric fits were measured over R = 10–40 rings (≈1.6k–25k relay
+  // satellites). The fits cross at S ≈ 1.6×10⁵ relay satellites, beyond which
+  // the optimized law predicts LESS capacity than uniform placement.
+  concFitMaxRelay: 25000,  // flag concentric cells extrapolated beyond the measured range
+  // false = optimized fit everywhere (21 Aug 2026 draft basis);
+  // true = best of the uniform and optimized fits, i.e. never size above what
+  // uniform placement already achieves (audit 2026-10-18, top item 13).
+  concBestFit: false,
   kT: 1.07e-7,             // transfer: T = kT·S²/R  [Gbps]
   planetK: 5469,           // planetary rings, both planets: S = planetK·√T(Gbps)
   // Per-link max data rate. NOT physics — an electronics/architecture knob:
   // Starlink's demonstrated 100 Gbps is the ×1 anchor; TBIRD flew 200 Gbps
-  // from a CubeSat (Schieler 2023), NICT demonstrated 2 Tbps with small
-  // flight-class terminals (2025), DLR 13.16 Tbps over 10.45 km of atmosphere
+  // from a CubeSat (Schieler 2023), NICT demonstrated 2 Tbps over a 7.4 km
+  // horizontal ground link in Tokyo (Dec 2025; not on orbit), DLR 13.16 Tbps over 10.45 km of atmosphere
   // by 54-channel WDM, and ESA HydRON targets Tbps ISLs. Raising it = more
   // WDM channels behind the same monostatic telescope, priced per channel in
   // terminalForFactor below.
@@ -48,7 +58,8 @@ export const DEFAULTS = {
   starlinkN0: 10000,       // terminals over which that volume price was learned
   wright: 0.85,            // progress ratio per production doubling
   launchFirstM: 20,        // $M, first Starship-class flight (economics.launch-cost-slider)
-  satsPerFlight: 37,       // legacy model only: 1 flight per ≈37 sats, tankers incl.
+  satsPerFlight: 37,       // legacy model only (legacyTerminals): 1 flight per ≈37 sats, tankers incl.
+                           // — the 21 Aug 2026 draft's Table 3 rate, not derived from deployFor()
   satMassKg: 2000,         // ≈2 t satellite class (dry bus + propellant)
   includeLaunch: true,     // add launch cost (deployment-model flights under Wright's law)
   // Deployment model (mirrors simDeployment.js analytically)
@@ -58,6 +69,9 @@ export const DEFAULTS = {
   starshipIspS: 370,       // s
   landingPropT: 20,        // t reserved for deorbit + landing
   escapeDvKmS: 3.2,        // LEO → Earth-SOI escape (simDeployment.ESCAPE_BURN_DV_KM_S)
+  // true = pre-audit basis: the heliocentric Hohmann Δv1 charged directly as the
+  // LEO burn (no Earth-escape term). Kept only to reproduce the 21 Aug 2026 draft.
+  legacyHelioDv: false,
   concMeanA: 1.26,         // AU, satellite-weighted mean concentric ring
   transferA: 1.26,         // AU + e of the tangency transfer ellipse (Fig 9)
   transferE: 0.206,
@@ -73,10 +87,11 @@ export const DEFAULTS = {
   apertureMm: 75,          // ×1 baseline aperture (monostatic, tx+rx shared)
   laserW: 2,               // ×1 baseline optical transmit power (assumption)
   // Telescope cost ∝ (D/D0)^betaD (f contribution: D⁴). Evidence: space OTA
-  // ≈ D^1.8–2.0 (Stahl et al. 2010, doi:10.1117/1.3430603; van Belle, Meinel &
-  // Meinel 2004, doi:10.1117/12.552181), ground observatories D^2.5–2.8
-  // (Meinel 1979, Opt. Eng. 18, 645). Terminal-level default 2.25 = the space
-  // band's center plus the pointing burden (beamwidth ∝ λ/D tightens with D).
+  // single-variable fits ≈ D^1.2–1.3 (Stahl et al. 2010, doi:10.1117/1.3430603,
+  // whose survey reports exponents 0.27–2.7) up to ≈ D^2.0 (van Belle, Meinel &
+  // Meinel 2004, doi:10.1117/12.552181); ground observatories D^2.5–2.8
+  // (Meinel 1979, Opt. Eng. 18, 645). Terminal-level default 2.25 sits above
+  // the space band and adds the pointing burden (beamwidth ∝ λ/D tightens with D).
   betaD: 2.25,
   betaP: 0.8,              // laser + converter cost ∝ (P/P0)^betaP  (f contribution: P)
   rhoGain: 20,             // coherent → photon-counting + coding headroom (bounded)
@@ -141,7 +156,7 @@ export function sectionsFor(family, tGbps, f, a = DEFAULTS) {
     k: a.termsPlanet, extrasM: a.extrasPlanetM };
   if (family === "concentric") {
     return [
-      { name: "concentric relay", S: Math.pow(tGbps / (a.concA * scale), 1 / a.concP),
+      { name: "concentric relay", S: concentricRelayS(tGbps, scale, a),
         k: a.termsConc, extrasM: a.extrasConcM },
       planet,
     ];
@@ -157,6 +172,21 @@ export function sectionsFor(family, tGbps, f, a = DEFAULTS) {
   return out;
 }
 
+// Concentric relay satellites for capacity T at linear f-scale `scale`.
+// Optimized fit by default; with concBestFit, the smaller of the optimized
+// and uniform-placement fleets (whichever fit delivers more capacity per sat).
+export function concentricRelayS(tGbps, scale, a = DEFAULTS) {
+  const sOpt = Math.pow(tGbps / (a.concA * scale), 1 / a.concP);
+  if (!a.concBestFit) return sOpt;
+  const sUni = Math.pow(tGbps / (a.concUniA * scale), 1 / a.concUniP);
+  return Math.min(sOpt, sUni);
+}
+
+// Relay-satellite count where the optimized and uniform concentric fits cross.
+export function concentricFitCrossingS(a = DEFAULTS) {
+  return Math.pow(a.concA / a.concUniA, 1 / (a.concUniP - a.concP));
+}
+
 export function fleetFor(family, tGbps, f, a = DEFAULTS) {
   const secs = sectionsFor(family, tGbps, f, a);
   return { relay: secs[0].S, planet: secs[1].S,
@@ -169,18 +199,23 @@ export function fleetFor(family, tGbps, f, a = DEFAULTS) {
 // end-of-life return on their own electric propulsion (inside their ≈2 t).
 // Tankers refill the full mission propellant in LEO before departure.
 export function deployFor(sectionName, satKg, a = DEFAULTS) {
+  // Every launcher burn starts in LEO. The heliocentric Hohmann Δv1 is the
+  // hyperbolic excess v∞ the Starship must leave Earth with; the burn from
+  // LEO is √(v∞² + v_esc²) − v_LEO (simDeltaV.leoDepartureDeltaV_km_s), which
+  // equals the 3.2 km/s escape burn at v∞ = 0 and always exceeds it otherwise.
+  const fromLeo = (vInf) => (a.legacyHelioDv ? vInf : leoDepartureDeltaV_km_s(vInf, a.escapeDvKmS));
   let dv;
   if (sectionName === "concentric relay") {
-    dv = calculateHohmannDeltaV_km_s({ a: 1, e: 0, i: 0 }, { a: a.concMeanA, e: 0, i: 0 }).deltaV1;
+    dv = fromLeo(calculateHohmannDeltaV_km_s({ a: 1, e: 0, i: 0 }, { a: a.concMeanA, e: 0, i: 0 }).deltaV1);
   } else if (sectionName === "planetary rings") {
-    // Earth ring: SOI-escape burn; Mars ring: Hohmann injection. Weight by the
-    // Eq-13 split N ∝ r: Mars share 1.524/(1+1.524).
-    const dvM = calculateHohmannDeltaV_km_s({ a: 1, e: 0, i: 0 }, { a: a.marsA, e: 0, i: 0 }).deltaV1;
+    // Earth ring: SOI-escape burn (v∞ = 0); Mars ring: Hohmann injection from
+    // LEO. Weight by the Eq-13 split N ∝ r: Mars share 1.524/(1+1.524).
+    const dvM = fromLeo(calculateHohmannDeltaV_km_s({ a: 1, e: 0, i: 0 }, { a: a.marsA, e: 0, i: 0 }).deltaV1);
     const wM = a.marsA / (1 + a.marsA);
     dv = (1 - wM) * a.escapeDvKmS + wM * dvM;
   } else { // transfer + junction rings: ellipse injection at the Earth-orbit perihelion
     const h = calculateHohmannDeltaV_km_s({ a: 1, e: 0, i: 0 }, { a: a.transferA, e: a.transferE, i: 0 });
-    dv = Math.max(h.deltaV1, h.deltaV2);
+    dv = fromLeo(Math.max(h.deltaV1, h.deltaV2));
   }
   const ve = 9.81 * a.starshipIspS / 1000;          // km/s exhaust velocity
   const E = Math.exp(dv / ve);
@@ -237,6 +272,12 @@ function cellFlags(family, tGbps, f, fleet, a) {
   }
   if (family === "concentric" && fleet.relay < a.concFloorRelay) {
     flags.push("below concentric structural floor");
+  }
+  if (family === "concentric" && fleet.relay > a.concFitMaxRelay) {
+    flags.push(`concentric law extrapolated: ${fmt(fleet.relay)} relay sats > ${fmt(a.concFitMaxRelay)} measured`);
+    if (!a.concBestFit && fleet.relay > concentricFitCrossingS(a)) {
+      flags.push(`optimized fit below uniform placement here (fits cross at ${fmt(concentricFitCrossingS(a))} relay sats)`);
+    }
   }
   if (tGbps > 2 * a.lineRateGbps) {
     flags.push(`planetary rings need layering or a higher line rate (aggregate > 2 × ${fmt(a.lineRateGbps)} Gbps per ring)`);
@@ -314,7 +355,7 @@ function deployTable(a, term) {
 const FIELDS = [
   ["lineRateGbps", "Per-link max rate (Gbps)", 1,
    "Not physics — an electronics knob. Demonstrated beyond 100 Gbps: TBIRD 200 Gbps from a CubeSat, " +
-   "NICT 2 Tbps with small flight-class terminals (2025), DLR 13.16 Tbps over 10.45 km by 54-channel WDM; " +
+   "NICT 2 Tbps over a 7.4 km horizontal ground link (2025, not on orbit), DLR 13.16 Tbps over 10.45 km by 54-channel WDM; " +
    "ESA HydRON targets Tbps ISLs. Extra 100 Gbps channels are priced into the terminal (one transceiver " +
    "chain each, telescope shared)."],
   ["launchFirstM", "First flight ($M)", 1,
@@ -322,7 +363,8 @@ const FIELDS = [
   ["satMassKg", "Satellite mass class (kg)", 100],
   ["leoPayloadT", "Payload to LEO per launch (t)", 10,
    "Also a tanker's propellant delivery per launch. The simulator's sliders default to 200 t; " +
-   "100 t is the conservative near-term figure. At 200 t the model reproduces the paper's ≈37 sats/flight."],
+   "100 t is the conservative near-term figure. Satellites per launch (deploy + tankers) at the current " +
+   "settings are in the deployment table below."],
   ["starshipIspS", "Starship Isp (s)", 5],
   ["landingPropT", "Landing propellant reserve (t)", 5],
   ["junctionSats", "Junction-ring satellites (transfer)", 500,
@@ -333,7 +375,7 @@ const FIELDS = [
   ["apertureMm", "Baseline aperture (mm)", 1],
   ["laserW", "Baseline laser (W optical)", 0.5],
   ["betaD", "Telescope cost exponent βD", 0.05,
-   "Space telescope assemblies ≈ D^1.8–2.0 (Stahl et al. 2010; van Belle, Meinel & Meinel 2004); " +
+   "Space telescope assemblies ≈ D^1.2–1.3 (Stahl et al. 2010, single-variable) to ≈ D^2.0 (van Belle, Meinel & Meinel 2004); " +
    "ground observatories D^2.5–2.8 (Meinel 1979). Default 2.25 adds the pointing burden — " +
    "beamwidth ∝ λ/D, so aiming tightens as the aperture grows."],
   ["betaP", "Laser cost exponent βP", 0.1],
@@ -363,6 +405,9 @@ export function renderFTradePanel(body) {
         ${inputs}
         <label class="ftrade-field ftrade-check">
           <input type="checkbox" data-key="includeLaunch"${a.includeLaunch ? " checked" : ""}> Include launch cost
+        </label>
+        <label class="ftrade-field ftrade-check" title="Size concentric relays with whichever measured fit (uniform S^1.37 or optimized S^1.26) needs fewer satellites. The fits cross at ≈1.6×10⁵ relay satellites; both were measured only up to ≈25k.">
+          <input type="checkbox" data-key="concBestFit"${a.concBestFit ? " checked" : ""}> Concentric: best of uniform/optimized fits
         </label>
         <label class="ftrade-field ftrade-check">
           <input type="checkbox" data-key="legacyTerminals"${a.legacyTerminals ? " checked" : ""}> Flat $0.2M terminals (baseline comparison)
@@ -414,7 +459,7 @@ function refresh(body) {
      100 Gbps; volume price un-learned over ${fmt(a.starlinkN0)} units →
      first unit $${(a.termVolM * Math.pow(a.starlinkN0, -Math.log2(a.wright))).toFixed(2)}M).
      DSOC flight transceiver (22 cm, 4 W, photon-counting; program $206M) bounds the flagship end.
-     Telescope cost exponent βD: space assemblies ≈ D^1.8–2.0 (Stahl et al. 2010; van Belle,
+     Telescope cost exponent βD: space assemblies ≈ D^1.2–1.3 (Stahl et al. 2010) to ≈ D^2.0 (van Belle,
      Meinel &amp; Meinel 2004), ground D^2.5–2.8 (Meinel 1979); the default adds the λ/D pointing
      burden. Terminal budget per satellite — concentric relay 5: two radial (relay chain), two
      azimuthal (in-ring links: aggregate parallel routes for an in-transit spacecraft; later the
@@ -422,8 +467,9 @@ function refresh(body) {
      in-ring, one opportunistic (by position: planetary-ring junction / cross-ring link / spacecraft
      service); planetary rings 3; junction rings 2. Satellite bus, launch, planetary-ring and relay
      laws as in the paper's cost model. Launch mirrors the website's deployment model analytically:
-     per section, the Starship flies the first Hohmann burn (transfer-family: the ellipse injection;
-     Earth ring: the 3.2 km/s escape) with a symmetric return and a ${DEFAULTS.landingPropT} t landing
+     per section, the Starship flies the first Hohmann burn from LEO, including the Earth-escape
+     term (Δv = √(v∞² + v_esc²) − v_LEO; transfer-family: the ellipse injection; Earth ring: the
+     3.2 km/s escape) with a symmetric return and a ${DEFAULTS.landingPropT} t landing
      reserve; the satellites fly the second burn, inclination, station-keeping and end-of-life return
      on their own electric propulsion; tanker count = mission propellant ÷ the per-launch payload;
      every launch (deploy + tanker) is priced under Wright's law.</p>`;

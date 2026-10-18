@@ -643,7 +643,7 @@ export async function generateReport(missionProfiles, resultTrees, costs, satell
       orbitSections += `<span class="fh-small" title="Hohmann transfer duration in days">Days</span>`;
       orbitSections += `<span class="fh-small" title="Number of satellites deployed on this flight">Sats</span>`;
       orbitSections += `<span class="fh-small" title="Tanker flights required to refuel Starship in LEO before departure">Tnk</span>`;
-      orbitSections += `<span class="fh-dv" title="Total outbound ΔV (km/s): Hohmann departure + arrival + inclination change">ΔV</span>`;
+      orbitSections += `<span class="fh-dv" title="Total heliocentric outbound ΔV (km/s): Hohmann departure + arrival + inclination change. The Starship burn from LEO (incl. the Earth-escape term) is in the expanded flight tree.">ΔV</span>`;
       orbitSections += `<span class="fh-pct" title="Starship payload mass as % of max payload capacity">Payload</span>`;
       orbitSections += `<span class="fh-pct" title="Starship propellant after tanker refuelling as % of tank capacity">Refuel</span>`;
       orbitSections += `</div>`;

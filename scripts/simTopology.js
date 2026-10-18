@@ -1952,25 +1952,62 @@ export class TopologyBuilder {
     Object.values(rings).forEach((rs) => rs.forEach((s) => satByName.set(s.name, s)));
 
     // Windowed "nearest non-blinded sat of this planet ring" finder (by solar angle).
+    // PERFORMANCE (2026-10-18): this finder is the transfer family's hottest loop
+    // (≈70% of a Contoured-transfer R=20 scenario). Per candidate it used to
+    // allocate the [up, dn] index array and re-derive both endpoints' sun-distance
+    // and exclusion threshold inside isSolarBlinded. Candidate positions, their
+    // |p| and threshold cos(asin(R☉/|p|) + margin) are now precomputed once per
+    // finder, the query's once per call, and the blinding test is inlined with the
+    // SAME expressions in the same order — results are identical.
+    const marginRad = this.simLinkBudget.solarExclusionRad || 0;
+    const sunR = SIM_CONSTANTS.SUN_RADIUS_AU;
+    const sunDist = (p) => Math.sqrt(p.x * p.x + p.y * p.y + p.z * p.z);
+    const sunThreshold = (distToSun) => Math.cos(Math.asin(Math.min(1, sunR / distToSun)) + marginRad);
+    // = isSolarBlinded's checkEndpoint, with p's |p| and threshold supplied.
+    const endpointBlinded = (p, distToSun, threshold, other) => {
+      if (distToSun <= sunR) return true;
+      const dx = other.x - p.x, dy = other.y - p.y, dz = other.z - p.z;
+      const distToOther = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      if (distToOther === 0) return false;
+      const dot = -p.x * dx - p.y * dy - p.z * dz;
+      const cosAngle = dot / (distToSun * distToOther);
+      return cosAngle > threshold;
+    };
     const makeFinder = (sats) => {
       const sorted = sats.slice().sort((a, b) => a.position.solarAngle - b.position.solarAngle);
       const angles = sorted.map((s) => s.position.solarAngle);
       const N = sorted.length, WIN = 8;
+      const cps = sorted.map((c) => positions[c.name]);
+      const cpDist = new Float64Array(N), cpThr = new Float64Array(N);
+      if (marginRad > 0) {
+        for (let i = 0; i < N; i++) {
+          const cp = cps[i];
+          if (!cp) continue;
+          cpDist[i] = sunDist(cp);
+          cpThr[i] = sunThreshold(cpDist[i]);
+        }
+      }
       return (rPos) => {
         const ang = rPos.solarAngle;
         let lo = 0, hi = N;
         while (lo < hi) { const mid = (lo + hi) >> 1; if (angles[mid] < ang) lo = mid + 1; else hi = mid; }
         let best = null, bestD = Infinity;
+        let rDist = 0, rThr = 0;
+        if (marginRad > 0) { rDist = sunDist(rPos); rThr = sunThreshold(rDist); }
         const dlt = (a) => { const d = Math.abs(a - ang) % 360; return d > 180 ? 360 - d : d; };
-        for (let step = 0; step < N; step++) {
-          const up = (lo + step) % N, dn = (lo - 1 - step + N) % N; let stop = true;
-          for (const i of step === 0 ? [up] : [up, dn]) {
-            if (dlt(angles[i]) <= WIN) {
-              stop = false; const c = sorted[i]; const cp = positions[c.name];
-              if (cp && !this.isSolarBlinded(rPos, cp)) { const d = this.calculateDistanceAU(rPos, cp); if (d < bestD) { bestD = d; best = c; } }
-            }
+        const visit = (i) => {
+          if (dlt(angles[i]) > WIN) return false;
+          const cp = cps[i];
+          if (cp && !(marginRad > 0 && (endpointBlinded(rPos, rDist, rThr, cp) || endpointBlinded(cp, cpDist[i], cpThr[i], rPos)))) {
+            const d = this.calculateDistanceAU(rPos, cp); if (d < bestD) { bestD = d; best = sorted[i]; }
           }
-          if (stop) break;
+          return true;
+        };
+        for (let step = 0; step < N; step++) {
+          const up = (lo + step) % N;
+          let inWin = visit(up);
+          if (step !== 0) { const dn = (lo - 1 - step + N) % N; if (visit(dn)) inWin = true; }
+          if (!inWin) break;
         }
         return { sat: best, dist: bestD };
       };
@@ -1997,26 +2034,55 @@ export class TopologyBuilder {
       return 0;
     };
 
+    // Nearest-planet-ring-sat results per relay sat are pure functions of the
+    // relay ring, the planet rings, their positions and the solar margin — all
+    // fixed within one build context. The Mars call, the Earth call and every
+    // junction-ring growth step (apply → revert → apply on the same ctx) used to
+    // recompute them; cache them on the build's `positions` object and reuse
+    // (identity-checked), which returns exactly the same objects (2026-10-18).
+    if (!this._planetFinderCache || this._planetFinderCache.positions !== positions) {
+      this._planetFinderCache = { positions, byRing: new Map() };
+    }
+    const nearestFor = (ringName, ringSats) => {
+      const hit = this._planetFinderCache.byRing.get(ringName);
+      if (hit && hit.ringSats === ringSats && hit.len === ringSats.length && hit.earthSats === earthSats &&
+          hit.marsSats === marsSats && hit.marginRad === marginRad && hit.maxDistanceAU === maxDistanceAU) return hit;
+      const earthRes = new Array(ringSats.length).fill(null), marsRes = new Array(ringSats.length).fill(null);
+      for (let i = 0; i < ringSats.length; i++) {
+        const sp = positions[ringSats[i].name]; if (!sp) continue;
+        if (findEarth) earthRes[i] = findEarth(sp);
+        if (findMars) marsRes[i] = findMars(sp);
+      }
+      const entry = { ringSats, len: ringSats.length, earthSats, marsSats, marginRad, maxDistanceAU, earthRes, marsRes };
+      this._planetFinderCache.byRing.set(ringName, entry);
+      return entry;
+    };
+
     for (const ringName of orderedEccRingNames) {
       const ringSats = rings[ringName];
       if (!ringSats || !ringSats.length) continue;
 
       // Earth- and Mars-tangent sats of this ring (closest ring sat to each planet ring).
+      const near = nearestFor(ringName, ringSats);
       let earthTan = null, earthTanD = Infinity, marsTan = null, marsTanD = Infinity;
-      for (const s of ringSats) {
+      for (let i = 0; i < ringSats.length; i++) {
+        const s = ringSats[i];
         const sp = positions[s.name]; if (!sp) continue;
-        if (findEarth) { const e = findEarth(sp); if (e.sat && e.dist < earthTanD) { earthTanD = e.dist; earthTan = s; } }
-        if (findMars) { const m = findMars(sp); if (m.sat && m.dist < marsTanD) { marsTanD = m.dist; marsTan = s; } }
+        if (findEarth) { const e = near.earthRes[i]; if (e.sat && e.dist < earthTanD) { earthTanD = e.dist; earthTan = s; } }
+        if (findMars) { const m = near.marsRes[i]; if (m.sat && m.dist < marsTanD) { marsTanD = m.dist; marsTan = s; } }
       }
       const thisTan = planetRingName === "ring_earth" ? earthTan : marsTan;
       if (!thisTan) continue;
 
       // Candidate junction links: every ring sat within range of the planet ring, paired
       // with its nearest planet-ring sat, sorted closest-first (k grows out of the tangent).
+      // Without a ramp, findThis IS findEarth/findMars — reuse the cached result.
+      const thisRes = findThis === findEarth ? near.earthRes : findThis === findMars ? near.marsRes : null;
       const cands = [];
-      for (const s of ringSats) {
+      for (let i = 0; i < ringSats.length; i++) {
+        const s = ringSats[i];
         const sp = positions[s.name]; if (!sp) continue;
-        const f = findThis(sp);
+        const f = thisRes ? thisRes[i] : findThis(sp);
         if (f.sat && f.dist <= maxDistanceAU) {
           // Corridor discipline: this ring's junction may only use attach sats whose
           // longitude falls in ITS midpoint-bounded range (~360/N wide).
