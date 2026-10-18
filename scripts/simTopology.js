@@ -2034,26 +2034,55 @@ export class TopologyBuilder {
       return 0;
     };
 
+    // Nearest-planet-ring-sat results per relay sat are pure functions of the
+    // relay ring, the planet rings, their positions and the solar margin — all
+    // fixed within one build context. The Mars call, the Earth call and every
+    // junction-ring growth step (apply → revert → apply on the same ctx) used to
+    // recompute them; cache them on the build's `positions` object and reuse
+    // (identity-checked), which returns exactly the same objects (2026-10-18).
+    if (!this._planetFinderCache || this._planetFinderCache.positions !== positions) {
+      this._planetFinderCache = { positions, byRing: new Map() };
+    }
+    const nearestFor = (ringName, ringSats) => {
+      const hit = this._planetFinderCache.byRing.get(ringName);
+      if (hit && hit.ringSats === ringSats && hit.len === ringSats.length && hit.earthSats === earthSats &&
+          hit.marsSats === marsSats && hit.marginRad === marginRad && hit.maxDistanceAU === maxDistanceAU) return hit;
+      const earthRes = new Array(ringSats.length).fill(null), marsRes = new Array(ringSats.length).fill(null);
+      for (let i = 0; i < ringSats.length; i++) {
+        const sp = positions[ringSats[i].name]; if (!sp) continue;
+        if (findEarth) earthRes[i] = findEarth(sp);
+        if (findMars) marsRes[i] = findMars(sp);
+      }
+      const entry = { ringSats, len: ringSats.length, earthSats, marsSats, marginRad, maxDistanceAU, earthRes, marsRes };
+      this._planetFinderCache.byRing.set(ringName, entry);
+      return entry;
+    };
+
     for (const ringName of orderedEccRingNames) {
       const ringSats = rings[ringName];
       if (!ringSats || !ringSats.length) continue;
 
       // Earth- and Mars-tangent sats of this ring (closest ring sat to each planet ring).
+      const near = nearestFor(ringName, ringSats);
       let earthTan = null, earthTanD = Infinity, marsTan = null, marsTanD = Infinity;
-      for (const s of ringSats) {
+      for (let i = 0; i < ringSats.length; i++) {
+        const s = ringSats[i];
         const sp = positions[s.name]; if (!sp) continue;
-        if (findEarth) { const e = findEarth(sp); if (e.sat && e.dist < earthTanD) { earthTanD = e.dist; earthTan = s; } }
-        if (findMars) { const m = findMars(sp); if (m.sat && m.dist < marsTanD) { marsTanD = m.dist; marsTan = s; } }
+        if (findEarth) { const e = near.earthRes[i]; if (e.sat && e.dist < earthTanD) { earthTanD = e.dist; earthTan = s; } }
+        if (findMars) { const m = near.marsRes[i]; if (m.sat && m.dist < marsTanD) { marsTanD = m.dist; marsTan = s; } }
       }
       const thisTan = planetRingName === "ring_earth" ? earthTan : marsTan;
       if (!thisTan) continue;
 
       // Candidate junction links: every ring sat within range of the planet ring, paired
       // with its nearest planet-ring sat, sorted closest-first (k grows out of the tangent).
+      // Without a ramp, findThis IS findEarth/findMars — reuse the cached result.
+      const thisRes = findThis === findEarth ? near.earthRes : findThis === findMars ? near.marsRes : null;
       const cands = [];
-      for (const s of ringSats) {
+      for (let i = 0; i < ringSats.length; i++) {
+        const s = ringSats[i];
         const sp = positions[s.name]; if (!sp) continue;
-        const f = findThis(sp);
+        const f = thisRes ? thisRes[i] : findThis(sp);
         if (f.sat && f.dist <= maxDistanceAU) {
           // Corridor discipline: this ring's junction may only use attach sats whose
           // longitude falls in ITS midpoint-bounded range (~360/N wide).
