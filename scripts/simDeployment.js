@@ -1,6 +1,6 @@
 // simDeployment.js
 
-import { calculateHohmannDeltaV_km_s } from "./simDeltaV.js?v=5.60";
+import { calculateHohmannDeltaV_km_s, leoDepartureDeltaV_km_s } from "./simDeltaV.js?v=5.60";
 import { stationKeepingAccel, ringBaseline, satStationKeeping } from "./simStationKeeping.js?v=5.60";
 
 // Default launch-to-LEO Δv (km/s). Configurable via the Launch Vehicle category
@@ -10,6 +10,8 @@ const DEFAULT_LAUNCH_TO_LEO_DV_KM_S = 9.5;
 // LEO → Earth-SOI escape (C3 = 0). Used by ring_earth flights, which do not
 // perform a Hohmann transfer — the launcher just pushes the satellite out of
 // Earth's sphere of influence and it ends up in Earth's heliocentric orbit.
+// Every other ring's Starship burn is this escape plus the heliocentric v∞,
+// combined from LEO (simDeltaV.leoDepartureDeltaV_km_s).
 export const ESCAPE_BURN_DV_KM_S = 3.2;
 
 // Gravitational constant
@@ -638,6 +640,15 @@ export class SimDeployment {
       ? outboundDeltaV_km_per_s.deltaV1
       : outboundDeltaV_km_per_s.deltaV2;
 
+    // The Starship flies its burn from LEO, so the heliocentric Δv1 (= the v∞ it
+    // must leave Earth with) becomes √(v∞² + v_esc²) − v_LEO, which is never less
+    // than the plain escape burn. ring_earth flights only escape (v∞ = 0, C3 = 0).
+    // Previously the heliocentric Δv1 was charged directly, so a 1.26 AU ring
+    // cost less than escaping Earth (audit 2026-10-18, top item 1).
+    const starshipBurn_km_per_s = targetOrbitElements.ringName === "ring_earth"
+      ? this.escapeBurnDvKmS
+      : leoDepartureDeltaV_km_s(outboundDeltaV1, this.escapeBurnDvKmS);
+
     const vehicles = {};
 
     const solarPanelMass_kg = this.solarPanelMassKg(targetOrbitElements.apsides.apo_pctEarth);
@@ -663,7 +674,7 @@ export class SimDeployment {
       "Deorbit and landing burn",
       this.vehicleProperties.starship.deorbitLandingPropellant_kg
     );
-    this.addManeuverByDeltaVRequired(vehicles, "Starship", "1st Hohmann maneuver (return)", outboundDeltaV1);
+    this.addManeuverByDeltaVRequired(vehicles, "Starship", "1st Hohmann maneuver from LEO (return)", starshipBurn_km_per_s);
     const { payloadCountPerDeploymentFlight, totalDeploymentFlights_count } = this.addPayloadDeployment(
       vehicles,
       "Starship",
@@ -676,13 +687,13 @@ export class SimDeployment {
     const outboundHohmannResult = this.addManeuverByDeltaVRequired(
       vehicles,
       "Starship",
-      "1st Hohmann maneuver (outbound)",
-      outboundDeltaV1
+      "1st Hohmann maneuver from LEO (outbound)",
+      starshipBurn_km_per_s
     );
     if (outboundHohmannResult != null) {
       return {
         error: true,
-        step: "1st Hohmann maneuver (outbound)",
+        step: "1st Hohmann maneuver from LEO (outbound)",
         excess: outboundHohmannResult,
         satCountPerDeploymentFlight: payloadCountPerDeploymentFlight,
       };
@@ -719,6 +730,7 @@ export class SimDeployment {
       orbits: {
         targetOrbitElements,
         deltaV_km_per_s: outboundDeltaV_km_per_s,
+        starshipLeoBurn_km_per_s: starshipBurn_km_per_s,
       },
     };
     return { error: false, result };

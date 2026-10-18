@@ -14,7 +14,7 @@
 // Starship does the first burn and returns, satellites do the second burn
 // electrically, tankers refill the mission propellant in LEO.
 
-import { calculateHohmannDeltaV_km_s } from "./simDeltaV.js?v=5.60";
+import { calculateHohmannDeltaV_km_s, leoDepartureDeltaV_km_s } from "./simDeltaV.js?v=5.60";
 
 export const DEFAULTS = {
   // Decade ladder; ×1 = Starlink-class hardware as-is. Measurements behind the
@@ -58,6 +58,9 @@ export const DEFAULTS = {
   starshipIspS: 370,       // s
   landingPropT: 20,        // t reserved for deorbit + landing
   escapeDvKmS: 3.2,        // LEO → Earth-SOI escape (simDeployment.ESCAPE_BURN_DV_KM_S)
+  // true = pre-audit basis: the heliocentric Hohmann Δv1 charged directly as the
+  // LEO burn (no Earth-escape term). Kept only to reproduce the 21 Aug 2026 draft.
+  legacyHelioDv: false,
   concMeanA: 1.26,         // AU, satellite-weighted mean concentric ring
   transferA: 1.26,         // AU + e of the tangency transfer ellipse (Fig 9)
   transferE: 0.206,
@@ -169,18 +172,23 @@ export function fleetFor(family, tGbps, f, a = DEFAULTS) {
 // end-of-life return on their own electric propulsion (inside their ≈2 t).
 // Tankers refill the full mission propellant in LEO before departure.
 export function deployFor(sectionName, satKg, a = DEFAULTS) {
+  // Every launcher burn starts in LEO. The heliocentric Hohmann Δv1 is the
+  // hyperbolic excess v∞ the Starship must leave Earth with; the burn from
+  // LEO is √(v∞² + v_esc²) − v_LEO (simDeltaV.leoDepartureDeltaV_km_s), which
+  // equals the 3.2 km/s escape burn at v∞ = 0 and always exceeds it otherwise.
+  const fromLeo = (vInf) => (a.legacyHelioDv ? vInf : leoDepartureDeltaV_km_s(vInf, a.escapeDvKmS));
   let dv;
   if (sectionName === "concentric relay") {
-    dv = calculateHohmannDeltaV_km_s({ a: 1, e: 0, i: 0 }, { a: a.concMeanA, e: 0, i: 0 }).deltaV1;
+    dv = fromLeo(calculateHohmannDeltaV_km_s({ a: 1, e: 0, i: 0 }, { a: a.concMeanA, e: 0, i: 0 }).deltaV1);
   } else if (sectionName === "planetary rings") {
-    // Earth ring: SOI-escape burn; Mars ring: Hohmann injection. Weight by the
-    // Eq-13 split N ∝ r: Mars share 1.524/(1+1.524).
-    const dvM = calculateHohmannDeltaV_km_s({ a: 1, e: 0, i: 0 }, { a: a.marsA, e: 0, i: 0 }).deltaV1;
+    // Earth ring: SOI-escape burn (v∞ = 0); Mars ring: Hohmann injection from
+    // LEO. Weight by the Eq-13 split N ∝ r: Mars share 1.524/(1+1.524).
+    const dvM = fromLeo(calculateHohmannDeltaV_km_s({ a: 1, e: 0, i: 0 }, { a: a.marsA, e: 0, i: 0 }).deltaV1);
     const wM = a.marsA / (1 + a.marsA);
     dv = (1 - wM) * a.escapeDvKmS + wM * dvM;
   } else { // transfer + junction rings: ellipse injection at the Earth-orbit perihelion
     const h = calculateHohmannDeltaV_km_s({ a: 1, e: 0, i: 0 }, { a: a.transferA, e: a.transferE, i: 0 });
-    dv = Math.max(h.deltaV1, h.deltaV2);
+    dv = fromLeo(Math.max(h.deltaV1, h.deltaV2));
   }
   const ve = 9.81 * a.starshipIspS / 1000;          // km/s exhaust velocity
   const E = Math.exp(dv / ve);
@@ -422,8 +430,9 @@ function refresh(body) {
      in-ring, one opportunistic (by position: planetary-ring junction / cross-ring link / spacecraft
      service); planetary rings 3; junction rings 2. Satellite bus, launch, planetary-ring and relay
      laws as in the paper's cost model. Launch mirrors the website's deployment model analytically:
-     per section, the Starship flies the first Hohmann burn (transfer-family: the ellipse injection;
-     Earth ring: the 3.2 km/s escape) with a symmetric return and a ${DEFAULTS.landingPropT} t landing
+     per section, the Starship flies the first Hohmann burn from LEO, including the Earth-escape
+     term (Δv = √(v∞² + v_esc²) − v_LEO; transfer-family: the ellipse injection; Earth ring: the
+     3.2 km/s escape) with a symmetric return and a ${DEFAULTS.landingPropT} t landing
      reserve; the satellites fly the second burn, inclination, station-keeping and end-of-life return
      on their own electric propulsion; tanker count = mission propellant ÷ the per-launch payload;
      every launch (deploy + tanker) is priced under Wright's law.</p>`;
