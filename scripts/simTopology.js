@@ -1952,25 +1952,62 @@ export class TopologyBuilder {
     Object.values(rings).forEach((rs) => rs.forEach((s) => satByName.set(s.name, s)));
 
     // Windowed "nearest non-blinded sat of this planet ring" finder (by solar angle).
+    // PERFORMANCE (2026-10-18): this finder is the transfer family's hottest loop
+    // (≈70% of a Contoured-transfer R=20 scenario). Per candidate it used to
+    // allocate the [up, dn] index array and re-derive both endpoints' sun-distance
+    // and exclusion threshold inside isSolarBlinded. Candidate positions, their
+    // |p| and threshold cos(asin(R☉/|p|) + margin) are now precomputed once per
+    // finder, the query's once per call, and the blinding test is inlined with the
+    // SAME expressions in the same order — results are identical.
+    const marginRad = this.simLinkBudget.solarExclusionRad || 0;
+    const sunR = SIM_CONSTANTS.SUN_RADIUS_AU;
+    const sunDist = (p) => Math.sqrt(p.x * p.x + p.y * p.y + p.z * p.z);
+    const sunThreshold = (distToSun) => Math.cos(Math.asin(Math.min(1, sunR / distToSun)) + marginRad);
+    // = isSolarBlinded's checkEndpoint, with p's |p| and threshold supplied.
+    const endpointBlinded = (p, distToSun, threshold, other) => {
+      if (distToSun <= sunR) return true;
+      const dx = other.x - p.x, dy = other.y - p.y, dz = other.z - p.z;
+      const distToOther = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      if (distToOther === 0) return false;
+      const dot = -p.x * dx - p.y * dy - p.z * dz;
+      const cosAngle = dot / (distToSun * distToOther);
+      return cosAngle > threshold;
+    };
     const makeFinder = (sats) => {
       const sorted = sats.slice().sort((a, b) => a.position.solarAngle - b.position.solarAngle);
       const angles = sorted.map((s) => s.position.solarAngle);
       const N = sorted.length, WIN = 8;
+      const cps = sorted.map((c) => positions[c.name]);
+      const cpDist = new Float64Array(N), cpThr = new Float64Array(N);
+      if (marginRad > 0) {
+        for (let i = 0; i < N; i++) {
+          const cp = cps[i];
+          if (!cp) continue;
+          cpDist[i] = sunDist(cp);
+          cpThr[i] = sunThreshold(cpDist[i]);
+        }
+      }
       return (rPos) => {
         const ang = rPos.solarAngle;
         let lo = 0, hi = N;
         while (lo < hi) { const mid = (lo + hi) >> 1; if (angles[mid] < ang) lo = mid + 1; else hi = mid; }
         let best = null, bestD = Infinity;
+        let rDist = 0, rThr = 0;
+        if (marginRad > 0) { rDist = sunDist(rPos); rThr = sunThreshold(rDist); }
         const dlt = (a) => { const d = Math.abs(a - ang) % 360; return d > 180 ? 360 - d : d; };
-        for (let step = 0; step < N; step++) {
-          const up = (lo + step) % N, dn = (lo - 1 - step + N) % N; let stop = true;
-          for (const i of step === 0 ? [up] : [up, dn]) {
-            if (dlt(angles[i]) <= WIN) {
-              stop = false; const c = sorted[i]; const cp = positions[c.name];
-              if (cp && !this.isSolarBlinded(rPos, cp)) { const d = this.calculateDistanceAU(rPos, cp); if (d < bestD) { bestD = d; best = c; } }
-            }
+        const visit = (i) => {
+          if (dlt(angles[i]) > WIN) return false;
+          const cp = cps[i];
+          if (cp && !(marginRad > 0 && (endpointBlinded(rPos, rDist, rThr, cp) || endpointBlinded(cp, cpDist[i], cpThr[i], rPos)))) {
+            const d = this.calculateDistanceAU(rPos, cp); if (d < bestD) { bestD = d; best = sorted[i]; }
           }
-          if (stop) break;
+          return true;
+        };
+        for (let step = 0; step < N; step++) {
+          const up = (lo + step) % N;
+          let inWin = visit(up);
+          if (step !== 0) { const dn = (lo - 1 - step + N) % N; if (visit(dn)) inWin = true; }
+          if (!inWin) break;
         }
         return { sat: best, dist: bestD };
       };
